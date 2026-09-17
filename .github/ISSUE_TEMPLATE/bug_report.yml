@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a problem in a released canvas package.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form only for released Functions Hosted Skills or Azure SRE Agent canvas-package content. The current package directories contain no payload, so installation or runtime issues cannot yet be investigated. Do not include secrets or security vulnerabilities.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Identify the released canvas package and describe the observed behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How can we reproduce it?
+      description: Provide the smallest reproducible steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
