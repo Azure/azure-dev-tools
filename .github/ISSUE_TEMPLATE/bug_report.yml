@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a problem in released repository content.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report only issues in content released from this repository. Do not include secrets or security vulnerabilities.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How can we reproduce it?
+      description: Provide the smallest reproducible steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
