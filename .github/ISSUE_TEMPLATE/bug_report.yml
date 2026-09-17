@@ -1,16 +1,16 @@
 name: Bug report
-description: Report a problem in released repository content.
+description: Report a problem in a released canvas package.
 title: "[Bug]: "
 body:
   - type: markdown
     attributes:
       value: |
-        Report only issues in content released from this repository. Do not include secrets or security vulnerabilities.
+        Use this form only for released Functions Hosted Skills or SRE Agent Studio canvas-package content. The current package directories contain no payload, so installation or runtime issues cannot yet be investigated. Do not include secrets or security vulnerabilities.
   - type: textarea
     id: description
     attributes:
       label: What happened?
-      description: Describe the observed behavior and its impact.
+      description: Identify the released canvas package and describe the observed behavior and its impact.
     validations:
       required: true
   - type: textarea

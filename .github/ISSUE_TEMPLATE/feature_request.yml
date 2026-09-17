@@ -1,15 +1,15 @@
 name: Feature request
-description: Suggest an improvement to released repository content.
+description: Suggest an improvement to a future or released canvas package.
 title: "[Feature]: "
 body:
   - type: markdown
     attributes:
       value: |
-        Request features for released repository content only. Do not include confidential information.
+        Use this form for Functions Hosted Skills or SRE Agent Studio canvas-package suggestions. The current package directories contain no payload. Do not include confidential information.
   - type: textarea
     id: problem
     attributes:
-      label: What problem would this solve?
+      label: What canvas-package problem would this solve?
     validations:
       required: true
   - type: textarea

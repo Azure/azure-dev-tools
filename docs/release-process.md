@@ -1,8 +1,9 @@
 # Future release process
 
 This repository has no release artifacts or installable packages today. The
-following contract applies when a canvas package is proposed for public
-distribution:
+planned Functions Hosted Skills and SRE Agent Studio package areas contain no
+payload. The following contract applies when a canvas package is proposed for
+public distribution:
 
 1. Start from an approved internal source build that is cleared for this
    repository.

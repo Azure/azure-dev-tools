@@ -1,9 +1,9 @@
 # Azure Developer Tools
 
-This repository is a future public home for Azure developer-experience tools,
-such as GitHub Copilot canvases and skills. Content originates from approved
-internal builds and is added here only after the applicable review and release
-approval.
+This repository is a future public home for Azure developer-experience tools.
+Its first intended GitHub Copilot canvas package areas are Functions Hosted
+Skills and SRE Agent Studio. Content originates from approved internal builds
+and is added here only after the applicable review and release approval.
 
 The repository is currently private and contains governance documentation only.
 It does not currently publish installable canvases, release artifacts, catalog
@@ -13,12 +13,15 @@ readiness and public release remain pending review and approval.
 ## Intended layout
 
 Future independently installable canvas packages will live under
-`canvases/<canvas-id>/`. A catalog manifest, when needed, will be created and
-released only after its format and publication process are approved.
+`canvases/<canvas-id>/`. The current Functions Hosted Skills and SRE Agent
+Studio directories contain no package payload. A catalog manifest, when
+needed, will be created and released only after its format and publication
+process are approved.
 
 ```text
 canvases/
-  <canvas-id>/
+  azure-functions-hosted-skills/
+  sre-agent-studio/
 docs/
   release-process.md
 ```
