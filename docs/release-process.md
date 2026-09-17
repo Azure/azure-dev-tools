@@ -1,7 +1,7 @@
 # Future release process
 
 This repository has no release artifacts or installable packages today. The
-planned Functions Hosted Skills and SRE Agent Studio package areas contain no
+planned Functions Hosted Skills and Azure SRE Agent package areas contain no
 payload. The following contract applies when a canvas package is proposed for
 public distribution:
 
