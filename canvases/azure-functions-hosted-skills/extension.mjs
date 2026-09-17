@@ -21,6 +21,7 @@ function safeEnvironment() {
 	const allowed = [
 		"AZURE_CONFIG_DIR",
 		"COMSPEC",
+		"CURL_CA_BUNDLE",
 		"HOME",
 		"HTTPS_PROXY",
 		"HTTP_PROXY",
@@ -181,6 +182,8 @@ async function startLocalHostedSkill(input) {
 }
 
 async function invokeLocalHostedSkill(input) {
+	assertWritesEnabled();
+	assertConfirmed(input);
 	const workspacePath = await assertOwnedWorkspace(input.workspacePath);
 	const state = localHosts.get(workspacePath);
 	if (!state) throw new Error("Start the local function host for this workspace first.");
@@ -208,30 +211,6 @@ async function prepareFoundryDeployment(input) {
 	if (metadata.provider !== "foundry" || !metadata.endpoint || !metadata.model) {
 		throw new Error("Configure a Microsoft Foundry endpoint and model before deployment preparation.");
 	}
-
-	async function doctorHostedSkill() {
-		const checks = await Promise.all([
-			execute("az", ["account", "show", "--output", "json"], { env: safeEnvironment(), timeout: 30_000 })
-				.then(() => ({ id: "azure-cli", ok: true, detail: "Signed in Azure CLI is available." }))
-				.catch((error) => ({ id: "azure-cli", ok: false, detail: shortError(error) })),
-			execute("func", ["--version"], { env: safeEnvironment(), timeout: 30_000 })
-				.then(({ stdout }) => ({ id: "core-tools", ok: true, detail: stdout.trim() }))
-				.catch((error) => ({ id: "core-tools", ok: false, detail: shortError(error) })),
-		]);
-		return { ok: checks.every((check) => check.ok), checks };
-	}
-
-	async function openHostedSkillInVsCode(input) {
-		assertWritesEnabled();
-		assertConfirmed(input);
-		const workspacePath = await assertOwnedWorkspace(input.workspacePath);
-		try {
-			await execute("code", [workspacePath], { env: safeEnvironment(), timeout: 30_000, windowsHide: true });
-			return { ok: true, workspacePath };
-		} catch (error) {
-			throw new Error(`Could not open VS Code: ${shortError(error)}`);
-		}
-	}
 	const settings = await readFile(path.join(workspacePath, "src", LOCAL_SETTINGS_FILE), "utf8");
 	if (/(?:GITHUB|(?:API|ACCESS)[_-]?KEY|TOKEN|SECRET|AUTHORIZATION)/i.test(settings)) {
 		throw new Error("Local-only credentials or GitHub configuration cannot be included in deployment preparation.");
@@ -242,6 +221,40 @@ async function prepareFoundryDeployment(input) {
 		model: metadata.model,
 		message: "Deployment is not configured for this starter. Add managed identity and Microsoft Foundry RBAC to your own Azure deployment configuration, then retry deployment preparation.",
 	};
+}
+
+async function doctorHostedSkill() {
+	const checks = await Promise.all([
+		execute("az", ["account", "show", "--output", "json"], { env: safeEnvironment(), timeout: 30_000 })
+			.then(() => ({ id: "azure-cli", ok: true, detail: "Signed in Azure CLI is available." }))
+			.catch((error) => ({ id: "azure-cli", ok: false, detail: shortError(error) })),
+		execute("func", ["--version"], { env: safeEnvironment(), timeout: 30_000 })
+			.then(({ stdout }) => ({ id: "core-tools", ok: true, detail: stdout.trim() }))
+			.catch((error) => ({ id: "core-tools", ok: false, detail: shortError(error) })),
+	]);
+	return { ok: checks.every((check) => check.ok), checks };
+}
+
+async function openHostedSkillInVsCode(input) {
+	assertWritesEnabled();
+	assertConfirmed(input);
+	const workspacePath = await assertOwnedWorkspace(input.workspacePath);
+	try {
+		await execute("code", [workspacePath], { env: safeEnvironment(), timeout: 30_000, windowsHide: true });
+		return { ok: true, workspacePath };
+	} catch (error) {
+		throw new Error(`Could not open VS Code: ${shortError(error)}`);
+	}
+}
+
+async function stopLocalHostedSkill(input) {
+	assertWritesEnabled();
+	assertConfirmed(input);
+	const workspacePath = await assertOwnedWorkspace(input.workspacePath);
+	const state = localHosts.get(workspacePath);
+	if (!state) throw new Error("This workspace does not have a local function host.");
+	state.child.kill("SIGTERM");
+	return { ok: true, workspacePath };
 }
 
 async function azJson(args) {
@@ -290,26 +303,59 @@ async function functionApps(subscription) {
 		.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function page() {
+function page(writesEnabled) {
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${DISPLAY_NAME}</title><style>
-body{font:14px system-ui,sans-serif;line-height:1.5;margin:2rem;max-width:48rem;color:#1f2937}
-h1{font-size:1.5rem}code{background:#f3f4f6;padding:.1rem .25rem}p{margin:.7rem 0}
-</style></head><body><h1>${DISPLAY_NAME}</h1>
-<p>This installed canvas discovers Azure Function Apps using the signed-in Azure CLI identity. It is read-only: it does not create, deploy, invoke, modify, or delete Azure resources.</p>
-<p>Use <code>list_azure_subscriptions</code> and <code>list_function_apps</code> from the canvas actions. When writes are explicitly enabled, create a workspace, configure a Microsoft Foundry model, start and invoke it locally, and review both function output and the agent response.</p>
-</body></html>`;
+body{font:14px system-ui,sans-serif;line-height:1.5;margin:0;color:var(--text-color-default,#1f2937);background:var(--background-color-default,#fff)}main{padding:1.5rem;margin:auto;max-width:56rem}h1{font-size:1.5rem;margin:0}h2{font-size:1rem;margin:0}.lead{color:var(--text-color-muted,#57606a)}.card{border:1px solid var(--border-color-default,#d0d7de);border-radius:10px;padding:1rem;margin-top:1rem}.grid{display:grid;gap:.7rem;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr))}label{display:grid;gap:.25rem;font-weight:600}input,textarea,button{font:inherit;padding:.45rem;border:1px solid var(--border-color-default,#8c959f);border-radius:6px;background:var(--background-color-default,#fff);color:inherit}textarea{min-height:5rem}button{cursor:pointer;font-weight:600}.row{display:flex;gap:.5rem;flex-wrap:wrap}.notice{font-weight:600}.error{color:#cf222e}.success{color:#1a7f37}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fa;padding:.75rem;border-radius:6px;max-height:18rem;overflow:auto}
+</style></head><body><main><h1>${DISPLAY_NAME}</h1><p class="lead">Create a local Microsoft Foundry hosted skill, run it locally, and inspect function output and its response.</p><div class="card"><div class="row"><button id="doctor" type="button">Doctor</button><button id="subscriptions" type="button">List subscriptions</button></div><div id="status" class="notice" role="status">Ready.</div><pre id="result" hidden></pre></div>${writesEnabled ? `<div class="card"><h2>Local workspace</h2><div class="grid"><label>New workspace path<input id="workspace-path" autocomplete="off"></label><label>Foundry endpoint<input id="foundry-endpoint" autocomplete="off"></label><label>Model deployment<input id="foundry-model" autocomplete="off"></label><label>Managed identity client ID (optional)<input id="managed-identity-client-id" autocomplete="off"></label></div><div class="row"><button id="create" type="button">Create workspace</button><button id="configure" type="button">Configure model</button><button id="open-vscode" type="button">Open in VS Code</button></div></div><div class="card"><h2>Local invocation</h2><div class="grid"><label>Port<input id="local-port" type="number" value="7071" min="1024" max="65535"></label><label>Prompt<textarea id="prompt">Describe the current task in one sentence.</textarea></label></div><div class="row"><button id="start-local" type="button">Start local function</button><button id="stop-local" type="button">Stop local function</button><button id="invoke-local" type="button">Invoke</button><button id="prepare-deployment" type="button">Prepare deployment</button></div><h2>Command output</h2><pre id="command-output">No local host output yet.</pre><h2>Agent response</h2><pre id="agent-response">No invocation response yet.</pre></div>` : `<div class="card" id="read-only-notice">This canvas is read-only. Local workspace controls require explicit write enablement when the extension starts.</div>`}<script>const $=id=>document.getElementById(id),writes=${JSON.stringify(writesEnabled)};function setStatus(message,ok){const el=$("status");el.textContent=message||"Ready.";el.className="notice "+(ok===false?"error":ok===true?"success":"")}function value(id){return $(id)?.value?.trim()||""}async function post(route,body={}){setStatus("Working...");try{const response=await fetch(route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}),result=await response.json();if(!result.ok)throw new Error(result.message||"Request failed.");setStatus(result.message||"Completed.",true);return result}catch(error){setStatus(error.message||String(error),false);throw error}}$("doctor").onclick=async()=>{try{const result=await post("/doctor");$("result").hidden=false;$("result").textContent=JSON.stringify(result.checks,null,2)}catch{}};$("subscriptions").onclick=async()=>{try{const result=await post("/subscriptions");$("result").hidden=false;$("result").textContent=JSON.stringify(result.subscriptions,null,2)}catch{}};if(writes){const input=()=>({workspacePath:value("workspace-path")}),write=async(route,body,label)=>{if(window.confirm(label))return post(route,{...body,confirm:true})};$("create").onclick=async()=>{try{await write("/workspace/create",input(),"Create this new local workspace?")}catch{}};$("configure").onclick=async()=>{try{await write("/workspace/configure",{...input(),provider:"foundry",endpoint:value("foundry-endpoint"),model:value("foundry-model"),managedIdentityClientId:value("managed-identity-client-id")},"Save this model configuration in the selected workspace?")}catch{}};$("open-vscode").onclick=async()=>{try{await write("/workspace/open-vscode",input(),"Open this workspace in VS Code?")}catch{}};$("start-local").onclick=async()=>{try{const result=await write("/local/start",{...input(),port:Number(value("local-port"))},"Start the local function host?");if(result)$("command-output").textContent=result.output||"Local host started."}catch{}};$("stop-local").onclick=async()=>{try{await write("/local/stop",input(),"Stop the local function host?")}catch{}};$("invoke-local").onclick=async()=>{try{const result=await write("/local/invoke",{workspacePath:value("workspace-path"),prompt:value("prompt")},"Invoke this local hosted skill?");if(result){$("command-output").textContent=result.commandOutput||"";$("agent-response").textContent=result.response||""}}catch{}};$("prepare-deployment").onclick=async()=>{try{const result=await write("/deployment/prepare",input(),"Check this workspace before deployment?");if(result)$("command-output").textContent=result.message||""}catch{}}}</script></main></body></html>`;
 }
 
 const servers = new Map();
+async function readJsonBody(request) {
+	let body = "";
+	for await (const chunk of request) {
+		body += chunk;
+		if (Buffer.byteLength(body) > 1_048_576) throw new Error("Request body is too large.");
+	}
+	if (!body) return {};
+	const parsed = JSON.parse(body);
+	if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("Request body must be a JSON object.");
+	return parsed;
+}
+
+function json(response, value, status = 200) {
+	response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+	response.end(`${JSON.stringify(value)}\n`);
+}
+
+function handleUiRequest(request, response, writesEnabled) {
+	if (request.method === "GET" && request.url === "/") {
+		response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'" });
+		response.end(page(writesEnabled));
+		return;
+	}
+	const routes = new Map([
+		["/doctor", () => doctorHostedSkill()],
+		["/subscriptions", async () => ({ ok: true, subscriptions: await subscriptions() })],
+		["/workspace/create", createHostedSkill],
+		["/workspace/configure", configureHostedSkill],
+		["/workspace/open-vscode", openHostedSkillInVsCode],
+		["/local/start", startLocalHostedSkill],
+		["/local/stop", stopLocalHostedSkill],
+		["/local/invoke", invokeLocalHostedSkill],
+		["/deployment/prepare", prepareFoundryDeployment],
+	]);
+	const handler = request.method === "POST" ? routes.get(request.url) : undefined;
+	if (!handler) return json(response, { ok: false, message: "Route not found." }, 404);
+	readJsonBody(request).then((body) => handler(body)).then((result) => json(response, result)).catch((error) => json(response, { ok: false, message: shortError(error) }, 400));
+}
+
 async function openPage(instanceId) {
 	let server = servers.get(instanceId);
 	if (!server) {
-		server = createServer((_request, response) => {
-			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-			response.end(page());
-		});
+		const writesEnabled = process.env.ALLOW_WRITES === "true";
+		server = createServer((request, response) => handleUiRequest(request, response, writesEnabled));
 		await new Promise((resolve, reject) => {
 			server.once("error", reject);
 			server.listen(0, "127.0.0.1", resolve);
@@ -317,7 +363,7 @@ async function openPage(instanceId) {
 		servers.set(instanceId, server);
 	}
 	const address = server.address();
-	return { url: `http://127.0.0.1:${address.port}/`, title: DISPLAY_NAME, status: "Ready (read-only)." };
+	return { url: `http://127.0.0.1:${address.port}/`, title: DISPLAY_NAME, status: process.env.ALLOW_WRITES === "true" ? "Ready." : "Ready (read-only)." };
 }
 
 const canvas = createCanvas({
@@ -438,12 +484,25 @@ const canvas = createCanvas({
 				},
 			},
 			{
+				name: "stop_local_hosted_skill",
+				description: "Stop Azure Functions Core Tools for an owned workspace after confirmation.",
+				inputSchema: {
+					type: "object",
+					properties: { workspacePath: { type: "string" }, confirm: { type: "boolean" } },
+					required: ["workspacePath", "confirm"],
+					additionalProperties: false,
+				},
+				async handler({ input }) {
+					try { return await stopLocalHostedSkill(input); } catch (error) { return { ok: false, message: shortError(error) }; }
+				},
+			},
+			{
 				name: "invoke_local_hosted_skill",
 				description: "Invoke the owned local hosted skill and return the function command output and agent response.",
 				inputSchema: {
 					type: "object",
-					properties: { workspacePath: { type: "string" }, prompt: { type: "string" } },
-					required: ["workspacePath", "prompt"],
+					properties: { workspacePath: { type: "string" }, prompt: { type: "string" }, confirm: { type: "boolean" } },
+					required: ["workspacePath", "prompt", "confirm"],
 					additionalProperties: false,
 				},
 				async handler({ input }) {
