@@ -1,33 +1,21 @@
 # Azure Developer Tools
 
-This repository is a future public home for Azure developer-experience tools.
-Its first intended GitHub Copilot canvas package areas are Functions Hosted
-Skills and Azure SRE Agent. Content originates from approved internal builds
-and is added here only after the applicable review and release approval.
+Azure Developer Tools is a home for tools that help developers work with Azure
+through GitHub Copilot.
 
-The repository is currently private and contains governance documentation only.
-It does not currently publish installable canvases, release artifacts, catalog
-entries, or signing and installer-verification mechanisms. Open-source
-readiness and public release remain pending review and approval.
+## Coming soon
 
-## Intended layout
+| Canvas | Package location | Status |
+| --- | --- | --- |
+| **Azure Functions Hosted Skills** | [`canvases/azure-functions-hosted-skills/`](canvases/azure-functions-hosted-skills/) | Planned |
+| **Azure SRE Agent** | [`canvases/azure-sre-agent/`](canvases/azure-sre-agent/) | Planned |
 
-Future independently installable canvas packages will live under
-`canvases/<canvas-id>/`. The current Functions Hosted Skills and Azure SRE Agent
-Studio directories contain no package payload. A catalog manifest, when
-needed, will be created and released only after its format and publication
-process are approved.
+These package locations are scaffolds only. No canvas packages are available
+to install yet.
 
-```text
-canvases/
-  azure-functions-hosted-skills/
-  azure-sre-agent/
-docs/
-  release-process.md
-```
+## Get involved
 
-## Contributing and support
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations,
-[SECURITY.md](SECURITY.md) for vulnerability reporting, and
-[SUPPORT.md](SUPPORT.md) for the current support status.
+Watch this repository for updates and see [CONTRIBUTING.md](CONTRIBUTING.md)
+to contribute. For help or feedback, see [SUPPORT.md](SUPPORT.md). To report
+a security vulnerability, follow [SECURITY.md](SECURITY.md). This repository
+is licensed under the [MIT License](LICENSE).
