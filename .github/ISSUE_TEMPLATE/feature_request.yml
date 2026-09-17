@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an improvement to a future or released canvas package.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for Functions Hosted Skills or Azure SRE Agent canvas-package suggestions. The current package directories contain no payload. Do not include confidential information.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What canvas-package problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+    validations:
+      required: true
