@@ -1,0 +1,9 @@
+{
+  "name": "azure-functions-hosted-skills-preview-9",
+  "version": "0.4.0",
+  "description": "Azure Function App discovery and local Hosted Skill starter canvas.",
+  "extensions": ".",
+  "skills": [
+    "./skills/azure-functions-hosted-skills-preview-9-canvas/"
+  ]
+}
