@@ -123,7 +123,7 @@ export class StudioState {
 	}
 
 	file(name) {
-		if (!SCHEMAS[name]) throw new Error(`Unsupported Studio state component: ${name}`);
+		if (!SCHEMAS[name]) throw new Error(`Unsupported canvas state component: ${name}`);
 		return path.join(this.paths.root, name);
 	}
 

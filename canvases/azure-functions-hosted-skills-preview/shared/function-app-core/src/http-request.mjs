@@ -86,7 +86,7 @@ export function parseHttpRequestDraft({ headersText = "", bodyText = "" } = {}) 
 		}
 		if (PROTECTED_HEADERS.has(lowerName) || isSensitiveName(normalizedName)) {
 			throw new TypeError(
-				`HTTP header "${normalizedName}" is protected. Authentication, host, length, cookie, and secret headers are managed by Studio.`,
+				`HTTP header "${normalizedName}" is protected. Authentication, host, length, cookie, and secret headers are managed by Azure Functions Hosted Skills Preview.`,
 			);
 		}
 		if (!["string", "number", "boolean"].includes(typeof rawValue)) {

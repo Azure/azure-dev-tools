@@ -11,12 +11,14 @@ const OWNERSHIP_MARKER_RELATIVE_PATH = path.join(
 	"source-workspace-ownership.json",
 );
 const LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH = path.join(`.${LEGACY_STATE_COMPONENT}`, "source-workspace-ownership.json");
+const LEGACY_REMOVAL_MARKER = "Removed by the user. Create from the Studio to restore.\n";
+export const REMOVAL_MARKER = "Removed by the user. Create from Azure Functions Hosted Skills Preview to restore.\n";
 const RUNTIME_DIRS = new Set([
 	".azurite",
 	".azure",
 	".git",
 	".intelligent-function-app-studio",
-	".azure-functions-hosted-skills-preview-12",
+	".azure-functions-hosted-skills-preview",
 	".mypy_cache",
 	".pytest_cache",
 	".python_packages",
@@ -178,10 +180,10 @@ export async function assertWorkspaceIdentity(root, manifest, { upgrade = true }
 	const legacy = await readWorkspaceIdentityMarker(root, LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH);
 	const marker = canonical || legacy;
 	if (!marker) {
-		throw new Error("The Studio-owned workspace identity marker is missing.");
+		throw new Error("The generated workspace identity marker is missing.");
 	}
 	if (marker.templateId !== manifest.templateId || marker.generationId !== manifest.generationId) {
-		throw new Error("The folder at this path is not the Studio-owned workspace recorded by the ownership manifest.");
+		throw new Error("The folder at this path is not the generated workspace recorded by the ownership manifest.");
 	}
 	if (legacy && (legacy.templateId !== marker.templateId || legacy.generationId !== marker.generationId)) {
 		throw new Error("Canonical and legacy workspace ownership markers disagree.");
@@ -350,7 +352,7 @@ export async function migrateSourceOwnership({
 		isSourceAllowed: (file) => typeof file === "string" && file.endsWith(".removed") && isSourceAllowed(file.slice(0, -8)),
 		decode: (value) => value, encode: (value) => value,
 		validate(value) {
-			if (value !== "Removed by the user. Create from the Studio to restore.\n") {
+			if (value !== LEGACY_REMOVAL_MARKER && value !== REMOVAL_MARKER) {
 				throw new Error("Invalid legacy workspace removal record.");
 			}
 			return value;
@@ -427,18 +429,18 @@ async function assertRecoverySignature(root, signature) {
 			item = await lstat(cursor);
 		} catch (error) {
 			if (error?.code === "ENOENT") {
-				throw new Error(`The existing destination is not a verified Studio-owned workspace: missing ${relative}.`);
+				throw new Error(`The existing destination is not a verified generated workspace: missing ${relative}.`);
 			}
 			throw error;
 		}
 		if (item.isSymbolicLink()) {
-			throw new Error(`The existing destination is not a verified Studio-owned workspace: ${relative} traverses a symbolic link.`);
+			throw new Error(`The existing destination is not a verified generated workspace: ${relative} traverses a symbolic link.`);
 		}
 		if (index < parts.length - 1 && !item.isDirectory()) {
-			throw new Error(`The existing destination is not a verified Studio-owned workspace: ${relative} has an invalid parent.`);
+			throw new Error(`The existing destination is not a verified generated workspace: ${relative} has an invalid parent.`);
 		}
 		if (index === parts.length - 1 && !item.isFile()) {
-			throw new Error(`The existing destination is not a verified Studio-owned workspace: ${relative} is not a file.`);
+			throw new Error(`The existing destination is not a verified generated workspace: ${relative} is not a file.`);
 		}
 	}
 	let content;
@@ -446,13 +448,13 @@ async function assertRecoverySignature(root, signature) {
 		content = await readFile(absolute, "utf8");
 	} catch (error) {
 		if (error?.code === "ENOENT") {
-			throw new Error(`The existing destination is not a verified Studio-owned workspace: missing ${relative}.`);
+			throw new Error(`The existing destination is not a verified generated workspace: missing ${relative}.`);
 		}
 		throw error;
 	}
 	for (const marker of signature.includes || []) {
 		if (!content.includes(marker)) {
-			throw new Error(`The existing destination is not a verified Studio-owned workspace: ${relative} has no ${marker} marker.`);
+			throw new Error(`The existing destination is not a verified generated workspace: ${relative} has no ${marker} marker.`);
 		}
 	}
 }
@@ -490,7 +492,7 @@ export async function reenterOwnedWorkspace({
 			throw new Error("Generated workspace ownership does not match the selected worktree destination.");
 		}
 		if (manifest.templateId && manifest.templateId !== templateId) {
-			throw new Error("The existing destination belongs to a different Studio-generated template.");
+			throw new Error("The existing destination belongs to a different generated template.");
 		}
 		if (manifest.version === 1 || manifest.state === "pending") {
 			const conflicts = await verifyOwnedWorkspace(selected.destination, manifest);
@@ -532,7 +534,7 @@ export async function reenterOwnedWorkspace({
 	}
 
 	if (!recoverySignatures.length) {
-		throw new Error(`The current-worktree destination already exists and is not Studio-owned: ${selected.destination}`);
+		throw new Error(`The current-worktree destination already exists and is not owned by Azure Functions Hosted Skills Preview: ${selected.destination}`);
 	}
 	for (const signature of recoverySignatures) {
 		await assertRecoverySignature(selected.destination, signature);
@@ -629,7 +631,7 @@ export async function acquireOwnershipLock(
 				if (statError?.code !== "ENOENT") throw statError;
 			}
 			if (Date.now() - started >= timeoutMs) {
-				throw new Error("Timed out waiting for another Studio instance to finish creating this workspace.");
+				throw new Error("Timed out waiting for another canvas instance to finish creating this workspace.");
 			}
 			await new Promise((resolve) => setTimeout(resolve, pollMs));
 		}
@@ -667,7 +669,7 @@ export async function removeOwnedWorkspace(root, manifest) {
 	}
 	if (manifest.removalPolicy === "preserve") {
 		throw new Error(
-			"This workspace was recovered without its original creation baseline, so Studio will not remove it automatically.",
+			"This workspace was recovered without its original creation baseline, so Azure Functions Hosted Skills Preview will not remove it automatically.",
 		);
 	}
 	await assertWorkspaceIdentity(resolvedRoot, manifest);

@@ -1,6 +1,6 @@
-// Azure Functions Hosted Skills (preview-12) authoring canvas.
+// Azure Functions Hosted Skills Preview authoring canvas.
 //
-// Azure Functions Hosted Skills (preview-12) Studio. The canvas
+// Azure Functions Hosted Skills Preview. The canvas
 // initializes from the daily-digest template repo
 // (paulyuk/serverless-repo-digest-agent), lets you run it locally with
 // `func start` or point at an existing Azure Function App, and manually invokes
@@ -115,6 +115,7 @@ import {
 	migrateSourceOwnership,
 	readOwnershipManifest,
 	reenterOwnedWorkspace,
+	REMOVAL_MARKER,
 	removeOwnedWorkspace,
 	resolveCurrentWorkspaceDestination,
 	sourceManifestPath,
@@ -356,7 +357,7 @@ function githubFunctionEnvironment(values = {}) {
 async function validateGithubMcpAuthorization(authorization, { fetchImpl = fetch } = {}) {
 	const commonHeaders = {
 		Authorization: authorization,
-		"User-Agent": "azure-functions-hosted-skills-preview-12",
+		"User-Agent": "azure-functions-hosted-skills-preview",
 	};
 	const apiResponse = await fetchImpl("https://api.github.com/user", {
 		headers: {
@@ -391,7 +392,7 @@ async function validateGithubMcpAuthorization(authorization, { fetchImpl = fetch
 			params: {
 				protocolVersion: "2025-03-26",
 				capabilities: {},
-				clientInfo: { name: "azure-functions-hosted-skills-preview-12", version: STUDIO_VERSION },
+				clientInfo: { name: "azure-functions-hosted-skills-preview", version: STUDIO_VERSION },
 			},
 		}),
 		signal: AbortSignal.timeout(15000),
@@ -502,7 +503,7 @@ function normalizeGithubRepository(value) {
 }
 
 function githubPreferencesPath() {
-	return path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview-12", "github-preferences.json");
+	return path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview", "github-preferences.json");
 }
 
 async function readGithubRepositoryPreference() {
@@ -543,7 +544,7 @@ async function discoverGithubRepositories(authorization, { fetchImpl = fetch } =
 				headers: {
 					Authorization: authorization,
 					Accept: "application/vnd.github+json",
-					"User-Agent": "azure-functions-hosted-skills-preview-12",
+					"User-Agent": "azure-functions-hosted-skills-preview",
 					"X-GitHub-Api-Version": "2022-11-28",
 				},
 				signal: AbortSignal.timeout(15000),
@@ -563,6 +564,33 @@ async function discoverGithubRepositories(authorization, { fetchImpl = fetch } =
 		.filter((item) => !item?.archived)
 		.map((item) => normalizeGithubRepository(item?.full_name))
 		.filter((repository) => repository && !seen.has(repository) && seen.add(repository));
+}
+
+async function validateGithubRepositoryAccess(repository, authorization, { fetchImpl = fetch } = {}) {
+	const normalized = normalizeGithubRepository(repository);
+	if (!normalized) throw new Error("Select a valid GitHub repository in owner/name form.");
+	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubRepositories) {
+		const repositories = await fixtureGithubRepositories(authorization);
+		if (!repositories.map(normalizeGithubRepository).includes(normalized)) {
+			throw new Error(`The authenticated GitHub account cannot access ${normalized}.`);
+		}
+		return normalized;
+	}
+	const response = await fetchImpl(`https://api.github.com/repos/${normalized}`, {
+		headers: {
+			Authorization: authorization,
+			Accept: "application/vnd.github+json",
+			"User-Agent": "azure-functions-hosted-skills-preview",
+			"X-GitHub-Api-Version": "2022-11-28",
+		},
+		signal: AbortSignal.timeout(15000),
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`The authenticated GitHub account cannot access ${normalized} (HTTP ${response.status}).`);
+	}
+	await response.body?.cancel();
+	return normalized;
 }
 
 function applyGithubRepository(entry, repository, source) {
@@ -598,6 +626,7 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 	}
 	let repository = normalizeGithubRepository(process.env.GITHUB_REPOSITORY);
 	let source = repository ? "environment" : "";
+	let repositoryValidated = false;
 	if (!repository && entry.sourceWorkspace.workingDirectory) {
 		try {
 			const { stdout } = await runExternalCommandText(
@@ -611,6 +640,10 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 		}
 	}
 	try {
+		if (repository) {
+			repository = await validateGithubRepositoryAccess(repository, authorization);
+			repositoryValidated = true;
+		}
 		const candidates = await discoverGithubRepositories(authorization);
 		entry.githubContext.candidates =
 			repository && !candidates.includes(repository) ? [repository, ...candidates] : candidates;
@@ -636,7 +669,7 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 		});
 	} catch (error) {
 		entry.githubContext.resolved = true;
-		if (repository) {
+		if (repositoryValidated) {
 			entry.githubContext.candidates = [repository];
 			applyGithubRepository(entry, repository, source);
 			cmdEnd(entry, command, {
@@ -1969,7 +2002,7 @@ async function syncGeneratedTriggerFilesUnlocked(entry, bodyText, skillName) {
 
 async function protectLocalSettings(dir) {
 	const ignorePath = path.join(dir, ".gitignore");
-	const requiredRules = ["src/local.settings.json", "src/.foundry-token.json", ".intelligent-function-app-studio/", ".azure-functions-hosted-skills-preview-12/"];
+	const requiredRules = ["src/local.settings.json", "src/.foundry-token.json", ".intelligent-function-app-studio/", ".azure-functions-hosted-skills-preview/"];
 	const current = (await exists(ignorePath)) ? await readFile(ignorePath, "utf8") : "";
 	const rules = current.split(/\r?\n/).map((line) => line.trim());
 	const missingRules = requiredRules.filter((rule) => !rules.includes(rule));
@@ -1984,7 +2017,7 @@ async function protectLocalSettings(dir) {
 
 const LEGACY_GATEWAY_PROVIDER_MARKER = "# Intelligent Function App Studio: AI Gateway provider";
 const LEGACY_GATEWAY_PROVIDER_V2_MARKER = "# Intelligent Function App Studio: model provider routing v2";
-const GATEWAY_PROVIDER_MARKER = "# Azure Functions Hosted Skills (preview-12): model provider routing v2";
+const GATEWAY_PROVIDER_MARKER = "# Azure Functions Hosted Skills Preview: model provider routing v2";
 const LEGACY_GATEWAY_PROVIDER_BLOCK = `${LEGACY_GATEWAY_PROVIDER_MARKER}
 if os.environ.get("AZURE_FUNCTIONS_AGENTS_PROVIDER") == "ai_gateway":
 	from ai_gateway_client_manager import AIGatewayClientManager
@@ -2013,7 +2046,7 @@ const SOURCE_WORKSPACE_RECOVERY_SIGNATURES = [
 ];
 
 function gatewayClientManagerSource() {
-	return `"""Model providers generated by Azure Functions Hosted Skills (preview-12) Studio."""
+	return `"""Model providers generated by Azure Functions Hosted Skills Preview."""
 
 import json
 import os
@@ -2083,8 +2116,8 @@ class AIGatewayClientManager(ClientManager):
         )
 
 
-class StudioTokenCredential:
-    """Read the token refreshed by the Studio's shared Azure CLI session cache."""
+class HostedSkillsTokenCredential:
+    """Read the token refreshed by the Azure Functions Hosted Skills Preview Azure CLI session cache."""
 
     def __init__(self):
         self._token = None
@@ -2097,7 +2130,7 @@ class StudioTokenCredential:
             payload = json.load(handle)
         self._token = AccessToken(payload["accessToken"], int(payload["expiresOn"]))
         if self._token.expires_on <= time.time() + 60:
-            raise RuntimeError("The cached Foundry token expired. Invoke again so the Studio can refresh it.")
+            raise RuntimeError("The cached Foundry token expired. Invoke again so Azure Functions Hosted Skills Preview can refresh it.")
         return self._token
 
     async def close(self):
@@ -2109,7 +2142,7 @@ class FoundryClientManager(ClientManager):
 
     def __init__(self):
         if os.environ.get("FOUNDRY_TOKEN_FILE"):
-            self._credential = StudioTokenCredential()
+            self._credential = HostedSkillsTokenCredential()
         else:
             client_id = os.environ.get("AZURE_CLIENT_ID")
             self._credential = (
@@ -2572,7 +2605,7 @@ async function fetchLocalFoundryToken(entry) {
 }
 
 async function writeLocalFoundryToken(entry, token) {
-	const tokenDir = path.join(requireTemplateDir(entry), ".azure-functions-hosted-skills-preview-12");
+	const tokenDir = path.join(requireTemplateDir(entry), ".azure-functions-hosted-skills-preview");
 	await mkdir(tokenDir, { recursive: true, mode: 0o700 });
 	await chmod(tokenDir, 0o700);
 	const tokenPath = path.join(tokenDir, "foundry-token.json");
@@ -2824,8 +2857,10 @@ const FOUNDRY_CREATE_RESOURCES = [
 	},
 ];
 
-const CREATE_MODELS_BICEP_MARKER = "// Managed by Intelligent Function App Studio Create Models.";
-const CREATE_MODELS_ENTRYPOINT_MARKER = "// Managed by Intelligent Function App Studio Create Models entrypoint.";
+const LEGACY_CREATE_MODELS_BICEP_MARKER = "// Managed by Intelligent Function App Studio Create Models.";
+const LEGACY_CREATE_MODELS_ENTRYPOINT_MARKER = "// Managed by Intelligent Function App Studio Create Models entrypoint.";
+const CREATE_MODELS_BICEP_MARKER = "// Managed by Azure Functions Hosted Skills Preview Create Models.";
+const CREATE_MODELS_ENTRYPOINT_MARKER = "// Managed by Azure Functions Hosted Skills Preview Create Models entrypoint.";
 const CREATE_MODELS_LOCATION = "eastus2";
 const STOCK_FOUNDRY_BICEP_SHA256 = new Set([
 	"02dec44c156825269624d135d569cd2102b4dd1dd08c0ee6ea2a49a3b14d75f8",
@@ -3031,7 +3066,9 @@ async function ensureCreateModelsBicepUnlocked(entry) {
 	const infraDir = path.join(requireTemplateDir(entry), "infra");
 	const bicepPath = path.join(infraDir, "app", "foundry.bicep");
 	const current = await readFile(bicepPath, "utf8");
-	const isManaged = current.startsWith(CREATE_MODELS_BICEP_MARKER);
+	const isManaged =
+		current.startsWith(CREATE_MODELS_BICEP_MARKER) ||
+		current.startsWith(LEGACY_CREATE_MODELS_BICEP_MARKER);
 	const normalized = `${current.replace(/\r\n/g, "\n").trimEnd()}\n`;
 	const currentSha256 = createHash("sha256").update(normalized).digest("hex");
 	const isStockSingleModel = STOCK_FOUNDRY_BICEP_SHA256.has(currentSha256);
@@ -3043,7 +3080,10 @@ async function ensureCreateModelsBicepUnlocked(entry) {
 	const entrypointPath = path.join(infraDir, "create-models.bicep");
 	if (await exists(entrypointPath)) {
 		const entrypointCurrent = await readFile(entrypointPath, "utf8");
-		if (!entrypointCurrent.startsWith(CREATE_MODELS_ENTRYPOINT_MARKER)) {
+		if (
+			!entrypointCurrent.startsWith(CREATE_MODELS_ENTRYPOINT_MARKER) &&
+			!entrypointCurrent.startsWith(LEGACY_CREATE_MODELS_ENTRYPOINT_MARKER)
+		) {
 			throw new Error("Create Models found a customized infra/create-models.bicep and will not overwrite it.");
 		}
 	}
@@ -3435,7 +3475,7 @@ async function reconcileSourceWorkspaceMove(entry, manifest, manifestPath) {
 	if (sourceExists === destinationExists) {
 		throw new Error(
 			sourceExists
-				? "Both sides of an unfinished generated app move exist. Studio will not choose one."
+				? "Both sides of an unfinished generated app move exist. Azure Functions Hosted Skills Preview will not choose one."
 				: "Neither side of an unfinished generated app move exists.",
 		);
 	}
@@ -3598,7 +3638,7 @@ async function hydrateSourceWorkspace(entry, { sessionId, workingDirectory } = {
 			manifestSourcePath = entry.sourceWorkspace.manifestPath;
 		}
 		if (manifest && !reentry) {
-			throw new Error(`The recorded Studio-owned workspace is missing: ${manifest.root}`);
+			throw new Error(`The recorded Azure Functions Hosted Skills Preview workspace is missing: ${manifest.root}`);
 		}
 		if (reentry) {
 			entry.sourceWorkspace.mode = "current";
@@ -3703,14 +3743,14 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
 			if (existingManifest && path.resolve(existingManifest.root) !== destination) {
 				if (await exists(existingManifest.root)) {
 					throw new Error(
-						`Studio already owns a generated app at ${existingManifest.relativePath}. Reopen or move that app instead of creating another one in this worktree.`,
+						`Azure Functions Hosted Skills Preview already owns a generated app at ${existingManifest.relativePath}. Reopen or move that app instead of creating another one in this worktree.`,
 					);
 				}
 				if (existingManifest.state === "pending") {
 					await deleteOwnershipManifest(entry.sourceWorkspace.manifestPath);
 					existingManifest = null;
 				} else {
-					throw new Error(`The recorded Studio-owned workspace is missing: ${existingManifest.root}`);
+					throw new Error(`The recorded Azure Functions Hosted Skills Preview workspace is missing: ${existingManifest.root}`);
 				}
 			}
 			if (await exists(destination)) {
@@ -3735,7 +3775,7 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
 				if (reentry.manifestChanged) {
 					await writeOwnershipManifest(entry.sourceWorkspace.manifestPath, reentry.manifest);
 				}
-				entry.openStatus = `Reopened Studio-owned generated app at ${reentry.relative}`;
+				entry.openStatus = `Reopened generated app owned by Azure Functions Hosted Skills Preview at ${reentry.relative}`;
 				entry.fetchError = "";
 				return entry.hero;
 			}
@@ -3743,7 +3783,7 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
 				if (existingManifest.state === "pending") {
 					await deleteOwnershipManifest(entry.sourceWorkspace.manifestPath);
 				} else {
-					throw new Error(`The recorded Studio-owned workspace is missing: ${existingManifest.root}`);
+					throw new Error(`The recorded Azure Functions Hosted Skills Preview workspace is missing: ${existingManifest.root}`);
 				}
 			}
 			cloneDestination = path.join(
@@ -3871,7 +3911,7 @@ async function validateLockedCurrentWorkspace(entry) {
 	if (!manifest) throw new Error("The ownership manifest is missing, so this generated app cannot be changed safely.");
 	const expected = entry.sourceWorkspace.manifest;
 	if (!expected?.generationId || !manifest.generationId || expected.generationId !== manifest.generationId) {
-		throw new Error("The generated app was replaced by another Studio instance. Reopen the canvas before changing it.");
+		throw new Error("The generated app was replaced by another canvas instance. Reopen the canvas before changing it.");
 	}
 	if (manifest.templateId !== SOURCE_WORKSPACE_TEMPLATE_ID) {
 		throw new Error("The generated app ownership record belongs to a different template. Reopen the canvas before changing it.");
@@ -3884,7 +3924,7 @@ async function validateLockedCurrentWorkspace(entry) {
 		path.resolve(manifest.root) !== path.resolve(expected.root) ||
 		path.resolve(manifest.workspaceRoot) !== path.resolve(expected.workspaceRoot)
 	) {
-		throw new Error("The generated app location changed in another Studio instance. Reopen the canvas before changing it.");
+		throw new Error("The generated app location changed in another canvas instance. Reopen the canvas before changing it.");
 	}
 	const reentry = await reenterOwnedWorkspace({
 		workspaceRoot: entry.sourceWorkspace.workingDirectory,
@@ -3895,9 +3935,9 @@ async function validateLockedCurrentWorkspace(entry) {
 		templateId: SOURCE_WORKSPACE_TEMPLATE_ID,
 		recoverySignatures: SOURCE_WORKSPACE_RECOVERY_SIGNATURES,
 	});
-	if (!reentry) throw new Error(`The recorded Studio-owned workspace is missing: ${manifest.root}`);
+	if (!reentry) throw new Error(`The recorded Azure Functions Hosted Skills Preview workspace is missing: ${manifest.root}`);
 	if (path.resolve(requireTemplateDir(entry)) !== reentry.destination) {
-		throw new Error("The generated app location changed in another Studio instance. Reopen the canvas before changing it.");
+		throw new Error("The generated app location changed in another canvas instance. Reopen the canvas before changing it.");
 	}
 	if (reentry.manifestChanged) {
 		await writeOwnershipManifest(entry.sourceWorkspace.manifestPath, reentry.manifest);
@@ -4079,7 +4119,7 @@ async function moveSourceWorkspaceToIsolated(entry) {
 async function removeCurrentSourceWorkspace(entry) {
 	assertWorkspaceMutationAllowed(entry, "Removing the generated app");
 	if (!entry.sourceWorkspace.materialized || entry.sourceWorkspace.mode !== "current") {
-		throw new Error("There is no Studio-owned app in the current worktree to remove.");
+		throw new Error("There is no Azure Functions Hosted Skills Preview-owned app in the current worktree to remove.");
 	}
 	if (entry.sourceWorkspace.operation) throw new Error("A generated workspace operation is already running.");
 	const releaseOwnershipLock = await acquireOwnershipLock(entry.sourceWorkspace.manifestPath);
@@ -4093,7 +4133,7 @@ async function removeCurrentSourceWorkspace(entry) {
 		const manifest = ownership.manifest;
 		await assertCurrentWorkspaceDestinationSafe(manifest.workspaceRoot, manifest.relativePath);
 		const removalMarker = sourceRemovalMarkerPath(entry);
-		await writeFile(removalMarker, "Removed by the user. Create from the Studio to restore.\n", {
+		await writeFile(removalMarker, REMOVAL_MARKER, {
 			mode: 0o600,
 		});
 		await removeOwnedWorkspace(ownership.destination, manifest);
@@ -4106,7 +4146,7 @@ async function removeCurrentSourceWorkspace(entry) {
 			entry.sourceWorkspace.relativePath,
 		).destination;
 		entry.sourceWorkspace.manifest = null;
-		entry.openStatus = "Removed the unchanged Studio-generated app from the current worktree.";
+		entry.openStatus = "Removed the unchanged generated app from the current worktree.";
 		return { ok: true };
 	} catch (error) {
 		entry.sourceWorkspace.error = shortError(error);
@@ -4222,7 +4262,7 @@ async function resolvePythonProvisioning(entry) {
 // slow/offline network never blocks the fast local diagnosis from showing.
 
 // Read-only mirror of bootstrap-extension.mjs's own check: is
-// ~/.copilot/extensions/intelligent-function-app-studio actually linked
+// A legacy extension path may actually link to the canonical distribution.
 // somewhere real? Never writes or repairs anything itself - the real fix
 // (re-running bootstrap-extension.mjs) is documented in the fix text and
 // already happens automatically via SKILL.md's retry flow. A destination
@@ -4647,7 +4687,7 @@ async function ensureAzuriteCommand(args, entry) {
 	} catch (error) {
 		if (error?.code !== "EXTERNAL_COMMAND_NOT_FOUND") throw error;
 	}
-	const installRoot = path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview-12", "tools", `azurite-${AZURITE_VERSION}`);
+	const installRoot = path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview", "tools", `azurite-${AZURITE_VERSION}`);
 	const installBin = path.join(installRoot, "node_modules", ".bin");
 	try {
 		return await externalCommandSpawnSpec("azurite", args, { extraDirectories: [installBin] });
@@ -5582,7 +5622,7 @@ async function invokeLocalHttp(
 		if (accepted) refreshInvocationNote(invocation);
 		if (invocation.executionId) entry.local.executions.delete(invocation.executionId);
 		if (request.display.overriddenHeaders.length) {
-			invocation.note += ` Studio overrode ${request.display.overriddenHeaders.join(", ")} with application/json.`;
+			invocation.note += ` Azure Functions Hosted Skills Preview overrode ${request.display.overriddenHeaders.join(", ")} with application/json.`;
 		}
 		if (!accepted && resp.ok) {
 			invocation.note =
@@ -5899,7 +5939,7 @@ async function invokeAzure(entry, input, httpRequestDraft) {
 				[
 					result.note || (response ? "Function response is available below." : `HTTP ${result.status}`),
 					request.overriddenHeaders?.length
-						? `Studio overrode ${request.overriddenHeaders.join(", ")} with application/json.`
+						? `Azure Functions Hosted Skills Preview overrode ${request.overriddenHeaders.join(", ")} with application/json.`
 						: "",
 				]
 					.filter(Boolean)
@@ -6425,7 +6465,7 @@ async function commitAppHandoff(dir, instanceId) {
 	await writeFile(
 		instructionsPath,
 		[
-			"# Azure Functions Hosted Skills (preview-12) Studio handoff",
+			"# Azure Functions Hosted Skills Preview handoff",
 			"",
 			"This working copy contains Hosted Skills in Azure Functions created from the daily repo digest template.",
 			"Start by reviewing `src/*.agent.md`, `src/agents.config.yaml`, `src/mcp.json`, and `azure.yaml`.",
@@ -6449,18 +6489,18 @@ async function commitAppHandoff(dir, instanceId) {
 	const status = await execFileText("git", ["status", "--porcelain"], { cwd: dir });
 	if (status.stdout.trim()) {
 		try {
-			await execFileText("git", ["commit", "-m", "Add Azure Functions Hosted Skills (preview-12) Studio handoff"], { cwd: dir });
+			await execFileText("git", ["commit", "-m", "Add Azure Functions Hosted Skills Preview handoff"], { cwd: dir });
 		} catch {
 			await execFileText(
 				"git",
 				[
 					"-c",
-					"user.name=Cloud Foundation Studio",
+					"user.name=Cloud Foundation",
 					"-c",
 					"user.email=noreply@localhost",
 					"commit",
 					"-m",
-					"Add Azure Functions Hosted Skills (preview-12) Studio handoff",
+					"Add Azure Functions Hosted Skills Preview handoff",
 				],
 				{ cwd: dir },
 			);
@@ -6490,10 +6530,10 @@ async function requestAppProjectRegistration(entry, info) {
 	broadcast(entry, "state", snapshot(entry));
 
 	const kickoff =
-		"Continue from the Azure Functions Hosted Skills (preview-12) Studio handoff. Read .github/copilot-instructions.md, " +
+		"Continue from the Azure Functions Hosted Skills Preview handoff. Read .github/copilot-instructions.md, " +
 		"inspect the agent and project files, and report the concrete local run steps. Do not deploy or change Azure resources without asking.";
 	const prompt =
-		`Azure Functions Hosted Skills (preview-12) Studio session request for canvas instance ${JSON.stringify(entry.instanceId)}.\n\n` +
+		`Azure Functions Hosted Skills Preview session request for canvas instance ${JSON.stringify(entry.instanceId)}.\n\n` +
 		`The user clicked Create isolated GitHub Session and authorized these local App operations:\n` +
 		`1. Call create_project with path ${JSON.stringify(info.dir)}. Use this exact local path, not a remote repository URL.\n` +
 		`2. Call create_session for the returned project id with base_branch ${JSON.stringify(info.branch)}, ` +
@@ -6627,7 +6667,7 @@ async function startServer(
 						ok: true,
 						destination: entry.sourceWorkspace.destination,
 						message: entry.sourceWorkspace.reentered
-							? `Reopened Studio-owned generated app at ${entry.sourceWorkspace.destination}`
+							? `Reopened generated app owned by Azure Functions Hosted Skills Preview at ${entry.sourceWorkspace.destination}`
 							: `Generated app created at ${entry.sourceWorkspace.destination}`,
 					});
 				})
@@ -7217,7 +7257,7 @@ async function startServer(
 				if (!deploymentSubscription) {
 					throw new Error(
 						entry.azure.subscriptionsError ||
-							"Select an Azure subscription before deploying. Studio cannot prompt inside the canvas.",
+							"Select an Azure subscription before deploying. Azure Functions Hosted Skills Preview cannot prompt inside the canvas.",
 					);
 				}
 				const dir = deploymentWorkspaceDir(entry);
@@ -7227,12 +7267,12 @@ async function startServer(
 				await enforceIdentityOnlyDeploymentTemplate(dir);
 				if (entry.trigger === "connector") {
 					throw new Error(
-						"Microsoft 365 Inbox deployment is not automated by Studio. Provision an authorized Connector Namespace connection, create OnNewEmailV3 for folderPath=Inbox, merge src/m365-inbox.mcp.json into src/mcp.json, configure OUTLOOK_MCP_ENDPOINT, and complete delegated OAuth consent outside Studio.",
+						"Microsoft 365 Inbox deployment is not automated by Azure Functions Hosted Skills Preview. Provision an authorized Connector Namespace connection, create OnNewEmailV3 for folderPath=Inbox, merge src/m365-inbox.mcp.json into src/mcp.json, configure OUTLOOK_MCP_ENDPOINT, and complete delegated OAuth consent externally.",
 					);
 				}
 				if (entry.trigger === "queue") {
 					throw new Error(
-						"Queue deployment is not automated by Studio because the generated Azure infrastructure does not create its source queue. Provision the exact generated queue and required data-plane access outside Studio before deploying this Queue-triggered app.",
+						"Queue deployment is not automated by Azure Functions Hosted Skills Preview because the generated Azure infrastructure does not create its source queue. Provision the exact generated queue and required data-plane access before deploying this Queue-triggered app.",
 					);
 				}
 				await rm(path.join(dir, HERO_TEMPLATE.queueAgentRelPath), { force: true });
@@ -7808,7 +7848,7 @@ const canvas = createCanvas({
 			resetRuntimeStateLoaders(entry);
 		}
 		// The working copy and in-memory history persist so reopening restores
-		// the Studio without leaving background processes behind.
+		// the canvas without leaving background processes behind.
 	},
 });
 
@@ -7846,6 +7886,7 @@ export const functionStudioTestHooks = Object.freeze({
 	resolveGithubMcpCredential,
 	githubFunctionEnvironment,
 	hasRequiredGithubDigestEvidence,
+	validateGithubRepositoryAccess,
 	ensureEntry,
 	snapshot,
 	broadcast,
@@ -7854,6 +7895,7 @@ export const functionStudioTestHooks = Object.freeze({
 	probeAzuriteServices,
 	ensureAzureSubscriptions,
 	discoverModelBindings,
+	initializeGithubContext,
 	initializeEntryRuntimeState,
 	hydrateSourceWorkspace,
 	rendererProfile: CANONICAL_RENDERER_PROFILE,

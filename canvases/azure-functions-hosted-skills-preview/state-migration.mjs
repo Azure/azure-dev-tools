@@ -5,8 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { acquireStateLock } from "./state-lock.mjs";
 
 // Deliberately independent of the installable distribution's CANVAS_ID.
-export const STATE_COMPONENT = "azure-functions-hosted-skills-preview-12";
-export const STATE_PRODUCT = "azure-functions-hosted-skills-preview-12";
+export const STATE_COMPONENT = "azure-functions-hosted-skills-preview";
+export const STATE_PRODUCT = "azure-functions-hosted-skills-preview";
 export const LEGACY_STATE_COMPONENT = "intelligent-function-app-studio";
 
 export function studioStateEnvironment({ env = process.env, homeDirectory = homedir, pathApi = path } = {}) {
@@ -227,7 +227,7 @@ export async function writeStateRecord({ destination, value, revision, validate 
 	return withStateLock(destination, async () => {
 		const current = await readStateText(destination);
 		if ((current === null ? null : stateDigest(current)) !== revision) {
-			throw new Error(`State changed in another Studio instance; reopen before saving: ${destination}`);
+			throw new Error(`State changed in another canvas instance; reopen before saving: ${destination}`);
 		}
 		const encoded = jsonText(await validate(value, { source: destination, canonical: true }));
 		await atomicStateWrite(destination, encoded);

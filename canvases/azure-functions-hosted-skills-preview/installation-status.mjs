@@ -53,7 +53,7 @@ export async function installationStatus({
 		installations,
 		duplicate,
 		message: mixedIdentities
-			? "Both Azure Functions Hosted Skills (preview-12) and a retired legacy installation are present. Only azure-functions-hosted-skills ships now; old folder install URLs no longer work. Close the old panel and disable its registration through the host before reinstalling canonical. Preserve legacy state and generated apps; no install or state was changed."
+			? "Both Azure Functions Hosted Skills Preview and a retired legacy installation are present. Only azure-functions-hosted-skills ships now; old folder install URLs no longer work. Close the old panel and disable its registration through the host before reinstalling canonical. Preserve legacy state and generated apps; no install or state was changed."
 			: retiredOnly
 				? "Only a retired legacy installation was found. Old folder install URLs no longer work. Close its panel and review the registration before installing azure-functions-hosted-skills; preserve legacy state and generated apps."
 			: duplicate

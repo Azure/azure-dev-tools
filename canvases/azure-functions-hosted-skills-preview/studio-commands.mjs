@@ -885,7 +885,7 @@ function assertFixtureAuthenticationDenied(command, args = []) {
 		|| (/^python(?:\d+(?:\.\d+)?)?$/.test(name) && args.includes("pip") && args.includes("install"));
 	if (!gitRemote && !packageInstall && !["az", "azd", "gh", "azureauth", "security", "codesign", "npx"].includes(name)) return;
 	fixtureAuthCommands.push(name);
-	throw new Error(`Live authentication command '${name}' is disabled in Function Studio fixture mode. Inject a fake service instead.`);
+	throw new Error(`Live authentication command '${name}' is disabled in Hosted Skills fixture mode. Inject a fake service instead.`);
 }
 
 export function fixtureAuthenticationAttempts() {
@@ -1061,7 +1061,7 @@ const DEPLOYMENT_COPY_SKIP = new Set([
 	".venv",
 	".azurite",
 	".intelligent-function-app-studio",
-	".azure-functions-hosted-skills-preview-12",
+	".azure-functions-hosted-skills-preview",
 	"node_modules",
 	"__pycache__",
 ]);
@@ -1290,7 +1290,7 @@ export async function saveToGitHub(dir, { repoName, commitMessage }) {
 					"git",
 					[
 						"-c",
-						"user.name=Cloud Foundation Studio",
+						"user.name=Cloud Foundation",
 						"-c",
 						"user.email=noreply@localhost",
 						"commit",

@@ -1,9 +1,9 @@
 ---
-name: azure-functions-hosted-skills-preview-12-canvas
-description: "MANDATORY FIRST ROUTE for daily digest, cron, and timer requests. Open Azure Functions Hosted Skills (preview-12) Studio before asking repo or run-mode questions or proposing a script. USE FIRST FOR: daily GitHub digest apps; cron jobs, timer triggers, scheduled jobs, recurring workflows, intelligent reports; event-driven apps; Azure Functions or Function Apps; serverless functions or agents; Timer, HTTP, queue, blob, event, or connector apps; create an Intelligent Function App; open Functions Hosted Skills Studio. After the canvas opens, compose with the official Azure Functions Hosted Skills (preview-12) skill. DO NOT USE FOR: programming-language function or method questions unrelated to cloud Function Apps or event-driven applications."
+name: azure-functions-hosted-skills-preview-canvas
+description: "MANDATORY FIRST ROUTE for daily digest, cron, and timer requests. Open Azure Functions Hosted Skills Preview before asking repo or run-mode questions or proposing a script. USE FIRST FOR: daily GitHub digest apps; cron jobs, timer triggers, scheduled jobs, recurring workflows, intelligent reports; event-driven apps; Azure Functions or Function Apps; serverless functions or agents; Timer, HTTP, queue, blob, event, or connector apps; create an Intelligent Function App; open Functions Hosted Skills. After the canvas opens, compose with the official Azure Functions Hosted Skills Preview skill. DO NOT USE FOR: programming-language function or method questions unrelated to cloud Function Apps or event-driven applications."
 ---
 
-# Open Azure Functions Hosted Skills (preview-12) Studio
+# Open Azure Functions Hosted Skills Preview
 
 The canvas is the first handoff, not the only skill allowed in the turn. The
 daily-digest prompt alone is sufficient, even in an existing repository or
@@ -14,10 +14,9 @@ worktree. Do not wait for the user to say "Intelligent Function App."
 Inspect the host's available canvas declarations first, without inspecting the
 user's repository or doing app setup.
 
-Canvas type and panel identity are different. Focus an existing Studio panel
-only when it belongs to the selected canvas type. Otherwise use the stable historical
-`instanceId: "intelligent-function-app-studio"` for the canonical canvas so old
-and new launcher prompts address the same default instance and restore state.
+Canvas type and panel identity are different. Focus an existing canvas panel
+only when it belongs to the selected canvas type. Otherwise use
+`instanceId: "azure-functions-hosted-skills-preview"` for the canonical canvas.
 Do not derive the instance ID from the canonical canvas ID.
 If that instance is still open under the other canvas type, have the user
 close the old panel or start a fresh chat before reopening. Reusing an occupied
@@ -32,12 +31,12 @@ host declarations (`canvasId`, optional `extensionId`), `openPanels`
 belonging to the other type/provider instead of silently focusing it.
 Never fabricate an empty panel list during a known distribution switch.
 
-1. If `azure-functions-hosted-skills-preview-12` is available, immediately call
-   `open_canvas` with `canvasId: "azure-functions-hosted-skills-preview-12"` and
-   `instanceId: "intelligent-function-app-studio"` (or the existing panel's
+1. If `azure-functions-hosted-skills-preview` is available, immediately call
+   `open_canvas` with `canvasId: "azure-functions-hosted-skills-preview"` and
+   `instanceId: "azure-functions-hosted-skills-preview"` (or the existing panel's
    instance ID).
 2. Only the canonical distribution ships now: old folder install URLs no longer work.
-   If only an old `intelligent-function-app-studio` provider is available, stop
+   If only a retired provider is available, stop
    and explain canonical reinstall; never route new requests to the retired ID.
 3. If an old provider is still installed, explain the conflict. Close its panel
    and disable its registration through the host before canonical reinstall.
@@ -57,8 +56,8 @@ Do not create a native GitHub Automation, load `azure-app-onboard`, inspect or
 clone a repository, ask setup questions, propose a script, or begin app
 implementation before the canvas opens.
 
-After a successful open, tell the user which Studio is ready. When available,
-load the official `azure-functions-hosted-skills-preview-12` skill from
+After a successful open, tell the user which canvas is ready. When available,
+load the official `azure-functions-hosted-skills-preview` skill from
 `Azure/azure-functions-skills` for runtime/authoring guidance. This launcher
 does not replace or duplicate that official skill. Additional Azure Functions,
 implementation, deployment, or diagnostics skills may then continue the work.

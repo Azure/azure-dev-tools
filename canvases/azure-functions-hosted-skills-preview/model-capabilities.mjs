@@ -26,7 +26,7 @@ export function classifyGatewayArmError(error) {
 		normalized.includes("api version")
 	) {
 		status = "api-version";
-		reason = "This subscription or region does not currently expose the AI Gateway preview management contract used by the Studio.";
+		reason = "This subscription or region does not currently expose the AI Gateway preview management contract used by Azure Functions Hosted Skills Preview.";
 	} else if (
 		statusCode === 401 ||
 		statusCode === 403 ||

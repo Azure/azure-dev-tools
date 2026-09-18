@@ -1,6 +1,6 @@
-# Azure Functions Hosted Skills (preview-12) (preview-12)
+# Azure Functions Hosted Skills Preview
 
-Build, run, test, and deploy Azure Functions Hosted Skills (preview-12) from a canvas-enabled
+Build, run, test, and deploy Azure Functions Hosted Skills from a canvas-enabled
 GitHub Copilot host.
 
 ## Prerequisites
@@ -20,10 +20,10 @@ behavior.
 Install this directory as a canvas extension, reload extensions, and ask:
 
 ```text
-Open Azure Functions Hosted Skills (preview-12)
+Open Azure Functions Hosted Skills
 ```
 
-The canvas opens as `azure-functions-hosted-skills-preview-12`. On first open it creates a unique owned
+The canvas opens as `azure-functions-hosted-skills-preview`. On first open it creates a unique owned
 workspace, discovers an accessible Microsoft Foundry project and model, writes
 credential-free source plus process-local runtime settings, and starts the local
 Functions host. It preserves the generated workspace across provider restarts

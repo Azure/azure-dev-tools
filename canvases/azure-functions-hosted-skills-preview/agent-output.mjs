@@ -4,7 +4,7 @@ const MAX_AGENT_ENVELOPE_CHARS = 500_000;
 const MAX_AGENT_ENVELOPE_DEPTH = 4;
 const MAX_TELEMETRY_CORRELATION_MS = 30 * 60 * 1000;
 const AGENT_RESPONSE_LOGGING_MARKER =
-	"# Intelligent Function App Studio: expose completed agent responses (v5)";
+	"# Azure Functions Hosted Skills Preview: expose completed agent responses (v6)";
 const LEGACY_AGENT_RESPONSE_LOGGING = [
 	"import logging",
 	"",
@@ -17,6 +17,8 @@ const VERSION_TWO_AGENT_RESPONSE_LOGGING =
 	/^import logging\n\n# Intelligent Function App Studio: expose completed agent responses \(v2\)\n# Core Tools filters this named logger's INFO records from the local host stream\.\n_agent_runtime_logger = logging\.getLogger\("azure\.functions\.AgentRuntime"\)\n_agent_runtime_logger\.info = _agent_runtime_logger\.warning\n/;
 const VERSION_THREE_OR_FOUR_AGENT_RESPONSE_LOGGING =
 	/^import logging\nimport json\n\n# Intelligent Function App Studio: expose completed agent responses \(v[34]\)\n[\s\S]*?_agent_runtime_logger\.info = _studio_agent_response_info\n/;
+const VERSION_FIVE_AGENT_RESPONSE_LOGGING =
+	/^import logging\nimport json\n\n# Intelligent Function App Studio: expose completed agent responses \(v5\)\n[\s\S]*?_agent_runtime_logger\.info = _studio_agent_response_info\n/;
 
 function isPlainObject(value) {
 	return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -153,6 +155,7 @@ export function installAgentResponseLogging(source) {
 		.replace(ORIGINAL_AGENT_RESPONSE_LOGGING, "")
 		.replace(VERSION_TWO_AGENT_RESPONSE_LOGGING, "")
 		.replace(VERSION_THREE_OR_FOUR_AGENT_RESPONSE_LOGGING, "")
+		.replace(VERSION_FIVE_AGENT_RESPONSE_LOGGING, "")
 		.replace(LEGACY_AGENT_RESPONSE_LOGGING, "");
 	const loggerSetup = [
 		"import logging",
@@ -164,7 +167,7 @@ export function installAgentResponseLogging(source) {
 		'_agent_runtime_logger = logging.getLogger("azure.functions.AgentRuntime")',
 		"_agent_runtime_info = _agent_runtime_logger.info",
 		"",
-		"def _studio_agent_response_info(message, *args, **kwargs):",
+		"def _hosted_skills_agent_response_info(message, *args, **kwargs):",
 		'    if message == "Agent response: source_file=%s payload=%s" and len(args) >= 2:',
 		"        try:",
 		"            payload = json.loads(str(args[1]))",
@@ -178,7 +181,7 @@ export function installAgentResponseLogging(source) {
 		"        return",
 		"    _agent_runtime_info(message, *args, **kwargs)",
 		"",
-		"_agent_runtime_logger.info = _studio_agent_response_info",
+		"_agent_runtime_logger.info = _hosted_skills_agent_response_info",
 		"",
 	].join("\n");
 	return `${loggerSetup}${cleanSource}`;

@@ -95,7 +95,7 @@ function triggerBindings(bindings) {
 }
 
 function unsupportedGuidance(label) {
-	return `${label} discovery is supported, but Studio does not synthesize its source event. Test it through the trigger's documented service or portal tooling.`;
+	return `${label} discovery is supported, but Azure Functions Hosted Skills Preview does not synthesize its source event. Test it through the trigger's documented service or portal tooling.`;
 }
 
 export function classifyFunctionEnvelope(envelope) {
@@ -129,7 +129,7 @@ export function classifyFunctionEnvelope(envelope) {
 			acceptsInput: false,
 			guidance:
 				triggers.length > 1
-					? "Multiple input trigger bindings were returned. Studio will not guess which event to synthesize."
+					? "Multiple input trigger bindings were returned. Azure Functions Hosted Skills Preview will not guess which event to synthesize."
 					: "No trigger binding was returned by the public Function metadata.",
 			hostedSkillVerified: false,
 			hostedSkillNote: "Hosted Skill not verified",
@@ -155,7 +155,7 @@ export function classifyFunctionEnvelope(envelope) {
 		if (!invokeUrl) {
 			supportStatus = "unsupported";
 			supportsInvoke = false;
-			guidance = "Public Function metadata did not return a safe HTTPS invocation URL, so Studio will not guess one.";
+			guidance = "Public Function metadata did not return a safe HTTPS invocation URL, so Azure Functions Hosted Skills Preview will not guess one.";
 		}
 	} else if (triggerType === "timertrigger") {
 		kind = "timer";
@@ -176,7 +176,7 @@ export function classifyFunctionEnvelope(envelope) {
 	if (disabled) {
 		supportStatus = "disabled";
 		supportsInvoke = false;
-		guidance = "This deployed function is disabled. Studio will not invoke it.";
+		guidance = "This deployed function is disabled. Azure Functions Hosted Skills Preview will not invoke it.";
 	}
 
 	return {
@@ -395,7 +395,7 @@ export function resolveQueueTarget(binding, settings) {
 	const configuredEncoding = setting(settings, "AzureFunctionsJobHost__extensions__queues__messageEncoding").toLowerCase();
 	if (configuredEncoding && configuredEncoding !== "base64" && configuredEncoding !== "none") {
 		throw new Error(
-			"AzureFunctionsJobHost__extensions__queues__messageEncoding must be base64 or none before Studio can safely test this Queue trigger.",
+			"AzureFunctionsJobHost__extensions__queues__messageEncoding must be base64 or none before Azure Functions Hosted Skills Preview can safely test this Queue trigger.",
 		);
 	}
 

@@ -58,7 +58,7 @@ export async function acquireStateLock(file, { timeoutMs = 120000, pollMs = 50 }
 				}
 			}
 			if (Date.now() - started >= timeoutMs) {
-				throw new Error(`Timed out waiting for the canonical Studio state owner: ${lockPath}. An incomplete lock requires explicit recovery.`);
+				throw new Error(`Timed out waiting for the canonical canvas state owner: ${lockPath}. An incomplete lock requires explicit recovery.`);
 			}
 			await new Promise((resolve) => setTimeout(resolve, pollMs));
 		}

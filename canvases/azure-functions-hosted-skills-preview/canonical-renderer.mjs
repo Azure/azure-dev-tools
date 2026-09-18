@@ -1,4 +1,4 @@
-// Shared renderer for Azure Functions Hosted Skills (preview-12) canvas variants.
+// Shared renderer for Azure Functions Hosted Skills Preview canvas variants.
 // Feature profiles define the capability boundary for later host-specific views.
 
 import { COMMAND_CSS, ICONS, commandClientScript } from "./studio-commands.mjs";
@@ -173,7 +173,7 @@ export function renderHostedSkillsHtml(profile) {
 	const withLoadTest = enabled("loadTest");
 	const withDeploymentPreflight = enabled("deploymentPreflight");
 	const withFullClient = HOSTED_SKILLS_RENDERER_FEATURES.every(enabled);
-	const displayName = withFullClient ? "Azure Functions Hosted Skills (preview-12) Studio" : "Azure Functions Hosted Skills (preview-12)";
+	const displayName = "Azure Functions Hosted Skills Preview";
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1017,9 +1017,9 @@ ${commandClientScript()}
       const connector = support.connector || {};
       triggerGuidance.textContent = state.target === 'local'
         ? 'Microsoft 365 Inbox only (' + (connector.operationName || 'OnNewEmailV3') + ', Inbox). Local Invoke uses the runtime chat endpoint with representative DRY RUN Trigger data; Outlook tools are not registered locally, so it cannot call Microsoft 365. Other connectors are unsupported.'
-        : 'Microsoft 365 Inbox only. Azure requires an authorized Connector Namespace OnNewEmailV3 trigger, MCP endpoint, and delegated consent. Studio does not create or invoke that webhook and blocks deployment until you configure it outside Studio; other connectors are unsupported.';
+        : 'Microsoft 365 Inbox only. Azure requires an authorized Connector Namespace OnNewEmailV3 trigger, MCP endpoint, and delegated consent. Azure Functions Hosted Skills Preview does not create or invoke that webhook and blocks deployment until you configure it externally; other connectors are unsupported.';
     } else if (state.trigger === 'blob' || state.trigger === 'cosmos') {
-      triggerGuidance.textContent = 'This trigger is not supported in Studio yet.';
+      triggerGuidance.textContent = 'This trigger is not supported in Azure Functions Hosted Skills Preview yet.';
     } else {
       triggerGuidance.textContent = '';
     }
@@ -1184,7 +1184,7 @@ ${commandClientScript()}
     } else if (source.materialized && current && showEditor) {
       sourceWorkspaceNote.hidden = false;
       sourceWorkspaceNote.className = 'inline-note';
-      sourceWorkspaceNote.textContent = 'Changing the path moves the complete generated app. Remove succeeds only while Studio-owned files are unchanged.';
+      sourceWorkspaceNote.textContent = 'Changing the path moves the complete generated app. Remove succeeds only while files owned by Azure Functions Hosted Skills Preview are unchanged.';
     } else {
       sourceWorkspaceNote.hidden = true;
       sourceWorkspaceNote.textContent = '';
@@ -1385,7 +1385,7 @@ ${commandClientScript()}
     triggerInputGuidance.textContent = queueInput
       ? ''
       : connectorInput
-        ? 'Representative email array only. Studio always adds RUN MODE: DRY RUN and does not register Outlook tools locally.'
+        ? 'Representative email array only. Azure Functions Hosted Skills Preview always adds RUN MODE: DRY RUN and does not register Outlook tools locally.'
         : selectedAzure ? selectedAzure.hostedSkillNote + '. ' + selectedAzure.guidance : '';
     triggerTestInput.placeholder = queueInput
       ? '{\\n  "request": "Create a repository digest",\\n  "repository": "owner/repo",\\n  "lookbackHours": 24\\n}'
@@ -1407,7 +1407,7 @@ ${commandClientScript()}
       httpRequestBody.value = draft.bodyText == null ? '' : draft.bodyText;
     }
     httpRequestNote.textContent = state.httpRequestError ||
-      'POST sends this JSON object exactly. Empty body is allowed. Studio owns Content-Type and authentication; protected or credential-bearing headers are rejected.';
+      'POST sends this JSON object exactly. Empty body is allowed. Azure Functions Hosted Skills Preview owns Content-Type and authentication; protected or credential-bearing headers are rejected.';
     httpRequestNote.className = 'inline-note http-request-note' + (state.httpRequestError ? ' err' : '');
     return { queueInput, connectorInput, httpInput };
   }
@@ -1671,9 +1671,9 @@ ${commandClientScript()}
   });
   sourceRemove.addEventListener('click', async () => {
     const source = latest && latest.sourceWorkspace ? latest.sourceWorkspace : {};
-    if (!window.confirm('Remove the Studio-generated app at ' + source.destination + '? Removal stops if generated files changed.')) return;
+    if (!window.confirm('Remove the generated app at ' + source.destination + '? Removal stops if generated files changed.')) return;
     sourceRemove.disabled = true;
-    setStatus('Checking and removing Studio-owned files...');
+    setStatus('Checking and removing owned files...');
     const result = await postJson('/source/remove', { confirm: true });
     if (result.ok) {
       sourceEditorOpen = false;
@@ -1774,7 +1774,7 @@ ${commandClientScript()}
     if (!result.ok) throw new Error(result.message || 'HTTP request is invalid.');
     const overridden = result.overriddenHeaders || [];
     httpRequestNote.textContent = overridden.length
-      ? 'Studio will override ' + overridden.join(', ') + ' with application/json.'
+      ? 'Azure Functions Hosted Skills Preview will override ' + overridden.join(', ') + ' with application/json.'
       : result.persisted
         ? 'Saved for this canvas instance. POST sends this JSON object exactly.'
         : 'Valid for this request, but not saved because the body contains credential-like data.';
