@@ -14,7 +14,7 @@
 
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -305,8 +305,19 @@ const HERO_TEMPLATE = {
 // normal shell would. Only auth-neutral vars are passed through.
 let fixtureAzureRunner = null;
 let fixtureGithubAuthHeader = null;
+let fixtureGithubRepositories = null;
 let fixtureLocalEnvironmentStarter = null;
 const DEFAULT_HTTP_PROMPT = "Give me the daily digest now.";
+const GITHUB_REPOSITORY_PAGE_LIMIT = 100;
+const GITHUB_REPOSITORY_DISCOVERY_PAGES = 3;
+const REQUIRED_GITHUB_TOOLS = new Set([
+	"actions_list",
+	"list_issues",
+	"list_pull_requests",
+	"github_actions_list",
+	"github_list_issues",
+	"github_list_pull_requests",
+]);
 async function runAz(args, subscription) {
 	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureAzureRunner) return fixtureAzureRunner(args, subscription);
 	return runAzureCliJson(args, subscription, {
@@ -315,21 +326,165 @@ async function runAz(args, subscription) {
 	});
 }
 
-let cachedGithubAuthHeader = "";
-
-async function githubAuthHeader() {
-	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubAuthHeader) {
-		return fixtureGithubAuthHeader();
+function normalizeGithubAuthorization(value) {
+	const raw = String(value || "").trim();
+	if (/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(raw)) {
+		throw new Error("GitHub returned an invalid credential format.");
 	}
-	if (cachedGithubAuthHeader) return cachedGithubAuthHeader;
-	const { stdout } = await execFileText("gh", ["auth", "token", "--hostname", "github.com"], {
-		timeout: 30000,
-		maxBuffer: 1024 * 1024,
+	const token = raw.replace(/^(?:Bearer|token)[ \t]+/i, "");
+	if (!token || token.length > 4096 || /[\s\x00-\x1f\x7f]/.test(token)) {
+		throw new Error("GitHub returned an invalid credential format.");
+	}
+	return `Bearer ${token}`;
+}
+
+function githubCliCredentialEnvironment(env = process.env) {
+	const clean = { ...env };
+	delete clean.GH_TOKEN;
+	delete clean.GITHUB_TOKEN;
+	return clean;
+}
+
+function githubFunctionEnvironment(values = {}) {
+	const env = {};
+	for (const key of ["GITHUB_MCP_AUTHORIZATION", "GITHUB_REPOSITORY"]) {
+		if (values[key]) env[key] = values[key];
+	}
+	return env;
+}
+
+async function validateGithubMcpAuthorization(authorization, { fetchImpl = fetch } = {}) {
+	const commonHeaders = {
+		Authorization: authorization,
+		"User-Agent": "azure-functions-hosted-skills-preview-12",
+	};
+	const apiResponse = await fetchImpl("https://api.github.com/user", {
+		headers: {
+			...commonHeaders,
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		},
+		signal: AbortSignal.timeout(15000),
 	});
-	const token = stdout.trim();
-	if (!token) throw new Error("GitHub CLI returned an empty token. Run `gh auth login`, then retry.");
-	cachedGithubAuthHeader = `Bearer ${token}`;
-	return cachedGithubAuthHeader;
+	if (!apiResponse.ok) {
+		await apiResponse.body?.cancel();
+		throw new Error(
+			apiResponse.status === 401 || apiResponse.status === 403
+				? "GitHub rejected this credential."
+				: `GitHub credential validation returned HTTP ${apiResponse.status}.`,
+		);
+	}
+	await apiResponse.body?.cancel();
+	const mcpResponse = await fetchImpl(GITHUB_MCP_URL, {
+		method: "POST",
+		headers: {
+			...commonHeaders,
+			Accept: "application/json, text/event-stream",
+			"Content-Type": "application/json",
+			"X-MCP-Readonly": "true",
+			"X-MCP-Tools": GITHUB_MCP_TOOLS.join(","),
+		},
+		body: JSON.stringify({
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: {
+				protocolVersion: "2025-03-26",
+				capabilities: {},
+				clientInfo: { name: "azure-functions-hosted-skills-preview-12", version: STUDIO_VERSION },
+			},
+		}),
+		signal: AbortSignal.timeout(15000),
+	});
+	if (!mcpResponse.ok) {
+		await mcpResponse.body?.cancel();
+		throw new Error(
+			mcpResponse.status === 401 || mcpResponse.status === 403
+				? "GitHub MCP rejected this credential."
+				: `GitHub MCP credential validation returned HTTP ${mcpResponse.status}.`,
+		);
+	}
+	await mcpResponse.body?.cancel();
+}
+
+async function resolveGithubMcpCredential({
+	env = process.env,
+	fetchImpl = fetch,
+	runGhToken = async (cleanEnv) => {
+		const { stdout } = await execFileText("gh", ["auth", "token", "--hostname", "github.com"], {
+			env: cleanEnv,
+			timeout: 30000,
+			maxBuffer: 1024 * 1024,
+		});
+		return stdout;
+	},
+} = {}) {
+	const failures = [];
+	for (const [name, value] of [["GH_TOKEN", env.GH_TOKEN], ["GITHUB_TOKEN", env.GITHUB_TOKEN]]) {
+		if (!String(value || "").trim()) continue;
+		try {
+			const authorization = normalizeGithubAuthorization(value);
+			await validateGithubMcpAuthorization(authorization, { fetchImpl });
+			return { authorization, source: `GitHub Copilot session (${name})` };
+		} catch (error) {
+			failures.push(`${name}: ${shortError(error)}`);
+		}
+	}
+	try {
+		const authorization = normalizeGithubAuthorization(await runGhToken(githubCliCredentialEnvironment(env)));
+		await validateGithubMcpAuthorization(authorization, { fetchImpl });
+		return { authorization, source: "GitHub CLI stored github.com account" };
+	} catch (error) {
+		failures.push(`GitHub CLI: ${shortError(error)}`);
+	}
+	throw new Error(
+		`No usable GitHub MCP credential is available. Sign in with \`gh auth login --hostname github.com\` and ensure the account can use GitHub Copilot. ${failures.join(" ")}`,
+	);
+}
+
+async function githubAuthHeader(entry) {
+	const command = entry
+		? cmdStart(entry, {
+				kind: "shell",
+				title: "GitHub credential validation",
+				cmd: "GitHub Copilot session credential / gh auth token --hostname github.com",
+				purpose: "Validate a credential against both GitHub and GitHub MCP without exposing it",
+			})
+		: null;
+	try {
+		const credential =
+			process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubAuthHeader
+				? {
+						authorization: normalizeGithubAuthorization(await fixtureGithubAuthHeader()),
+						source: "fixture credential",
+					}
+				: await resolveGithubMcpCredential();
+		if (entry) {
+			entry.githubCredential = {
+				status: "ready",
+				source: credential.source,
+				error: "",
+				validatedAt: new Date().toISOString(),
+				fingerprint: createHash("sha256").update(credential.authorization).digest("hex"),
+			};
+			cmdEnd(entry, command, { ok: true, note: `${credential.source} accepted by GitHub and GitHub MCP.` });
+			broadcast(entry, "state", snapshot(entry));
+		}
+		return credential.authorization;
+	} catch (error) {
+		if (entry) {
+			entry.githubCredential = {
+				status: "error",
+				source: "",
+				error: shortError(error),
+				validatedAt: new Date().toISOString(),
+				fingerprint: "",
+			};
+			cmdEnd(entry, command, { ok: false, note: shortError(error) });
+			broadcast(entry, "state", snapshot(entry));
+		}
+		throw error;
+	}
 }
 
 function githubRepositoryFromRemote(remote) {
@@ -341,15 +496,107 @@ function githubRepositoryFromRemote(remote) {
 	return match?.[1] || "";
 }
 
-async function initializeGithubContext(entry) {
-	if (entry.githubContext.resolved) return entry.githubContext;
+function normalizeGithubRepository(value) {
+	const repository = String(value || "").trim();
+	return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ? repository : "";
+}
+
+function githubPreferencesPath() {
+	return path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview-12", "github-preferences.json");
+}
+
+async function readGithubRepositoryPreference() {
+	const file = githubPreferencesPath();
+	try {
+		if (lstatSync(file).isSymbolicLink()) throw new Error("GitHub repository preference file must not be a symbolic link.");
+		const parsed = JSON.parse(await readFile(file, "utf8"));
+		return normalizeGithubRepository(parsed.repository);
+	} catch (error) {
+		if (error?.code === "ENOENT") return "";
+		throw error;
+	}
+}
+
+async function writeGithubRepositoryPreference(repository) {
+	const file = githubPreferencesPath();
+	const release = await acquireStateLock(file);
+	try {
+		await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+		const temporary = `${file}.${randomUUID()}.tmp`;
+		await writeFile(temporary, `${JSON.stringify({ repository, updatedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+		await rename(temporary, file);
+		await chmod(file, 0o600);
+	} finally {
+		await release();
+	}
+}
+
+async function discoverGithubRepositories(authorization, { fetchImpl = fetch } = {}) {
+	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubRepositories) {
+		return fixtureGithubRepositories(authorization);
+	}
+	const repositories = [];
+	for (let page = 1; page <= GITHUB_REPOSITORY_DISCOVERY_PAGES; page += 1) {
+		const response = await fetchImpl(
+			`https://api.github.com/user/repos?per_page=${GITHUB_REPOSITORY_PAGE_LIMIT}&page=${page}&sort=pushed&direction=desc&affiliation=owner,collaborator,organization_member`,
+			{
+				headers: {
+					Authorization: authorization,
+					Accept: "application/vnd.github+json",
+					"User-Agent": "azure-functions-hosted-skills-preview-12",
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+				signal: AbortSignal.timeout(15000),
+			},
+		);
+		if (!response.ok) {
+			await response.body?.cancel();
+			throw new Error(`GitHub repository discovery returned HTTP ${response.status}.`);
+		}
+		const payload = await response.json();
+		if (!Array.isArray(payload)) throw new Error("GitHub repository discovery returned an invalid response.");
+		repositories.push(...payload);
+		if (payload.length < GITHUB_REPOSITORY_PAGE_LIMIT) break;
+	}
+	const seen = new Set();
+	return repositories
+		.filter((item) => !item?.archived)
+		.map((item) => normalizeGithubRepository(item?.full_name))
+		.filter((repository) => repository && !seen.has(repository) && seen.add(repository));
+}
+
+function applyGithubRepository(entry, repository, source) {
+	entry.githubContext.repository = repository;
+	entry.githubContext.source = source;
+	entry.githubContext.error = "";
+	entry.httpPrompt = repository
+		? `Create the daily repository digest for ${repository} covering the previous 24 hours. Use authenticated GitHub tools and do not ask for a token.`
+		: "Select a GitHub repository before invoking the daily digest.";
+}
+
+async function initializeGithubContext(entry, { force = false } = {}) {
+	if (entry.githubContext.resolved && !force) return entry.githubContext;
 	const command = cmdStart(entry, {
-		kind: "shell",
-		title: "GitHub repository context",
-		cmd: "git remote get-url origin / gh repo view",
-		purpose: "Infer the repository identity for the daily digest without requesting a token",
+		kind: "http",
+		title: "GitHub repository discovery",
+		cmd: `GET https://api.github.com/user/repos?per_page=${GITHUB_REPOSITORY_PAGE_LIMIT} (up to ${GITHUB_REPOSITORY_DISCOVERY_PAGES} pages)`,
+		purpose: "Find a concrete repository for the daily digest without requesting a token",
 	});
-	let repository = String(process.env.GITHUB_REPOSITORY || "").trim();
+	entry.githubContext.resolved = false;
+	entry.githubContext.error = "";
+	let authorization;
+	try {
+		authorization = await githubAuthHeader(entry);
+	} catch (error) {
+		entry.githubContext.resolved = true;
+		entry.githubContext.candidates = [];
+		applyGithubRepository(entry, "", "");
+		entry.githubContext.error = shortError(error);
+		cmdEnd(entry, command, { ok: false, note: shortError(error) });
+		broadcast(entry, "state", snapshot(entry));
+		throw error;
+	}
+	let repository = normalizeGithubRepository(process.env.GITHUB_REPOSITORY);
 	let source = repository ? "environment" : "";
 	if (!repository && entry.sourceWorkspace.workingDirectory) {
 		try {
@@ -363,30 +610,48 @@ async function initializeGithubContext(entry) {
 			/* Fall through to the authenticated GitHub CLI context. */
 		}
 	}
-	if (!repository) {
-		try {
-			const { stdout } = await runExternalCommandText("gh", [
-				"repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner",
-			], entry.sourceWorkspace.workingDirectory ? { cwd: entry.sourceWorkspace.workingDirectory } : {});
-			repository = stdout.trim();
-			if (repository) source = "GitHub CLI";
-		} catch {
-			/* A projectless session may not have a repository to infer. */
+	try {
+		const candidates = await discoverGithubRepositories(authorization);
+		entry.githubContext.candidates =
+			repository && !candidates.includes(repository) ? [repository, ...candidates] : candidates;
+		if (!repository) {
+			const preferred = await readGithubRepositoryPreference();
+			if (preferred && candidates.includes(preferred)) {
+				repository = preferred;
+				source = "saved preference";
+			} else if (candidates.length === 1) {
+				repository = candidates[0];
+				source = "only accessible repository";
+			}
+		}
+		entry.githubContext.resolved = true;
+		applyGithubRepository(entry, repository, source);
+		cmdEnd(entry, command, {
+			ok: Boolean(repository),
+			note: repository
+				? `${repository} (${source})`
+				: candidates.length
+					? `Choose one of ${candidates.length} accessible repositories.`
+					: "No accessible GitHub repositories were found.",
+		});
+	} catch (error) {
+		entry.githubContext.resolved = true;
+		if (repository) {
+			entry.githubContext.candidates = [repository];
+			applyGithubRepository(entry, repository, source);
+			cmdEnd(entry, command, {
+				ok: true,
+				note: `${repository} (${source}); broader repository discovery was unavailable: ${shortError(error)}`,
+			});
+		} else {
+			entry.githubContext.candidates = [];
+			applyGithubRepository(entry, "", "");
+			entry.githubContext.error = shortError(error);
+			cmdEnd(entry, command, { ok: false, note: shortError(error) });
+			broadcast(entry, "state", snapshot(entry));
+			throw error;
 		}
 	}
-	entry.githubContext = {
-		resolved: true,
-		repository,
-		reportingWindow: "previous 24 hours",
-		source,
-	};
-	entry.httpPrompt = repository
-		? `Create the daily repository digest for ${repository} covering the previous 24 hours. Use authenticated GitHub tools and do not ask for a token.`
-		: "Create the daily repository digest for the previous 24 hours. Infer the repository from available GitHub or runtime context; if none exists, state that repository identity is missing. Never ask for a token.";
-	cmdEnd(entry, command, {
-		ok: Boolean(repository),
-		note: repository ? `${repository} (${source})` : "No repository identity was available.",
-	});
 	broadcast(entry, "state", snapshot(entry));
 	return entry.githubContext;
 }
@@ -971,6 +1236,14 @@ function sourceMcpToolName(name) {
 	return String(name || "").split("___").at(-1);
 }
 
+function isRequiredGithubDigestTool(name) {
+	return REQUIRED_GITHUB_TOOLS.has(sourceMcpToolName(name));
+}
+
+function hasRequiredGithubDigestEvidence(invocation) {
+	return invocation.tools.some((tool) => tool.ok && isRequiredGithubDigestTool(tool.name));
+}
+
 function invocationTrigger(entry, functionName) {
 	return (
 		entry.local.functions.find((fn) => fn.name === functionName)?.kind ||
@@ -1052,14 +1325,15 @@ function processLocalInvocationLog(entry, line, sequence) {
 			event.sessionId = agentOutput.sessionId;
 		}
 		const toolStarted = sourceMcpToolName(line.match(/Function name: ([^\s]+)/)?.[1]);
-		if (toolStarted.startsWith("github_") && !event.tools.some((tool) => tool.name === toolStarted)) {
+		if (isRequiredGithubDigestTool(toolStarted) && !event.tools.some((tool) => tool.name === toolStarted)) {
 			event.tools.push({ name: toolStarted, ok: false });
 			refreshInvocationNote(event);
 		}
 		const toolCompleted = sourceMcpToolName(line.match(/Function ([^\s]+) succeeded\./)?.[1]);
-		if (toolCompleted.startsWith("github_")) {
+		if (isRequiredGithubDigestTool(toolCompleted)) {
 			const tool = event.tools.find((item) => item.name === toolCompleted);
 			if (tool) tool.ok = true;
+			else event.tools.push({ name: toolCompleted, ok: true });
 			refreshInvocationNote(event);
 		}
 		const compacted = line.match(/Compacted GitHub MCP result for ([^:]+): (\d+) to (\d+) bytes\./);
@@ -1096,7 +1370,9 @@ function processLocalInvocationLog(entry, line, sequence) {
 			tools: [],
 			payloads: [],
 		});
-	completedEvent.ok = outcome === "Succeeded";
+	completedEvent.ok =
+		outcome === "Succeeded" &&
+		(!completedEvent.requiresGithubEvidence || hasRequiredGithubDigestEvidence(completedEvent));
 	completedEvent.phase = completedEvent.ok ? "completed" : "failed";
 	completedEvent.ms = Number(duration);
 	if (completedEvent.ok) {
@@ -1112,7 +1388,10 @@ function processLocalInvocationLog(entry, line, sequence) {
 			: null;
 		const retry = Number(rate?.line.match(/try again in (\d+) seconds/i)?.[1] || 0);
 		completedEvent.retryAfterSeconds = retry;
-		completedEvent.note = safety
+		completedEvent.note =
+			outcome === "Succeeded" && completedEvent.requiresGithubEvidence
+				? "The function returned without a successful required GitHub MCP call; the digest was rejected."
+				: safety
 			? "AI Gateway content safety blocked this run."
 			: retry
 				? `The selected model token limit was exceeded. Try again in ${retry} seconds.`
@@ -1195,6 +1474,12 @@ function snapshot(entry) {
 		prompt: entry.prompt,
 		httpPrompt: entry.httpPrompt,
 		githubContext: entry.githubContext,
+		githubCredential: {
+			status: entry.githubCredential.status,
+			source: entry.githubCredential.source,
+			error: entry.githubCredential.error,
+			validatedAt: entry.githubCredential.validatedAt,
+		},
 		httpRequestDraft: currentHttpRequestDraft(entry),
 		httpRequestError: entry.httpRequestError,
 		triggerSupport: {
@@ -1364,6 +1649,15 @@ function ensureEntry(instanceId) {
 			repository: "",
 			reportingWindow: "previous 24 hours",
 			source: "",
+			candidates: [],
+			error: "",
+		},
+		githubCredential: {
+			status: "pending",
+			source: "",
+			error: "",
+			validatedAt: "",
+			fingerprint: "",
 		},
 		httpRequestDrafts: {},
 		httpRequestDraftsLoaded: false,
@@ -1408,6 +1702,8 @@ function ensureEntry(instanceId) {
 			azuriteProc: null,
 			startPromise: null,
 			startGeneration: 0,
+			githubCredentialFingerprint: "",
+			githubRepository: "",
 			functions: [],
 			logTail: [],
 			logSequence: 0,
@@ -1843,6 +2139,7 @@ function githubMcpMiddlewareSource() {
 
 import json
 import logging
+import os
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
@@ -1896,6 +2193,11 @@ def _select(item, fields):
 
 
 def _normalize_arguments(tool_name, arguments, cutoff):
+    repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if "/" not in repository:
+        raise RuntimeError("GITHUB_REPOSITORY must contain an exact owner/name before GitHub tools can run.")
+    owner, repo = repository.split("/", maxsplit=1)
+    arguments.update(owner=owner, repo=repo)
     if tool_name in {"github_list_pull_requests", "list_pull_requests"}:
         arguments.update(state="all", sort="updated", direction="desc", perPage=100, page=1)
     elif tool_name in {"github_list_issues", "list_issues"}:
@@ -2242,6 +2544,7 @@ async function writeModelBindingSettingsUnlocked(entry, valuesToSet) {
 		"FOUNDRY_TOKEN_FILE",
 		"GITHUB_MCP_AUTHORIZATION",
 		"GITHUB_MCP_SERVER_URL",
+		"GITHUB_REPOSITORY",
 	]) {
 		delete values[key];
 	}
@@ -2290,7 +2593,7 @@ async function ensureLocalFoundryToken(entry, options = {}) {
 }
 
 async function ensureLocalFoundryRuntimeSettings(entry, options = {}) {
-	const [token, githubAuthorization] = await Promise.all([fetchLocalFoundryToken(entry), githubAuthHeader()]);
+	const [token, githubAuthorization] = await Promise.all([fetchLocalFoundryToken(entry), githubAuthHeader(entry)]);
 	return withSourceWorkspaceMutation(
 		entry,
 		"Writing local Foundry runtime settings",
@@ -2299,6 +2602,8 @@ async function ensureLocalFoundryRuntimeSettings(entry, options = {}) {
 			const { path: settingsPath, json } = await readLocalSettings(entry);
 			json.Values.FOUNDRY_TOKEN_FILE = tokenPath;
 			json.Values.GITHUB_MCP_AUTHORIZATION = githubAuthorization;
+			if (entry.githubContext.repository) json.Values.GITHUB_REPOSITORY = entry.githubContext.repository;
+			else delete json.Values.GITHUB_REPOSITORY;
 			await writeTextIfChanged(settingsPath, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
 			await chmod(settingsPath, 0o600);
 			await protectLocalSettings(requireTemplateDir(entry));
@@ -2446,7 +2751,7 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
 		}
 		if (source === "foundry") {
 			await ensureGatewayProviderFiles(entry, "public");
-			const githubAuthorization = await githubAuthHeader();
+			const githubAuthorization = await githubAuthHeader(entry);
 			const tokenPath = await ensureLocalFoundryToken(entry);
 			await writeModelBindingSettings(entry, {
 				AZURE_FUNCTIONS_AGENTS_PROVIDER: "foundry",
@@ -2455,6 +2760,7 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
 				AZURE_FUNCTIONS_AGENTS_MODEL: model.id,
 				FOUNDRY_TOKEN_FILE: tokenPath,
 				GITHUB_MCP_AUTHORIZATION: githubAuthorization,
+				GITHUB_REPOSITORY: entry.githubContext.repository,
 			});
 		} else {
 			await ensureGatewayProviderFiles(entry, "gateway");
@@ -2466,6 +2772,7 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
 				AZURE_AI_GATEWAY_MCP_URL: runtimeUrls.githubMcpUrl,
 				AZURE_AI_GATEWAY_API_KEY: key,
 				AZURE_FUNCTIONS_AGENTS_MODEL: model.id,
+				GITHUB_REPOSITORY: entry.githubContext.repository,
 			});
 		}
 		entry.modelBinding.resourceId = resource.id;
@@ -4789,9 +5096,11 @@ async function startFuncHost(entry, ensureCurrent = () => {}) {
 		cmd: cmdText,
 		purpose: "Start the Azure Functions host for this working copy",
 	});
+	const { json: runtimeSettings } = await readLocalSettings(entry);
 	const env = {
 		...pythonVirtualEnvironmentEnv(entry.agentDir),
 		AzureWebJobsStorage: "UseDevelopmentStorage=true",
+		...githubFunctionEnvironment(runtimeSettings.Values),
 	};
 	const funcCommand = await externalCommandSpawnSpec("func", ["start", "--port", String(port)], { env });
 	const child = spawn(funcCommand.file, funcCommand.args, {
@@ -4939,6 +5248,8 @@ async function startFuncHost(entry, ensureCurrent = () => {}) {
 	releasePort();
 	entry.local.status = "running";
 	entry.local.error = "";
+	entry.local.githubCredentialFingerprint = entry.githubCredential.fingerprint;
+	entry.local.githubRepository = entry.githubContext.repository;
 	broadcast(entry, "state", snapshot(entry));
 }
 
@@ -4948,6 +5259,12 @@ function startLocalEnvironment(entry) {
 	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureLocalEnvironmentStarter) {
 		entry.local.startPromise = Promise.resolve()
 			.then(() => fixtureLocalEnvironmentStarter(entry))
+			.then(() => {
+				if (entry.local.status === "running") {
+					entry.local.githubCredentialFingerprint = entry.githubCredential.fingerprint;
+					entry.local.githubRepository = entry.githubContext.repository;
+				}
+			})
 			.finally(() => {
 				entry.local.startPromise = null;
 			});
@@ -5223,6 +5540,7 @@ async function invokeLocalHttp(
 		ms: null,
 		tools: [],
 		payloads: [],
+		requiresGithubEvidence: true,
 		note: timerTwin ? "Running the Timer agent through its HTTP test twin." : "Sending HTTP trigger.",
 	});
 	const c = cmdStart(entry, {
@@ -5241,17 +5559,37 @@ async function invokeLocalHttp(
 		const resp = await fetchImpl(fullUrl, request.init);
 		const ms = Date.now() - started;
 		const text = await resp.text();
-		cmdEnd(entry, c, { ok: resp.ok, note: `${resp.status} in ${ms}ms` });
+		if (resp.ok) {
+			const evidenceDeadline = Date.now() + 2_000;
+			while (!hasRequiredGithubDigestEvidence(invocation) && Date.now() < evidenceDeadline) {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+		}
+		const accepted = resp.ok && hasRequiredGithubDigestEvidence(invocation);
+		cmdEnd(entry, c, {
+			ok: accepted,
+			note: accepted
+				? `${resp.status} in ${ms}ms with authenticated GitHub MCP evidence`
+				: resp.ok
+					? `${resp.status} in ${ms}ms but no required GitHub MCP call completed`
+					: `${resp.status} in ${ms}ms`,
+		});
 		invocation.status = resp.status;
 		invocation.response = normalizeAgentOutput(text);
-		invocation.ok = resp.ok;
-		invocation.phase = resp.ok ? "completed" : "failed";
+		invocation.ok = accepted;
+		invocation.phase = accepted ? "completed" : "failed";
 		invocation.ms = ms;
+		if (accepted) refreshInvocationNote(invocation);
 		if (invocation.executionId) entry.local.executions.delete(invocation.executionId);
 		if (request.display.overriddenHeaders.length) {
 			invocation.note += ` Studio overrode ${request.display.overriddenHeaders.join(", ")} with application/json.`;
 		}
-		if (invocation.response) invocation.note = `${invocation.note} Agent digest is available below.`;
+		if (!accepted && resp.ok) {
+			invocation.note =
+				"The function returned HTTP 200 without a successful required GitHub MCP call; the plausible digest was rejected.";
+		} else if (invocation.response) {
+			invocation.note = `${invocation.note} Agent digest is available below.`;
+		}
 		scheduleInvocationHistoryWrite(entry);
 		broadcast(entry, "state", snapshot(entry));
 		return invocation;
@@ -5271,7 +5609,13 @@ async function invokeLocalHttp(
 async function prepareInvocation(entry) {
 	if (entry.target !== "local") return;
 	await ensureTemplate(entry);
-	await initializeGithubContext(entry);
+	await initializeGithubContext(entry, { force: true });
+	if (!entry.githubContext.repository) {
+		throw new Error(
+			entry.githubContext.error ||
+				"Select a GitHub repository before invoking so the digest cannot silently target an empty projectless context.",
+		);
+	}
 	if (
 		entry.modelBinding.loading ||
 		entry.modelBinding.source !== entry.modelBinding.activeSource ||
@@ -5282,7 +5626,15 @@ async function prepareInvocation(entry) {
 	}
 	await ensureGatewayProviderFiles(entry, entry.modelBinding.activeSource === "gateway" ? "gateway" : "public");
 	if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
-	await startLocalEnvironment(entry);
+	if (
+		entry.local.status === "running" &&
+		(entry.local.githubCredentialFingerprint !== entry.githubCredential.fingerprint ||
+			entry.local.githubRepository !== entry.githubContext.repository)
+	) {
+		await restartLocalEnvironment(entry);
+	} else {
+		await startLocalEnvironment(entry);
+	}
 	if (entry.modelBinding.activeSource !== "gateway") return;
 	const remainingMs = entry.modelBinding.nextInvokeAt - Date.now();
 	if (remainingMs > 0) {
@@ -6206,6 +6558,32 @@ async function startServer(
 			res.write(`event: state\ndata: ${JSON.stringify(snapshot(entry))}\n\n`);
 			entry.clients.add(res);
 			req.on("close", () => entry.clients.delete(res));
+			return;
+		}
+
+		if (req.method === "POST" && req.url === "/github/refresh") {
+			initializeGithubContext(entry, { force: true })
+				.then((context) => responseJson(res, { ok: true, context }))
+				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
+			return;
+		}
+
+		if (req.method === "POST" && req.url === "/github/select-repository") {
+			readJsonBody(req)
+				.then(async (body) => {
+					const repository = normalizeGithubRepository(body.repository);
+					if (!repository) throw new Error("Select a valid GitHub repository in owner/name form.");
+					if (!entry.githubContext.candidates.includes(repository)) {
+						throw new Error("Refresh GitHub repositories and select one from the authenticated account.");
+					}
+					const changed = repository !== entry.githubContext.repository;
+					applyGithubRepository(entry, repository, "user preference");
+					await writeGithubRepositoryPreference(repository);
+					broadcast(entry, "state", snapshot(entry));
+					if (changed && entry.local.status === "running") await restartLocalEnvironment(entry);
+					responseJson(res, { ok: true, repository });
+				})
+				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
 			return;
 		}
 
@@ -7451,6 +7829,12 @@ export const functionStudioTestHooks = Object.freeze({
 		}
 		fixtureGithubAuthHeader = loader;
 	},
+	setGithubRepositories(loader) {
+		if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof loader !== "function") {
+			throw new Error("An injected GitHub repository loader is available only in fixture mode.");
+		}
+		fixtureGithubRepositories = loader;
+	},
 	setLocalEnvironmentStarter(starter) {
 		if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof starter !== "function") {
 			throw new Error("An injected local environment starter is available only in fixture mode.");
@@ -7458,6 +7842,10 @@ export const functionStudioTestHooks = Object.freeze({
 		fixtureLocalEnvironmentStarter = starter;
 	},
 	fixtureAuthenticationAttempts,
+	normalizeGithubAuthorization,
+	resolveGithubMcpCredential,
+	githubFunctionEnvironment,
+	hasRequiredGithubDigestEvidence,
 	ensureEntry,
 	snapshot,
 	broadcast,

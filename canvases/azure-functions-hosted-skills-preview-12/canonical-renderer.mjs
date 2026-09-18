@@ -607,6 +607,14 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
         </div>` : ''}
       </div>
     </details>
+${withGitHubSession ? `    <h2 class="sec">GITHUB REPOSITORY</h2>
+    <div class="controls" id="github-panel">
+      <select id="github-repository" title="GitHub repository for the daily digest">
+        <option value="">Discovering repositories...</option>
+      </select>
+      <button class="btn ghost" id="github-refresh" title="Refresh repositories and credential">Refresh</button>
+    </div>
+    <div class="inline-note" id="github-status"></div>` : ''}
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
 ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project" title="Creates a separate session from the isolated generated working copy; it does not add files to your current project." hidden>${ICONS.github}<span class="label">Create isolated GitHub Session</span></button>\n` : ''}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `\n      <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ''}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ''}
@@ -899,6 +907,10 @@ ${commandClientScript()}
   const modelCreateAlternatives = document.getElementById('model-create-alternatives');
   const modelCreateConfirm = document.getElementById('model-create-confirm');
   const modelCreateStatus = document.getElementById('model-create-status');
+  const githubRepository = document.getElementById('github-repository');
+  const githubRefresh = document.getElementById('github-refresh');
+  const githubStatus = document.getElementById('github-status');
+  const githubPanel = document.getElementById('github-panel');
   const localBuildActions = document.getElementById('local-build-actions');
   const registerAppProject = document.getElementById('register-app-project');
   const deployAzureBtn = document.getElementById('deploy-azure');
@@ -1229,6 +1241,30 @@ ${commandClientScript()}
     if (state.openStatus) setStatus(state.openStatus);
   }
 
+  function renderGithub(state) {
+    const context = state.githubContext || {};
+    const credential = state.githubCredential || {};
+    const repositories = context.candidates || [];
+    if (document.activeElement !== githubRepository) {
+      githubRepository.innerHTML =
+        '<option value="">' + esc(repositories.length ? 'Select a repository...' : 'No repository selected') + '</option>' +
+        repositories.map((repository) =>
+          '<option value="' + esc(repository) + '"' + (repository === context.repository ? ' selected' : '') + '>' +
+          esc(repository) + '</option>').join('');
+      githubRepository.value = context.repository || '';
+    }
+    githubRepository.disabled = credential.status === 'pending';
+    githubRefresh.disabled = credential.status === 'pending';
+    githubStatus.textContent = context.error || credential.error ||
+      (context.repository
+        ? 'Daily digest target: ' + context.repository + (context.source ? ' (' + context.source + ')' : '') +
+          (credential.source ? ' · credential: ' + credential.source : '')
+        : repositories.length
+          ? 'Choose the repository for this projectless daily digest. Invocation stays blocked until you do.'
+          : 'Discovering repositories with the signed-in GitHub account.');
+    githubStatus.className = 'inline-note' + ((context.error || credential.error) ? ' err' : '');
+  }
+
   function renderLocal(state) {
     const running = state.local.status === 'running';
     const localControl = localRuntimeControlState(state);
@@ -1285,6 +1321,22 @@ ${commandClientScript()}
     }
     if (!state.sourceWorkspace.materialized) {
       return { blocked: true, reason: 'Create the generated app in the selected source location first.', focus: 'source' };
+    }
+    if (!state.githubContext || !state.githubContext.repository) {
+      return {
+        blocked: true,
+        reason: (state.githubContext && state.githubContext.error) ||
+          'Select a GitHub repository before invoking the daily digest.',
+        focus: 'github'
+      };
+    }
+    if (!state.githubCredential || state.githubCredential.status !== 'ready') {
+      return {
+        blocked: true,
+        reason: (state.githubCredential && state.githubCredential.error) ||
+          'Validate the signed-in GitHub credential before invoking.',
+        focus: 'github'
+      };
     }
     const cooldownSeconds = binding.activeSource === 'gateway'
       ? Math.max(0, Math.ceil(((binding.nextInvokeAt || 0) - Date.now()) / 1000))
@@ -1525,6 +1577,7 @@ ${commandClientScript()}
     renderTriggers(state);
     renderDoctor(state);
     renderSource(state);
+    renderGithub(state);
     renderLocal(state);
     renderDeployment(state);
     renderInvoke(state);
@@ -1576,6 +1629,19 @@ ${commandClientScript()}
   }
   [timerCadence, timerTime, timerWeekday, timerWeeklyTime, timerMinute].forEach((control) => {
     control.addEventListener('change', applyTimerSchedule);
+  });
+  githubRefresh.addEventListener('click', async () => {
+    githubRefresh.disabled = true;
+    setStatus('Refreshing GitHub credential and repositories...');
+    const result = await postJson('/github/refresh');
+    setStatus(result.ok ? 'GitHub repositories refreshed.' : result.message);
+  });
+  githubRepository.addEventListener('change', async () => {
+    if (!githubRepository.value) return;
+    githubRepository.disabled = true;
+    setStatus('Applying GitHub repository...');
+    const result = await postJson('/github/select-repository', { repository: githubRepository.value });
+    setStatus(result.ok ? 'Daily digest repository selected.' : result.message);
   });
 
   sourceCustomize.addEventListener('click', () => {
@@ -1776,6 +1842,11 @@ ${commandClientScript()}
       invokeGate.textContent = gate.reason;
       setStatus('Invoke blocked: ' + gate.reason);
       if (gate.focus === 'model' && modelBindingPanel) modelBindingPanel.open = true;
+      if (gate.focus === 'github' && githubPanel) {
+        githubPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        githubRepository.focus({ preventScroll: true });
+        return;
+      }
       if (gate.focus === 'source' && sourceWorkspacePanel) {
         sourceWorkspacePanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
