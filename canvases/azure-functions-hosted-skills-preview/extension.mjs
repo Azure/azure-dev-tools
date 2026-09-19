@@ -307,8 +307,10 @@ const HERO_TEMPLATE = {
 let fixtureAzureRunner = null;
 let fixtureGithubAuthHeader = null;
 let fixtureGithubRepositories = null;
+let fixtureGithubRepositoryAccess = null;
 let fixtureLocalEnvironmentStarter = null;
 const DEFAULT_HTTP_PROMPT = "Give me the daily digest now.";
+const DEFAULT_GITHUB_REPOSITORY = "Azure/azure-functions-host";
 const GITHUB_REPOSITORY_PAGE_LIMIT = 100;
 const GITHUB_REPOSITORY_DISCOVERY_PAGES = 3;
 const REQUIRED_GITHUB_TOOLS = new Set([
@@ -492,14 +494,32 @@ function githubRepositoryFromRemote(remote) {
 	const value = String(remote || "").trim();
 	const match =
 		value.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i) ||
-		value.match(/^ssh:\/\/git@github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/i) ||
-		value.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/i);
-	return match?.[1] || "";
+		value.match(/^ssh:\/\/git@github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/i);
+	return normalizeGithubRepository(match?.[1] || value);
 }
 
 function normalizeGithubRepository(value) {
 	const repository = String(value || "").trim();
-	return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ? repository : "";
+	if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return repository;
+	try {
+		const url = new URL(repository);
+		if (
+			url.protocol !== "https:" ||
+			url.hostname.toLowerCase() !== "github.com" ||
+			url.username ||
+			url.password ||
+			url.port ||
+			url.search ||
+			url.hash
+		) return "";
+		const segments = url.pathname.split("/").filter(Boolean);
+		if (segments.length !== 2) return "";
+		const name = segments[1].replace(/\.git$/i, "");
+		const normalized = `${segments[0]}/${name}`;
+		return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(normalized) ? normalized : "";
+	} catch {
+		return "";
+	}
 }
 
 function githubPreferencesPath() {
@@ -568,10 +588,9 @@ async function discoverGithubRepositories(authorization, { fetchImpl = fetch } =
 
 async function validateGithubRepositoryAccess(repository, authorization, { fetchImpl = fetch } = {}) {
 	const normalized = normalizeGithubRepository(repository);
-	if (!normalized) throw new Error("Select a valid GitHub repository in owner/name form.");
-	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubRepositories) {
-		const repositories = await fixtureGithubRepositories(authorization);
-		if (!repositories.map(normalizeGithubRepository).includes(normalized)) {
+	if (!normalized) throw new Error("Enter a valid GitHub repository as owner/name or a https://github.com/owner/name URL.");
+	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubRepositoryAccess && fetchImpl === fetch) {
+		if (!await fixtureGithubRepositoryAccess(normalized, authorization)) {
 			throw new Error(`The authenticated GitHub account cannot access ${normalized}.`);
 		}
 		return normalized;
@@ -624,10 +643,14 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 		broadcast(entry, "state", snapshot(entry));
 		throw error;
 	}
-	let repository = normalizeGithubRepository(process.env.GITHUB_REPOSITORY);
+	const environmentRepository = String(process.env.GITHUB_REPOSITORY || "").trim();
+	let repository = normalizeGithubRepository(environmentRepository);
 	let source = repository ? "environment" : "";
 	let repositoryValidated = false;
-	if (!repository && entry.sourceWorkspace.workingDirectory) {
+	const selectionError = environmentRepository && !repository
+		? new Error("GITHUB_REPOSITORY must be owner/name or a https://github.com/owner/name URL.")
+		: null;
+	if (!environmentRepository && !repository && entry.sourceWorkspace.workingDirectory) {
 		try {
 			const { stdout } = await runExternalCommandText(
 				"git",
@@ -640,37 +663,40 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 		}
 	}
 	try {
+		if (selectionError) throw selectionError;
 		if (repository) {
 			repository = await validateGithubRepositoryAccess(repository, authorization);
 			repositoryValidated = true;
 		}
-		const candidates = await discoverGithubRepositories(authorization);
-		entry.githubContext.candidates =
-			repository && !candidates.includes(repository) ? [repository, ...candidates] : candidates;
 		if (!repository) {
 			const preferred = await readGithubRepositoryPreference();
-			if (preferred && candidates.includes(preferred)) {
-				repository = preferred;
-				source = "saved preference";
-			} else if (candidates.length === 1) {
-				repository = candidates[0];
-				source = "only accessible repository";
+			if (preferred) {
+				try {
+					repository = await validateGithubRepositoryAccess(preferred, authorization);
+					source = "saved preference";
+					repositoryValidated = true;
+				} catch {
+					repository = "";
+				}
 			}
 		}
+		if (!repository) {
+			repository = await validateGithubRepositoryAccess(DEFAULT_GITHUB_REPOSITORY, authorization);
+			source = "default";
+			repositoryValidated = true;
+		}
+		const candidates = await discoverGithubRepositories(authorization);
+		entry.githubContext.candidates = candidates;
 		entry.githubContext.resolved = true;
 		applyGithubRepository(entry, repository, source);
 		cmdEnd(entry, command, {
-			ok: Boolean(repository),
-			note: repository
-				? `${repository} (${source})`
-				: candidates.length
-					? `Choose one of ${candidates.length} accessible repositories.`
-					: "No accessible GitHub repositories were found.",
+			ok: true,
+			note: `${repository} (${source})${candidates.length ? `; ${candidates.length} suggested repositories discovered` : ""}`,
 		});
 	} catch (error) {
 		entry.githubContext.resolved = true;
 		if (repositoryValidated) {
-			entry.githubContext.candidates = [repository];
+			entry.githubContext.candidates = [];
 			applyGithubRepository(entry, repository, source);
 			cmdEnd(entry, command, {
 				ok: true,
@@ -6612,16 +6638,28 @@ async function startServer(
 			readJsonBody(req)
 				.then(async (body) => {
 					const repository = normalizeGithubRepository(body.repository);
-					if (!repository) throw new Error("Select a valid GitHub repository in owner/name form.");
-					if (!entry.githubContext.candidates.includes(repository)) {
-						throw new Error("Refresh GitHub repositories and select one from the authenticated account.");
+					if (!repository) {
+						applyGithubRepository(entry, "", "");
+						entry.githubContext.error = "Enter a valid GitHub repository as owner/name or a https://github.com/owner/name URL.";
+						broadcast(entry, "state", snapshot(entry));
+						throw new Error(entry.githubContext.error);
 					}
-					const changed = repository !== entry.githubContext.repository;
-					applyGithubRepository(entry, repository, "user preference");
-					await writeGithubRepositoryPreference(repository);
-					broadcast(entry, "state", snapshot(entry));
+					let changed = false;
+					try {
+						const authorization = await githubAuthHeader(entry);
+						const validated = await validateGithubRepositoryAccess(repository, authorization);
+						changed = validated !== entry.githubContext.repository;
+						applyGithubRepository(entry, validated, "user preference");
+						await writeGithubRepositoryPreference(validated);
+						broadcast(entry, "state", snapshot(entry));
+					} catch (error) {
+						applyGithubRepository(entry, "", "");
+						entry.githubContext.error = shortError(error);
+						broadcast(entry, "state", snapshot(entry));
+						throw error;
+					}
 					if (changed && entry.local.status === "running") await restartLocalEnvironment(entry);
-					responseJson(res, { ok: true, repository });
+					responseJson(res, { ok: true, repository: entry.githubContext.repository });
 				})
 				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
 			return;
@@ -7875,6 +7913,12 @@ export const functionStudioTestHooks = Object.freeze({
 		}
 		fixtureGithubRepositories = loader;
 	},
+	setGithubRepositoryAccess(loader) {
+		if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof loader !== "function") {
+			throw new Error("An injected GitHub repository access validator is available only in fixture mode.");
+		}
+		fixtureGithubRepositoryAccess = loader;
+	},
 	setLocalEnvironmentStarter(starter) {
 		if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof starter !== "function") {
 			throw new Error("An injected local environment starter is available only in fixture mode.");
@@ -7883,6 +7927,8 @@ export const functionStudioTestHooks = Object.freeze({
 	},
 	fixtureAuthenticationAttempts,
 	normalizeGithubAuthorization,
+	normalizeGithubRepository,
+	githubRepositoryFromRemote,
 	resolveGithubMcpCredential,
 	githubFunctionEnvironment,
 	hasRequiredGithubDigestEvidence,

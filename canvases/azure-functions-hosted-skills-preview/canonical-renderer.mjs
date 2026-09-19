@@ -212,10 +212,13 @@ export function renderHostedSkillsHtml(profile) {
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .seg button { background: transparent; color: var(--muted); border: none; padding: 7px 14px; font-size: .8rem; font-weight: 600; cursor: pointer; }
   .seg button.on { background: var(--accent); color: #fff; }
-  .controls select {
+  .controls select, .controls input[type=text] {
     background: var(--panel); color: var(--ink); border: 1px solid var(--line);
     border-radius: 9px; padding: 7px 10px; font: inherit; font-size: .8rem; max-width: 300px;
   }
+  .repository-field { display: grid; gap: .25rem; flex: 1 1 300px; max-width: 420px; }
+  .repository-field input { width: 100%; max-width: none !important; box-sizing: border-box; }
+  .repository-field span { font-size: .78rem; font-weight: 600; }
   .inline-note { font-size: .78rem; color: var(--muted); line-height: 1.5; }
   .inline-note.err { color: var(--bad); }
   .inline-note.warn { color: var(--warn, #d9a441); }
@@ -609,11 +612,13 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
     </details>
 ${withGitHubSession ? `    <h2 class="sec">GITHUB REPOSITORY</h2>
     <div class="controls" id="github-panel">
-      <select id="github-repository" title="GitHub repository for the daily digest">
-        <option value="">Discovering repositories...</option>
-      </select>
-      <button class="btn ghost" id="github-refresh" title="Refresh repositories and credential">Refresh</button>
+      <label class="repository-field"><span>Repository to analyze</span>
+        <input id="github-repository" type="text" list="github-repository-suggestions" autocomplete="off" spellcheck="false" placeholder="owner/repo or https://github.com/owner/repo" title="Repository to analyze as owner/repo or a GitHub URL">
+      </label>
+      <datalist id="github-repository-suggestions"></datalist>
+      <button class="btn ghost" id="github-refresh" title="Refresh repository suggestions and credential">Refresh</button>
     </div>
+    <div class="inline-note">Enter <code>owner/repo</code> or a GitHub repository URL. Suggestions are optional and do not limit which accessible repository you can use.</div>
     <div class="inline-note" id="github-status"></div>` : ''}
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
@@ -908,6 +913,7 @@ ${commandClientScript()}
   const modelCreateConfirm = document.getElementById('model-create-confirm');
   const modelCreateStatus = document.getElementById('model-create-status');
   const githubRepository = document.getElementById('github-repository');
+  const githubRepositorySuggestions = document.getElementById('github-repository-suggestions');
   const githubRefresh = document.getElementById('github-refresh');
   const githubStatus = document.getElementById('github-status');
   const githubPanel = document.getElementById('github-panel');
@@ -1245,12 +1251,9 @@ ${commandClientScript()}
     const context = state.githubContext || {};
     const credential = state.githubCredential || {};
     const repositories = context.candidates || [];
+    githubRepositorySuggestions.innerHTML = repositories.map((repository) =>
+      '<option value="' + esc(repository) + '"></option>').join('');
     if (document.activeElement !== githubRepository) {
-      githubRepository.innerHTML =
-        '<option value="">' + esc(repositories.length ? 'Select a repository...' : 'No repository selected') + '</option>' +
-        repositories.map((repository) =>
-          '<option value="' + esc(repository) + '"' + (repository === context.repository ? ' selected' : '') + '>' +
-          esc(repository) + '</option>').join('');
       githubRepository.value = context.repository || '';
     }
     githubRepository.disabled = credential.status === 'pending';
@@ -1260,8 +1263,8 @@ ${commandClientScript()}
         ? 'Daily digest target: ' + context.repository + (context.source ? ' (' + context.source + ')' : '') +
           (credential.source ? ' · credential: ' + credential.source : '')
         : repositories.length
-          ? 'Choose the repository for this projectless daily digest. Invocation stays blocked until you do.'
-          : 'Discovering repositories with the signed-in GitHub account.');
+          ? 'Enter a repository to analyze or choose an authenticated suggestion. Invocation stays blocked until access is validated.'
+          : 'Validating the repository and signed-in GitHub credential.');
     githubStatus.className = 'inline-note' + ((context.error || credential.error) ? ' err' : '');
   }
 
@@ -1632,16 +1635,23 @@ ${commandClientScript()}
   });
   githubRefresh.addEventListener('click', async () => {
     githubRefresh.disabled = true;
-    setStatus('Refreshing GitHub credential and repositories...');
+    setStatus('Refreshing GitHub credential and repository suggestions...');
     const result = await postJson('/github/refresh');
-    setStatus(result.ok ? 'GitHub repositories refreshed.' : result.message);
+    setStatus(result.ok ? 'GitHub repository suggestions refreshed.' : result.message);
   });
-  githubRepository.addEventListener('change', async () => {
+  async function applyGithubRepository() {
     if (!githubRepository.value) return;
     githubRepository.disabled = true;
-    setStatus('Applying GitHub repository...');
+    setStatus('Validating repository access...');
     const result = await postJson('/github/select-repository', { repository: githubRepository.value });
-    setStatus(result.ok ? 'Daily digest repository selected.' : result.message);
+    if (result.ok) githubRepository.value = result.repository;
+    setStatus(result.ok ? 'Repository to analyze selected.' : result.message);
+  }
+  githubRepository.addEventListener('change', applyGithubRepository);
+  githubRepository.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    applyGithubRepository();
   });
 
   sourceCustomize.addEventListener('click', () => {
