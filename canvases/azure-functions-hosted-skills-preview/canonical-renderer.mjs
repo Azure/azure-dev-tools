@@ -64,9 +64,12 @@ function retainedHostedSkillsClient() {
     $('doctor-tag').textContent = next.doctorRunning ? 'checking…' : doctor ? (doctor.ready ? 'ready' : 'action needed') : 'not checked';
     $('doctor-list').innerHTML = doctor ? doctor.checks.map((check) => '<div class="doctor-row ' + (check.status === 'ready' ? 'ok' : 'err') + '"><strong>' + esc(check.label) + '</strong><div class="doctor-detail">' + esc(check.detail) + '</div></div>').join('') : '';
     const source = next.sourceWorkspace || {};
-    $('source-workspace-tag').textContent = source.materialized ? 'ready' : 'not created';
-    $('source-workspace-note').textContent = source.error || (source.materialized ? 'Local workspace is ready.' : 'Choose a relative local folder and create the bundled starter.');
-    $('source-path-display').textContent = source.destination || source.relativePath || 'Choose a local folder';
+    const attached = source.sourceMode === 'attached';
+    $('source-workspace-tag').textContent = attached ? 'Existing app' : source.materialized ? 'Generated app' : 'not created';
+    $('source-workspace-note').textContent = source.error || source.notice || (source.materialized ? 'Local workspace is ready.' : 'Choose a relative local folder and create the bundled starter.');
+    $('source-path-display').textContent = source.resolvedPath || source.destination || source.relativePath || 'Choose a local folder';
+    $('open-existing-app').hidden = attached;
+    $('return-generated-app').hidden = !attached;
     if (document.activeElement !== $('source-relative-path')) $('source-relative-path').value = source.relativePath || '';
     const binding = next.modelBinding || {};
     $('model-subscription').innerHTML = (next.azure?.subscriptions || []).map((item) => '<option value="' + esc(item.id) + '">' + esc(item.name) + '</option>').join('') || '<option value="">No enabled subscriptions found</option>';
@@ -179,6 +182,20 @@ function retainedHostedSkillsClient() {
   $('model-mode-create').addEventListener('click', () => { $('model-existing-view').style.display = 'none'; $('model-create-view').hidden = false; post('/models/create-plan'); });
   $('model-create-confirm').addEventListener('click', () => post('/models/create', { confirm: true }));
   $('open-vscode').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/open-vscode'); });
+  $('open-existing-app').addEventListener('click', async () => {
+    try { await flushInstructions(); } catch { return; }
+    $('existing-app-path').value = state?.sourceWorkspace?.workingDirectory || '';
+    $('existing-app-dialog').showModal();
+  });
+  $('existing-app-dialog').addEventListener('close', async () => {
+    if ($('existing-app-dialog').returnValue !== 'attach') return;
+    try { await flushInstructions(); } catch { return; }
+    await post('/source/attach', { path: $('existing-app-path').value, unsavedChanges: false });
+  });
+  $('return-generated-app').addEventListener('click', async () => {
+    try { await flushInstructions(); } catch { return; }
+    await post('/source/return-generated', { unsavedChanges: false });
+  });
   $('refresh-source').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/source/refresh'); });
   $('hosted-skill-picker').addEventListener('change', async () => { try { await flushInstructions(); } catch { return; } await post('/hosted-skill/select', { relativePath: $('hosted-skill-picker').value }); });
   $('edit-instructions').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/edit-instructions-vscode'); });
@@ -570,6 +587,17 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ''}
   .btn.danger-text { margin-left: auto; background: transparent; color: var(--bad); border: 0; }
   .btn.danger-text:hover { background: rgba(220,38,38,.06); filter: none; }
   .local-path .inline-note { margin-top: .45rem; }
+  dialog {
+    width: min(32rem, calc(100% - 2rem)); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem; color: var(--ink); background: var(--panel); box-shadow: 0 18px 50px rgba(15,23,42,.22);
+  }
+  dialog::backdrop { background: rgba(15,23,42,.35); }
+  dialog h3 { margin: 0 0 .45rem; font-size: .95rem; }
+  dialog label { display: block; margin-top: .75rem; color: var(--muted); font-size: .75rem; }
+  dialog input {
+    width: 100%; margin-top: .3rem; background: #fff; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 9px; font: .78rem ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
 
   .chart { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: .6rem .7rem; }
   .chart svg { display: block; width: 100%; height: 90px; }
@@ -689,9 +717,24 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
     </details>
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
+      <button class="btn ghost" id="open-existing-app">Open existing app…</button>
+      <button class="btn ghost" id="return-generated-app" hidden>Return to generated app</button>
       <button class="btn ghost" id="refresh-source">Refresh</button>
 ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project" title="Creates a separate session from the isolated generated working copy; it does not add files to your current project." hidden>${ICONS.github}<span class="label">Create isolated GitHub Session</span></button>\n` : ''}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `\n      <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ''}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ''}
     </div>
+    <dialog id="existing-app-dialog">
+      <form method="dialog">
+        <h3>Open existing Hosted Skills app</h3>
+        <p class="inline-note">Enter an absolute folder path, or a folder under the current worktree. The folder must contain <code>host.json</code> and at least one valid <code>.agent.md</code>.</p>
+        <label>App or repository folder
+          <input id="existing-app-path" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="local-path-actions">
+          <button class="btn" value="attach" id="existing-app-confirm">Open app</button>
+          <button class="btn ghost" value="cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
     <div class="inline-note" id="local-note" hidden></div>
     <div class="inline-note" id="code-location" hidden></div>
 ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment-output" hidden>
@@ -1019,6 +1062,11 @@ ${commandClientScript()}
   const instructionStatus = document.getElementById('instruction-status');
   const openVscodeBtn = document.getElementById('open-vscode');
   const refreshSourceBtn = document.getElementById('refresh-source');
+  const openExistingAppBtn = document.getElementById('open-existing-app');
+  const returnGeneratedAppBtn = document.getElementById('return-generated-app');
+  const existingAppDialog = document.getElementById('existing-app-dialog');
+  const existingAppPath = document.getElementById('existing-app-path');
+  const existingAppConfirm = document.getElementById('existing-app-confirm');
   const hostedSkillPickerWrap = document.getElementById('hosted-skill-picker-wrap');
   const hostedSkillPicker = document.getElementById('hosted-skill-picker');
   const invokeBtn = document.getElementById('invoke');
@@ -1262,12 +1310,15 @@ ${commandClientScript()}
   function renderSourceWorkspace(state) {
     const source = state.sourceWorkspace || {};
     const busy = Boolean(source.operation);
+    const attached = source.sourceMode === 'attached';
     const current = source.mode === 'current';
-    const showEditor = current && (sourceEditorOpen || (!source.materialized && !busy));
+    const showEditor = !attached && current && (sourceEditorOpen || (!source.materialized && !busy));
     sourceWorkspacePanel.hidden = state.target === 'azure';
-    sourcePathDisplay.textContent = current ? (source.relativePath || 'functions/daily-repo-digest') : 'Isolated workspace';
-    sourcePathDisplay.title = source.destination || '';
-    sourceCustomize.hidden = !current || busy;
+    sourcePathDisplay.textContent = attached
+      ? (source.resolvedPath || source.attachedRoot || 'Existing app')
+      : current ? (source.relativePath || 'functions/daily-repo-digest') : 'Isolated workspace';
+    sourcePathDisplay.title = source.resolvedPath || source.destination || '';
+    sourceCustomize.hidden = attached || !current || busy;
     sourceCustomize.disabled = busy;
     sourcePathEditor.hidden = !showEditor;
     if (document.activeElement !== sourceRelativePath) sourceRelativePath.value = source.relativePath || 'functions/daily-repo-digest';
@@ -1275,16 +1326,19 @@ ${commandClientScript()}
     sourceCreate.disabled = busy || !source.canUseCurrent;
     sourceCreate.textContent = source.materialized ? 'Move here' : 'Create here';
     sourceCancel.disabled = busy;
-    sourceRemove.hidden = !(showEditor && source.materialized && current);
+    sourceRemove.hidden = attached || !(showEditor && source.materialized && current);
     sourceRemove.disabled = busy;
+    returnGeneratedAppBtn.disabled = busy || (attached && !source.generatedAvailable);
+    returnGeneratedAppBtn.title = attached && !source.generatedAvailable ? 'No generated app has been created in this workspace yet.' : '';
     sourceWorkspaceTag.textContent = busy
       ? source.operation
-      : source.materialized ? (current ? 'current worktree' : 'isolated') : source.autoCreate === false ? 'removed' : 'preparing';
+      : attached ? 'Existing app'
+      : source.materialized ? 'Generated app' : source.autoCreate === false ? 'removed' : 'preparing';
     sourceWorkspaceTag.className = 'tag' + (source.materialized ? ' ok' : '');
-    if (source.error) {
+    if (source.error || source.notice) {
       sourceWorkspaceNote.hidden = false;
-      sourceWorkspaceNote.className = 'inline-note err';
-      sourceWorkspaceNote.textContent = source.error;
+      sourceWorkspaceNote.className = 'inline-note' + (source.error ? ' err' : '');
+      sourceWorkspaceNote.textContent = source.error || source.notice;
     } else if (!source.materialized && source.autoCreate === false) {
       sourceWorkspaceNote.hidden = false;
       sourceWorkspaceNote.className = 'inline-note';
@@ -1292,7 +1346,13 @@ ${commandClientScript()}
     } else if (busy) {
       sourceWorkspaceNote.hidden = false;
       sourceWorkspaceNote.className = 'inline-note';
-      sourceWorkspaceNote.textContent = source.operation === 'moving' ? 'Moving the complete generated app…' : 'Creating the generated app…';
+      sourceWorkspaceNote.textContent = source.operation === 'moving'
+        ? 'Moving the complete generated app…'
+        : source.operation === 'attaching'
+          ? 'Validating and opening the existing app…'
+          : source.operation === 'switching'
+            ? 'Returning to the generated app…'
+            : 'Creating the generated app…';
     } else if (source.materialized && current && showEditor) {
       sourceWorkspaceNote.hidden = false;
       sourceWorkspaceNote.className = 'inline-note';
@@ -1310,6 +1370,13 @@ ${commandClientScript()}
     targetAzureBtn.classList.toggle('on', state.target === 'azure');
     targetBadge.textContent = 'Target: ' + (state.target === 'azure' ? ('Azure' + (state.azure.app ? ' · ' + state.azure.app.name : '')) : 'Local');
     const showAzure = state.target === 'azure';
+    const attached = state.sourceWorkspace?.sourceMode === 'attached';
+    openExistingAppBtn.hidden = showAzure || attached;
+    returnGeneratedAppBtn.hidden = showAzure || !attached;
+    modelSubscription.disabled = attached || Boolean(state.modelBinding?.loading);
+    modelSource.disabled = attached || Boolean(state.modelBinding?.loading);
+    modelResource.disabled = attached || Boolean(state.modelBinding?.loading);
+    modelModel.disabled = attached || Boolean(state.modelBinding?.loading);
     const localControl = localRuntimeControlState(state);
     subSel.style.display = showAzure ? '' : 'none';
     appSel.style.display = showAzure ? '' : 'none';
@@ -1817,6 +1884,35 @@ ${commandClientScript()}
     } finally {
       refreshSourceBtn.disabled = false;
     }
+  });
+  openExistingAppBtn.addEventListener('click', async () => {
+    if (!(await flushInstructionEdits())) return;
+    existingAppPath.value = latest?.sourceWorkspace?.workingDirectory || '';
+    existingAppDialog.showModal();
+    existingAppPath.focus();
+    existingAppPath.select();
+  });
+  existingAppDialog.addEventListener('close', async () => {
+    if (existingAppDialog.returnValue !== 'attach') return;
+    if (!(await flushInstructionEdits())) return;
+    existingAppConfirm.disabled = true;
+    setStatus('Validating existing Hosted Skills app...');
+    try {
+      const result = await postJson('/source/attach', {
+        path: existingAppPath.value,
+        unsavedChanges: false,
+      });
+      setStatus(result.message || (result.ok ? 'Opened existing app.' : 'Could not open existing app.'));
+    } finally {
+      existingAppConfirm.disabled = false;
+    }
+  });
+  returnGeneratedAppBtn.addEventListener('click', async () => {
+    if (!(await flushInstructionEdits())) return;
+    const result = await postJson('/source/return-generated', {
+      unsavedChanges: false,
+    });
+    setStatus(result.message || (result.ok ? 'Returned to generated app.' : 'Could not return to generated app.'));
   });
   hostedSkillPicker.addEventListener('change', async () => {
     const relativePath = hostedSkillPicker.value;

@@ -73,7 +73,13 @@ export function agentDocument(text, relativePath = "") {
 }
 
 export async function discoverHostedSkills(root) {
-	const sourceDir = path.join(root, "src");
+	const nestedSourceDir = path.join(root, "src");
+	const sourceDir = await readdir(nestedSourceDir, { withFileTypes: true })
+		.then(() => nestedSourceDir)
+		.catch((error) => {
+			if (error?.code === "ENOENT") return root;
+			throw error;
+		});
 	const entries = await readdir(sourceDir, { withFileTypes: true });
 	const files = entries
 		.filter((entry) => entry.isFile() && entry.name.endsWith(".agent.md"))
@@ -81,7 +87,7 @@ export async function discoverHostedSkills(root) {
 		.sort((a, b) => a.localeCompare(b));
 	const skills = [];
 	for (const fileName of files) {
-		const relativePath = normalizedRelativePath(path.join("src", fileName));
+		const relativePath = normalizedRelativePath(path.relative(root, path.join(sourceDir, fileName)));
 		const source = await readFile(path.join(sourceDir, fileName), "utf8");
 		const skill = agentDocument(source, relativePath);
 		if (skill.trigger) skills.push(skill);

@@ -38,6 +38,16 @@ export function validateTriggerDraftState(value) {
 	return result;
 }
 
+export function validateSourceModeState(value) {
+	if (!object(value) || Object.keys(value).some((key) => !["sourceMode", "attachedRoot"].includes(key))) {
+		invalid("source mode");
+	}
+	if (!["managed", "attached"].includes(value.sourceMode)) invalid("source mode");
+	if (typeof value.attachedRoot !== "string" || value.attachedRoot.includes("\0")) invalid("source mode");
+	if (value.sourceMode === "attached" && !path.isAbsolute(value.attachedRoot)) invalid("source mode");
+	return { sourceMode: value.sourceMode, attachedRoot: value.attachedRoot };
+}
+
 const TEXT_FIELDS = ["time", "phase", "target", "trigger", "origin", "executionId", "functionName", "sessionId", "operationId", "invokedAt", "note", "response"];
 const NUMBER_FIELDS = ["id", "status", "ms", "logSequence", "retryAfterSeconds"];
 const unsafeText = (value) => containsCredentialLikeValue(value) ||
@@ -84,6 +94,7 @@ const SCHEMAS = {
 	"invocations.json": { schema: "studio.invocations.v1", validate: validateInvocationState },
 	"http-request-drafts.json": { schema: "studio.http-request-drafts.v1", validate: validateHttpDraftState },
 	"trigger-payload-drafts.json": { schema: "studio.trigger-payload-drafts.v1", validate: validateTriggerDraftState },
+	"source-mode.json": { schema: "studio.source-mode.v1", validate: validateSourceModeState },
 };
 
 export class StudioState {

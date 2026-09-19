@@ -117,6 +117,7 @@ import {
 	reenterOwnedWorkspace,
 	REMOVAL_MARKER,
 	removeOwnedWorkspace,
+	resolveAttachedAppRoot,
 	resolveCurrentWorkspaceDestination,
 	sourceManifestPath,
 	writeOwnershipManifest,
@@ -1008,6 +1009,7 @@ function hostedSkillWorkspaceIdentity(entry) {
 }
 
 async function loadHostedSkillSelections(entry) {
+	if (entry.sourceWorkspace.sourceMode === "attached") return entry.hostedSkillSelections;
 	const file = hostedSkillSelectionPath(entry);
 	try {
 		const value = JSON.parse(await readFile(file, "utf8"));
@@ -1032,6 +1034,7 @@ async function loadHostedSkillSelections(entry) {
 }
 
 async function persistHostedSkillSelections(entry) {
+	if (entry.sourceWorkspace.sourceMode === "attached") return;
 	const file = hostedSkillSelectionPath(entry);
 	await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
 	const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
@@ -1089,7 +1092,11 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, foll
 	applySelectedHostedSkill(entry, choice.selected, notice);
 	if (choice.selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
 		const httpSkill = skills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
-		if (httpSkill && httpSkill.body.trim() !== choice.selected.body.trim()) {
+		if (
+			entry.sourceWorkspace.sourceMode === "managed" &&
+			httpSkill &&
+			httpSkill.body.trim() !== choice.selected.body.trim()
+		) {
 			await writeAgentBodyIfRevision(
 				path.join(requireTemplateDir(entry), httpSkill.relativePath),
 				choice.selected.body,
@@ -1114,7 +1121,7 @@ async function refreshWorkspaceFromDisk(
 	{ restartIfRunning = true, persist = true, followSelectedFileTrigger = true } = {},
 ) {
 	if (!entry.sourceWorkspace.materialized || !entry.templateDir) {
-		throw new Error("Create the generated app in the current worktree or an isolated workspace first.");
+		throw new Error("Open a generated or existing Hosted Skills app first.");
 	}
 	const previousFingerprint = entry.local.sourceFingerprint;
 	await withSourceWorkspaceMutation(
@@ -1794,13 +1801,18 @@ function snapshot(entry) {
 		doctor: entry.doctor,
 		doctorRunning: entry.doctorRunning,
 		sourceWorkspace: {
+			sourceMode: entry.sourceWorkspace.sourceMode,
 			mode: entry.sourceWorkspace.mode,
 			workingDirectory: entry.sourceWorkspace.workingDirectory,
 			relativePath: entry.sourceWorkspace.relativePath,
 			destination: entry.sourceWorkspace.destination,
+			resolvedPath: entry.templateDir || entry.sourceWorkspace.destination,
+			attachedRoot: entry.sourceWorkspace.attachedRoot,
+			generatedAvailable: entry.sourceWorkspace.managedMaterialized,
 			materialized: entry.sourceWorkspace.materialized,
 			operation: entry.sourceWorkspace.operation,
 			error: entry.sourceWorkspace.error,
+			notice: entry.sourceWorkspace.notice,
 			canUseCurrent: Boolean(entry.sourceWorkspace.workingDirectory),
 			autoCreate: entry.sourceWorkspace.autoCreate,
 		},
@@ -1979,13 +1991,17 @@ function ensureEntry(instanceId) {
 		doctor: null,
 		doctorRunning: false,
 		sourceWorkspace: {
+			sourceMode: "managed",
 			mode: "isolated",
 			workingDirectory: "",
 			relativePath: DEFAULT_CURRENT_SUBDIR,
 			destination: "",
+			attachedRoot: "",
+			managedMaterialized: false,
 			materialized: false,
 			operation: "",
 			error: "",
+			notice: "",
 			manifestPath: "",
 			manifest: null,
 			hydrated: false,
@@ -2012,6 +2028,8 @@ function ensureEntry(instanceId) {
 			githubCredentialFingerprint: "",
 			githubRepository: "",
 			sourceFingerprint: "",
+			releaseAppRuntimeOwner: null,
+			runtimeReleasePromise: null,
 			functions: [],
 			logTail: [],
 			logSequence: 0,
@@ -2808,7 +2826,7 @@ async function ensureGatewayProviderFilesUnlocked(entry, mcpMode) {
 }
 
 async function readLocalSettings(entry) {
-	const settingsPath = path.join(requireTemplateDir(entry), "src", "local.settings.json");
+	const settingsPath = path.join(entry.agentDir || path.join(requireTemplateDir(entry), "src"), "local.settings.json");
 	if (!(await exists(settingsPath))) {
 		return {
 			path: settingsPath,
@@ -2821,7 +2839,7 @@ async function readLocalSettings(entry) {
 }
 
 async function assertLocalQueueStorageSafe(entry) {
-	const queuePath = path.join(requireTemplateDir(entry), HERO_TEMPLATE.queueAgentRelPath);
+	const queuePath = path.join(requireTemplateDir(entry), entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.queueAgentRelPath);
 	if (entry.trigger !== "queue" && !(await exists(queuePath))) return;
 	const { json } = await readLocalSettings(entry);
 	assertLocalQueueConnection(json.Values.AzureWebJobsStorage);
@@ -3100,6 +3118,9 @@ async function discoverModelBindings(entry, subscription) {
 
 async function applyModelBinding(entry, { source, resourceId, modelId }, restart = true) {
 	assertWorkspaceMutationAllowed(entry, "Changing the model binding");
+	if (entry.sourceWorkspace.sourceMode === "attached") {
+		throw new Error("Existing apps keep their developer-owned model configuration. Update local.settings.json in the app, then Refresh.");
+	}
 	if (source !== "foundry" && source !== "gateway") throw new Error("Choose Microsoft Foundry or AI Gateway.");
 	if (source === "gateway") {
 		try {
@@ -3708,7 +3729,11 @@ async function initializeModelBindings(entry) {
 					? "foundry"
 					: "gateway";
 			selectDefaultModelBinding(entry);
-			if (entry.modelBinding.resourceId && entry.modelBinding.modelId) {
+			if (
+				entry.sourceWorkspace.sourceMode === "managed" &&
+				entry.modelBinding.resourceId &&
+				entry.modelBinding.modelId
+			) {
 				await applyModelBinding(
 					entry,
 					{
@@ -3740,6 +3765,9 @@ async function loadTimerSchedule(entry) {
 
 async function setTimerSchedule(entry, input) {
 	assertWorkspaceMutationAllowed(entry, "Changing timer schedule");
+	if (entry.sourceWorkspace.sourceMode === "attached") {
+		throw new Error("Existing app schedules are developer-owned. Edit the selected .agent.md in VS Code, then Refresh.");
+	}
 	await ensureTemplate(entry);
 	const schedule = normalizeTimerSchedule({ ...entry.timerSchedule, ...input });
 	const expression = timerExpressionFromSchedule(schedule);
@@ -3885,14 +3913,16 @@ async function configureTemplateDirectory(entry, dir, options = {}) {
 }
 
 async function loadTemplateDirectory(entry, dir) {
-	const timerPath = path.join(dir, HERO_TEMPLATE.timerAgentRelPath);
 	entry.templateDir = dir;
-	entry.agentDir = path.join(dir, "src");
+	entry.agentDir = (await exists(path.join(dir, "src", "host.json"))) ? path.join(dir, "src") : dir;
 	entry.queueName = queueNameForWorkspace(dir);
-	const raw = await readFile(timerPath, "utf8");
-	entry.prompt = stripFrontmatter(raw);
-	entry.parameterContract = parameterContractOf(raw);
-	const skillName = skillNameOf(raw);
+	const skills = await discoverHostedSkills(dir);
+	if (!skills.length) throw new Error(`No valid .agent.md files were found in ${entry.agentDir}.`);
+	if (!skills.some((skill) => skill.trigger === entry.trigger)) entry.trigger = skills[0].trigger;
+	const initial = chooseHostedSkill(skills, entry.trigger, entry.hostedSkillSelections[entry.trigger] || "").selected || skills[0];
+	entry.prompt = initial.body;
+	entry.parameterContract = parameterContractOf(`${initial.frontmatter}\n${initial.body}`);
+	const skillName = initial.name;
 	entry.hero = {
 		title: skillName,
 		repo: HERO_TEMPLATE.repo,
@@ -4043,8 +4073,143 @@ async function hydrateSourceWorkspace(entry, { sessionId, workingDirectory } = {
 	} finally {
 		if (releaseOwnershipLock) await releaseOwnershipLock();
 	}
+	entry.sourceWorkspace.managedMaterialized = entry.sourceWorkspace.materialized;
 	entry.sourceWorkspace.hydrated = true;
 	broadcast(entry, "state", snapshot(entry));
+}
+
+async function persistSourceMode(entry) {
+	await entry.runtimeState.save("source-mode.json", {
+		sourceMode: entry.sourceWorkspace.sourceMode,
+		attachedRoot: entry.sourceWorkspace.attachedRoot,
+	});
+}
+
+async function attachExistingSource(entry, inputPath, { persist = true } = {}) {
+	if (entry.sourceWorkspace.operation) throw new Error("A source operation is already running.");
+	entry.sourceWorkspace.operation = "attaching";
+	entry.sourceWorkspace.error = "";
+	entry.sourceWorkspace.notice = "";
+	broadcast(entry, "state", snapshot(entry));
+	try {
+		const attached = await resolveAttachedAppRoot(inputPath, {
+			workingDirectory: entry.sourceWorkspace.workingDirectory,
+		});
+		if (
+			entry.sourceWorkspace.managedMaterialized &&
+			entry.sourceWorkspace.destination &&
+			path.resolve(attached.root) === path.resolve(entry.sourceWorkspace.destination)
+		) {
+			throw new Error("That folder is already the managed generated app.");
+		}
+		entry.sourceWorkspace.managedMaterialized = entry.sourceWorkspace.materialized;
+		stopLoadTest(entry);
+		await stopLocalAndRelease(entry);
+		resetGeneratedWorkspaceState(entry, { preserveManaged: true });
+		entry.sourceWorkspace.sourceMode = "attached";
+		entry.sourceWorkspace.attachedRoot = attached.root;
+		entry.sourceWorkspace.materialized = true;
+		entry.target = "local";
+		await loadTemplateDirectory(entry, attached.root);
+		entry.modelBinding.initializePromise = null;
+		inspectConfiguredModelBinding(entry)
+			.then(() => initializeDeclaredIntegrations(entry))
+			.then(() => initializeModelBindings(entry))
+			.catch((error) => {
+				entry.modelBinding.error = shortError(error);
+				broadcast(entry, "state", snapshot(entry));
+			});
+		if (persist) await persistSourceMode(entry);
+		entry.openStatus = `Opened existing Hosted Skills app at ${attached.root}`;
+		return attached;
+	} catch (error) {
+		entry.sourceWorkspace.error = shortError(error);
+		throw error;
+	} finally {
+		entry.sourceWorkspace.operation = "";
+		broadcast(entry, "state", snapshot(entry));
+	}
+}
+
+async function returnToGeneratedSource(entry, { persist = true } = {}) {
+	if (entry.sourceWorkspace.sourceMode !== "attached") return;
+	if (entry.sourceWorkspace.operation) throw new Error("A source operation is already running.");
+	entry.sourceWorkspace.operation = "switching";
+	entry.sourceWorkspace.error = "";
+	broadcast(entry, "state", snapshot(entry));
+	let releaseOwnershipLock = null;
+	try {
+		stopLoadTest(entry);
+		await stopLocalAndRelease(entry);
+		const generatedRoot = entry.sourceWorkspace.destination;
+		if (!generatedRoot || !entry.sourceWorkspace.managedMaterialized) {
+			throw new Error("The preserved generated app is not available.");
+		}
+		if (entry.sourceWorkspace.mode === "current") {
+			releaseOwnershipLock = await acquireOwnershipLock(entry.sourceWorkspace.manifestPath);
+			const manifest = await readOwnershipManifest(entry.sourceWorkspace.manifestPath);
+			if (!manifest) throw new Error("The generated app ownership record is missing.");
+			const reentry = await reenterOwnedWorkspace({
+				workspaceRoot: entry.sourceWorkspace.workingDirectory,
+				relativePath: manifest.relativePath,
+				manifest,
+				sessionId: entry.sessionId,
+				instanceId: entry.instanceId,
+				templateId: SOURCE_WORKSPACE_TEMPLATE_ID,
+				recoverySignatures: SOURCE_WORKSPACE_RECOVERY_SIGNATURES,
+			});
+			if (!reentry) throw new Error(`The preserved generated app is missing: ${generatedRoot}`);
+			entry.sourceWorkspace.manifest = reentry.manifest;
+		} else {
+			await validateRuntimeWorkspace(generatedRoot, SOURCE_WORKSPACE_RECOVERY_SIGNATURES, SOURCE_WORKSPACE_TEMPLATE_ID);
+		}
+		entry.sourceWorkspace.sourceMode = "managed";
+		entry.sourceWorkspace.attachedRoot = "";
+		entry.sourceWorkspace.materialized = true;
+		entry.sourceWorkspace.notice = "";
+		entry.hostedSkillSelections = {};
+		entry.target = "local";
+		await loadTemplateDirectory(entry, generatedRoot);
+		entry.modelBinding.initializePromise = null;
+		initializeDeclaredIntegrations(entry)
+			.then(() => initializeModelBindings(entry))
+			.catch((error) => {
+				entry.modelBinding.error = shortError(error);
+				broadcast(entry, "state", snapshot(entry));
+			});
+		if (persist) await persistSourceMode(entry);
+		entry.openStatus = `Returned to generated app at ${generatedRoot}`;
+	} catch (error) {
+		entry.sourceWorkspace.error = shortError(error);
+		throw error;
+	} finally {
+		if (releaseOwnershipLock) await releaseOwnershipLock();
+		entry.sourceWorkspace.operation = "";
+		broadcast(entry, "state", snapshot(entry));
+	}
+}
+
+async function restorePersistedSourceMode(entry) {
+	const saved = await entry.runtimeState.load("source-mode.json");
+	if (!saved || saved.sourceMode !== "attached") {
+		entry.sourceWorkspace.sourceMode = "managed";
+		entry.sourceWorkspace.attachedRoot = "";
+		return;
+	}
+	try {
+		await attachExistingSource(entry, saved.attachedRoot, { persist: false });
+	} catch (error) {
+		entry.sourceWorkspace.sourceMode = "managed";
+		entry.sourceWorkspace.attachedRoot = "";
+		entry.sourceWorkspace.materialized = entry.sourceWorkspace.managedMaterialized;
+		entry.sourceWorkspace.error = "";
+		entry.sourceWorkspace.notice =
+			`Could not reopen the existing app (${shortError(error)}). Returned to the preserved generated app.`;
+		if (entry.sourceWorkspace.destination && entry.sourceWorkspace.materialized) {
+			await loadTemplateDirectory(entry, entry.sourceWorkspace.destination);
+		}
+		await persistSourceMode(entry);
+	}
 }
 
 async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
@@ -4186,6 +4351,7 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
 
 		entry.sourceWorkspace.destination = destination;
 		entry.sourceWorkspace.materialized = true;
+		entry.sourceWorkspace.managedMaterialized = true;
 		entry.sourceWorkspace.autoCreate = true;
 		entry.sourceWorkspace.reentered = false;
 		await rm(sourceRemovalMarkerPath(entry), { force: true });
@@ -4235,7 +4401,7 @@ async function startGeneratedWorkspace(entry, options = {}) {
 	return entry.hero;
 }
 
-function resetGeneratedWorkspaceState(entry) {
+function resetGeneratedWorkspaceState(entry, { preserveManaged = false } = {}) {
 	entry.templateDir = "";
 	entry.agentDir = "";
 	entry.hero = null;
@@ -4252,8 +4418,11 @@ function resetGeneratedWorkspaceState(entry) {
 	entry.modelBinding.activeResourceId = "";
 	entry.modelBinding.activeModelId = "";
 	entry.sourceWorkspace.reentered = false;
-	entry.sourceWorkspace.materialized = false;
-	entry.sourceWorkspace.manifest = null;
+	if (!preserveManaged) {
+		entry.sourceWorkspace.materialized = false;
+		entry.sourceWorkspace.managedMaterialized = false;
+		entry.sourceWorkspace.manifest = null;
+	}
 }
 
 async function validateLockedCurrentWorkspace(entry) {
@@ -4297,7 +4466,11 @@ async function validateLockedCurrentWorkspace(entry) {
 }
 
 async function withSourceWorkspaceMutation(entry, _action, mutation, { lockHeld = false } = {}) {
-	if (entry.sourceWorkspace.mode !== "current" || !entry.sourceWorkspace.materialized) {
+	if (
+		entry.sourceWorkspace.sourceMode === "attached" ||
+		entry.sourceWorkspace.mode !== "current" ||
+		!entry.sourceWorkspace.materialized
+	) {
 		return mutation();
 	}
 	if (lockHeld) return mutation();
@@ -4328,6 +4501,9 @@ async function acquireSourceWorkspaceLease(entry) {
 
 async function moveCurrentSourceWorkspace(entry, relativePath) {
 	assertWorkspaceMutationAllowed(entry, "Moving the generated app");
+	if (entry.sourceWorkspace.sourceMode !== "managed") {
+		throw new Error("Return to the generated app before moving it.");
+	}
 	if (!entry.sourceWorkspace.materialized || entry.sourceWorkspace.mode !== "current") {
 		throw new Error("The generated app is not in the current worktree.");
 	}
@@ -4405,6 +4581,9 @@ async function moveCurrentSourceWorkspace(entry, relativePath) {
 
 async function moveSourceWorkspaceToIsolated(entry) {
 	assertWorkspaceMutationAllowed(entry, "Moving the generated app");
+	if (entry.sourceWorkspace.sourceMode !== "managed") {
+		throw new Error("Return to the generated app before moving it.");
+	}
 	if (!entry.sourceWorkspace.materialized || entry.sourceWorkspace.mode !== "current") {
 		throw new Error("The generated app is not in the current worktree.");
 	}
@@ -4468,6 +4647,9 @@ async function moveSourceWorkspaceToIsolated(entry) {
 
 async function removeCurrentSourceWorkspace(entry) {
 	assertWorkspaceMutationAllowed(entry, "Removing the generated app");
+	if (entry.sourceWorkspace.sourceMode !== "managed") {
+		throw new Error("Return to the generated app before removing it.");
+	}
 	if (!entry.sourceWorkspace.materialized || entry.sourceWorkspace.mode !== "current") {
 		throw new Error("There is no Azure Functions Hosted Skills Preview-owned app in the current worktree to remove.");
 	}
@@ -4516,7 +4698,11 @@ async function syncInstructionsFromDiskUnlocked(entry) {
 
 async function ensureTemplate(entry) {
 	if (!entry.sourceWorkspace.materialized || !entry.templateDir) {
-		throw new Error("Create the generated app in the current worktree or an isolated workspace first.");
+		throw new Error("Open a generated or existing Hosted Skills app first.");
+	}
+	if (entry.sourceWorkspace.sourceMode === "attached") {
+		await refreshHostedSkillsFromDiskUnlocked(entry, { persist: false });
+		return entry.hero;
 	}
 	return withSourceWorkspaceMutation(entry, "Synchronizing the generated app", () =>
 		entry.hero
@@ -5093,9 +5279,12 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
 		purpose: "Detect the Azurite storage emulator used by Timer state and Queue messages",
 	});
 	let azuriteCommand;
+	const dataDir = entry.sourceWorkspace.sourceMode === "attached"
+		? path.join(entry.runtimeState.paths.root, "azurite", createHash("sha256").update(path.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24))
+		: path.join(entry.templateDir, ".azurite");
 	try {
 		azuriteCommand = await ensureAzuriteCommand(
-			["--silent", "--location", path.join(entry.templateDir, ".azurite"), "--skipApiVersionCheck"],
+			["--silent", "--location", dataDir, "--skipApiVersionCheck"],
 			entry,
 		);
 		cmdEnd(entry, c1, { ok: true, note: azuriteCommand.located.path });
@@ -5104,7 +5293,6 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
 		throw error;
 	}
 
-	const dataDir = path.join(entry.templateDir, ".azurite");
 	await mkdir(dataDir, { recursive: true });
 	const cmdText = `azurite --silent --location ${dataDir} --skipApiVersionCheck`;
 	const c2 = cmdStart(entry, {
@@ -5671,19 +5859,37 @@ function startLocalEnvironment(entry) {
 		try {
 			await ensureTemplate(entry);
 			ensureCurrent();
-			await ensureGatewayProviderFiles(
-				entry,
-				entry.modelBinding.activeSource === "gateway" ? "gateway" : "public",
-			);
-			if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
-			else await ensureDeclaredParameterRuntimeSettings(entry);
+			await acquireLocalAppRuntimeOwnership(entry);
+			if (entry.sourceWorkspace.sourceMode === "managed") {
+				await ensureGatewayProviderFiles(
+					entry,
+					entry.modelBinding.activeSource === "gateway" ? "gateway" : "public",
+				);
+				if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
+				else await ensureDeclaredParameterRuntimeSettings(entry);
+			} else {
+				const configured = await inspectConfiguredModelBinding(entry);
+				if (!configured) {
+					throw new Error("The existing app must already contain its local model settings. Azure Functions Hosted Skills Preview will not rewrite developer-owned configuration.");
+				}
+			}
 			await assertLocalQueueStorageSafe(entry);
 			ensureCurrent();
 			await checkLocalPrereqs(entry);
 			ensureCurrent();
 			await ensureAzurite(entry, ensureCurrent);
 			ensureCurrent();
-			await ensureVenv(entry);
+			if (entry.sourceWorkspace.sourceMode === "managed") {
+				await ensureVenv(entry);
+			} else {
+				const venv = pythonVirtualEnvironment(entry.agentDir);
+				const probe = (await exists(venv.python)) ? await probePythonBin(venv.python) : null;
+				if (!probe?.ok) {
+					throw new Error(`The existing app needs a ready Python environment at ${venv.directory}. Prepare it from the app's own setup instructions, then retry.`);
+				}
+				entry.local.pythonBin = venv.python;
+				entry.local.pythonVersion = probe.text;
+			}
 			ensureCurrent();
 			await withSourceWorkspaceMutation(entry, "Starting the local function", () => startFuncHost(entry, ensureCurrent));
 			startFoundryTokenRefresh(entry);
@@ -5740,7 +5946,44 @@ function stopLocal(entry) {
 	entry.local.port = null;
 	entry.local.functions = [];
 	entry.local.sourceFingerprint = "";
+	if (entry.local.releaseAppRuntimeOwner) {
+		const release = entry.local.releaseAppRuntimeOwner;
+		entry.local.releaseAppRuntimeOwner = null;
+		entry.local.runtimeReleasePromise = Promise.resolve(release());
+	}
 	broadcast(entry, "state", snapshot(entry));
+}
+
+async function stopLocalAndRelease(entry) {
+	const children = [entry.local.funcProc, entry.local.azuriteProc].filter(Boolean);
+	const release = entry.local.releaseAppRuntimeOwner;
+	entry.local.releaseAppRuntimeOwner = null;
+	stopLocal(entry);
+	await Promise.all(children.map((child) => child.exitCode !== null
+		? Promise.resolve()
+		: Promise.race([
+				new Promise((resolve) => child.once("exit", resolve)),
+				new Promise((resolve) => setTimeout(resolve, 1800)),
+			])));
+	if (release) await release();
+	await entry.local.runtimeReleasePromise;
+	entry.local.runtimeReleasePromise = null;
+}
+
+async function acquireLocalAppRuntimeOwnership(entry) {
+	if (entry.local.releaseAppRuntimeOwner) return;
+	if (entry.local.runtimeReleasePromise) {
+		await entry.local.runtimeReleasePromise;
+		entry.local.runtimeReleasePromise = null;
+	}
+	const root = path.resolve(requireTemplateDir(entry));
+	const digest = createHash("sha256").update(root).digest("hex").slice(0, 32);
+	const lockPath = path.join(studioStateEnvironment().home, `.${STATE_PRODUCT}`, "runtime-apps", digest);
+	try {
+		entry.local.releaseAppRuntimeOwner = await acquireStateLock(lockPath, { timeoutMs: 250, pollMs: 25 });
+	} catch (error) {
+		throw new Error(`Another canvas panel is already running the local host for ${root}. Stop it there before starting this one. ${shortError(error)}`);
+	}
 }
 
 async function invokeLocal(
@@ -6032,9 +6275,11 @@ async function prepareInvocation(entry, httpRequestDraft) {
 	) {
 		throw new Error("Wait for the selected model endpoint to finish binding before invoking.");
 	}
-	await ensureGatewayProviderFiles(entry, entry.modelBinding.activeSource === "gateway" ? "gateway" : "public");
-	if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
-	else await ensureDeclaredParameterRuntimeSettings(entry);
+	if (entry.sourceWorkspace.sourceMode === "managed") {
+		await ensureGatewayProviderFiles(entry, entry.modelBinding.activeSource === "gateway" ? "gateway" : "public");
+		if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
+		else await ensureDeclaredParameterRuntimeSettings(entry);
+	}
 	if (
 		entry.local.status === "running" &&
 		(entry.local.githubCredentialFingerprint !== entry.githubCredential.fingerprint ||
@@ -7002,6 +7247,9 @@ async function startServer(
 		if (req.method === "POST" && req.url === "/source/create") {
 			readJsonBody(req)
 				.then(async (body) => {
+					if (entry.sourceWorkspace.sourceMode === "attached") {
+						throw new Error("Return to the generated app before creating or reopening generated source.");
+					}
 					await startGeneratedWorkspace(entry, {
 						mode: body.mode,
 						relativePath: body.relativePath,
@@ -7012,6 +7260,40 @@ async function startServer(
 						message: entry.sourceWorkspace.reentered
 							? `Reopened generated app owned by Azure Functions Hosted Skills Preview at ${entry.sourceWorkspace.destination}`
 							: `Generated app created at ${entry.sourceWorkspace.destination}`,
+					});
+				})
+				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
+			return;
+		}
+
+		if (req.method === "POST" && req.url === "/source/attach") {
+			readJsonBody(req)
+				.then(async (body) => {
+					if (body.unsavedChanges === true) {
+						throw new Error("Save or discard the unsaved Skill instructions before switching apps.");
+					}
+					const attached = await attachExistingSource(entry, body.path);
+					responseJson(res, {
+						ok: true,
+						destination: attached.root,
+						message: `Opened existing app at ${attached.root}`,
+					});
+				})
+				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
+			return;
+		}
+
+		if (req.method === "POST" && req.url === "/source/return-generated") {
+			readJsonBody(req)
+				.then(async (body) => {
+					if (body.unsavedChanges === true) {
+						throw new Error("Save or discard the unsaved Skill instructions before switching apps.");
+					}
+					await returnToGeneratedSource(entry);
+					responseJson(res, {
+						ok: true,
+						destination: entry.sourceWorkspace.destination,
+						message: entry.openStatus,
 					});
 				})
 				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
@@ -7060,7 +7342,11 @@ async function startServer(
 				entry.trigger = id;
 				if (changed && entry.sourceWorkspace.materialized) {
 					await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-					if (!entry.selectedHostedSkill && (id === "queue" || id === "connector")) {
+					if (
+						entry.sourceWorkspace.sourceMode === "managed" &&
+						!entry.selectedHostedSkill &&
+						(id === "queue" || id === "connector")
+					) {
 						await syncGeneratedTriggerFilesImpl(entry, previousPrompt, previousSkillName);
 						await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
 					}
@@ -7302,6 +7588,9 @@ async function startServer(
 		if (req.method === "POST" && req.url === "/models/select-source") {
 			readJsonBody(req)
 				.then(async (body) => {
+					if (entry.sourceWorkspace.sourceMode === "attached") {
+						throw new Error("Existing apps keep their developer-owned model configuration. Update local.settings.json in the app, then Refresh.");
+					}
 					const source = body.source === "gateway" ? "gateway" : "foundry";
 					entry.modelBinding.source = source;
 					selectDefaultModelBinding(entry);
@@ -7319,6 +7608,9 @@ async function startServer(
 		if (req.method === "POST" && req.url === "/models/select-choice") {
 			readJsonBody(req)
 				.then(async (body) => {
+					if (entry.sourceWorkspace.sourceMode === "attached") {
+						throw new Error("Existing apps keep their developer-owned model configuration. Update local.settings.json in the app, then Refresh.");
+					}
 					const resource = modelResources(entry).find((item) => item.id === String(body.resourceId || ""));
 					if (!resource) throw new Error("Unknown model resource.");
 					const model = resource.models.find((item) => item.id === String(body.modelId || "")) || resource.models[0];
@@ -8178,6 +8470,7 @@ const canvas = createCanvas({
 			sessionId,
 			workingDirectory: sessionContext?.workingDirectory,
 		});
+		await restorePersistedSourceMode(entry);
 		await loadInvocationHistory(entry);
 		await loadHttpRequestDrafts(entry);
 		await loadEntryTriggerPayloadDrafts(entry);
@@ -8223,7 +8516,7 @@ const canvas = createCanvas({
 		}
 		stopLiveTelemetry(entry);
 		stopLoadTest(entry);
-		stopLocal(entry);
+		await stopLocalAndRelease(entry);
 		entry.deployment?.cancel?.();
 		if (entry.invocationWriteTimer) {
 			clearTimeout(entry.invocationWriteTimer);

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, link, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, stat } from "node:fs/promises";
+import { cp, link, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { STATE_COMPONENT, STATE_PRODUCT, LEGACY_STATE_COMPONENT, atomicStateWrite, migrateStateRecord, assertSafeStatePath } from "./state-migration.mjs";
 
@@ -25,6 +25,7 @@ const RUNTIME_DIRS = new Set([
 	".venv",
 	"__pycache__",
 ]);
+const ATTACHED_SCAN_DEPTH = 4;
 
 async function pathExists(filePath) {
 	try {
@@ -60,6 +61,94 @@ export function resolveCurrentWorkspaceDestination(workingDirectory, relativePat
 		throw new Error("The generated app folder must be a dedicated subfolder inside the current worktree.");
 	}
 	return { root, relative, destination };
+}
+
+function attachedInputPath(inputPath, workingDirectory) {
+	const raw = String(inputPath || "").trim();
+	if (!raw) throw new Error("Enter an existing app folder path.");
+	if (path.isAbsolute(raw) || path.win32.isAbsolute(raw)) return path.resolve(raw);
+	if (!workingDirectory || !path.isAbsolute(workingDirectory)) {
+		throw new Error("Relative existing-app paths require a current worktree.");
+	}
+	const root = path.resolve(workingDirectory);
+	const resolved = path.resolve(root, raw);
+	const relative = path.relative(root, resolved);
+	if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+		throw new Error("Relative existing-app paths must stay inside the current worktree.");
+	}
+	return resolved;
+}
+
+async function attachedAppShape(root) {
+	const directHost = path.join(root, "host.json");
+	const nestedHost = path.join(root, "src", "host.json");
+	const isFile = async (file) => {
+		try {
+			return (await lstat(file)).isFile();
+		} catch (error) {
+			if (error?.code === "ENOENT") return false;
+			throw error;
+		}
+	};
+	const sourceDirectory = await isFile(directHost)
+		? root
+		: await isFile(nestedHost)
+			? path.join(root, "src")
+			: "";
+	if (!sourceDirectory) return null;
+	const children = await readdir(sourceDirectory, { withFileTypes: true });
+	const agentFiles = children
+		.filter((child) => child.isFile() && child.name.endsWith(".agent.md"))
+		.map((child) => path.join(sourceDirectory, child.name));
+	const validAgentFiles = [];
+	for (const agentFile of agentFiles) {
+		const source = await readFile(agentFile, "utf8");
+		if (/^\s*---\r?\n[\s\S]*?^\s*type:\s*(?:timer_trigger|http_trigger|queue_trigger|connector_trigger)\s*$[\s\S]*?^\s*---/m.test(source)) {
+			validAgentFiles.push(agentFile);
+		}
+	}
+	if (!validAgentFiles.length) return null;
+	return { root, sourceDirectory, hostJson: path.join(sourceDirectory, "host.json"), agentFiles: validAgentFiles };
+}
+
+export async function resolveAttachedAppRoot(inputPath, { workingDirectory } = {}) {
+	const selected = attachedInputPath(inputPath, workingDirectory);
+	let selectedStat;
+	try {
+		selectedStat = await stat(selected);
+	} catch (error) {
+		if (error?.code === "ENOENT") throw new Error(`Existing app folder does not exist: ${selected}`);
+		throw error;
+	}
+	if (!selectedStat.isDirectory()) throw new Error(`Existing app path is not a directory: ${selected}`);
+	const physical = await realpath(selected);
+	const direct = await attachedAppShape(physical);
+	if (direct) return direct;
+
+	const candidates = [];
+	async function scan(directory, depth) {
+		if (depth > ATTACHED_SCAN_DEPTH) return;
+		const children = await readdir(directory, { withFileTypes: true });
+		children.sort((a, b) => a.name.localeCompare(b.name));
+		for (const child of children) {
+			if (!child.isDirectory() || RUNTIME_DIRS.has(child.name) || child.name === "node_modules") continue;
+			const childPath = path.join(directory, child.name);
+			const shape = await attachedAppShape(childPath);
+			if (shape) candidates.push(shape);
+			else await scan(childPath, depth + 1);
+		}
+	}
+	await scan(physical, 1);
+	if (!candidates.length) {
+		throw new Error(
+			`No Hosted Skills app was found under ${physical}. Choose a folder containing host.json and at least one .agent.md file.`,
+		);
+	}
+	if (candidates.length > 1) {
+		const choices = candidates.map((candidate) => candidate.root).join(", ");
+		throw new Error(`Multiple Hosted Skills apps were found. Choose one app folder explicitly: ${choices}`);
+	}
+	return candidates[0];
 }
 
 export async function assertCurrentWorkspaceDestinationSafe(
