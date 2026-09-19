@@ -14,7 +14,7 @@
 
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -310,7 +310,6 @@ let fixtureGithubRepositories = null;
 let fixtureGithubRepositoryAccess = null;
 let fixtureLocalEnvironmentStarter = null;
 const DEFAULT_HTTP_PROMPT = "Give me the daily digest now.";
-const DEFAULT_GITHUB_REPOSITORY = "Azure/azure-functions-host";
 const GITHUB_REPOSITORY_PAGE_LIMIT = 100;
 const GITHUB_REPOSITORY_DISCOVERY_PAGES = 3;
 const REQUIRED_GITHUB_TOOLS = new Set([
@@ -514,36 +513,6 @@ function normalizeGithubRepository(value) {
 	}
 }
 
-function githubPreferencesPath() {
-	return path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview", "github-preferences.json");
-}
-
-async function readGithubRepositoryPreference() {
-	const file = githubPreferencesPath();
-	try {
-		if (lstatSync(file).isSymbolicLink()) throw new Error("GitHub repository preference file must not be a symbolic link.");
-		const parsed = JSON.parse(await readFile(file, "utf8"));
-		return normalizeGithubRepository(parsed.repository);
-	} catch (error) {
-		if (error?.code === "ENOENT") return "";
-		throw error;
-	}
-}
-
-async function writeGithubRepositoryPreference(repository) {
-	const file = githubPreferencesPath();
-	const release = await acquireStateLock(file);
-	try {
-		await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-		const temporary = `${file}.${randomUUID()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify({ repository, updatedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
-		await rename(temporary, file);
-		await chmod(file, 0o600);
-	} finally {
-		await release();
-	}
-}
-
 async function discoverGithubRepositories(authorization, { fetchImpl = fetch } = {}) {
 	if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureGithubRepositories) {
 		return fixtureGithubRepositories(authorization);
@@ -608,18 +577,24 @@ function applyGithubRepository(entry, repository, source) {
 	entry.githubContext.repository = repository;
 	entry.githubContext.source = source;
 	entry.githubContext.error = "";
-	entry.httpPrompt = repository
-		? `Create the daily repository digest for ${repository} covering the previous 24 hours. Use authenticated GitHub tools and do not ask for a token.`
-		: "Select a GitHub repository before invoking the daily digest.";
 }
 
-async function initializeGithubContext(entry, { force = false } = {}) {
-	if (entry.githubContext.resolved && !force) return entry.githubContext;
+async function initializeGithubContext(entry, { force = false, repository = "" } = {}) {
+	const requestedRepository = normalizeGithubRepository(repository);
+	if (!requestedRepository) {
+		throw new Error("Repository parameter must be owner/name or a https://github.com/owner/name URL.");
+	}
+	if (
+		entry.githubContext.resolved &&
+		!force &&
+		entry.githubContext.repository === requestedRepository &&
+		entry.githubCredential.status === "ready"
+	) return entry.githubContext;
 	const command = cmdStart(entry, {
 		kind: "http",
 		title: "GitHub repository discovery",
 		cmd: `GET https://api.github.com/user/repos?per_page=${GITHUB_REPOSITORY_PAGE_LIMIT} (up to ${GITHUB_REPOSITORY_DISCOVERY_PAGES} pages)`,
-		purpose: "Find a concrete repository for the daily digest without requesting a token",
+		purpose: `Validate access to ${requestedRepository} and discover optional repository suggestions without requesting a token`,
 	});
 	entry.githubContext.resolved = false;
 	entry.githubContext.error = "";
@@ -635,74 +610,60 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 		broadcast(entry, "state", snapshot(entry));
 		throw error;
 	}
-	const environmentRepository = String(process.env.GITHUB_REPOSITORY || "").trim();
-	let repository = normalizeGithubRepository(environmentRepository);
-	let source = repository ? "environment" : "";
-	let repositoryValidated = false;
-	const selectionError = environmentRepository && !repository
-		? new Error("GITHUB_REPOSITORY must be owner/name or a https://github.com/owner/name URL.")
-		: null;
 	try {
-		if (selectionError) throw selectionError;
-		if (repository) {
-			repository = await validateGithubRepositoryAccess(repository, authorization);
-			repositoryValidated = true;
+		const validatedRepository = await validateGithubRepositoryAccess(requestedRepository, authorization);
+		let candidates = [];
+		let discoveryError = "";
+		try {
+			candidates = await discoverGithubRepositories(authorization);
+		} catch (error) {
+			discoveryError = shortError(error);
 		}
-		if (!repository) {
-			const preferred = await readGithubRepositoryPreference();
-			if (preferred) {
-				try {
-					repository = await validateGithubRepositoryAccess(preferred, authorization);
-					source = "saved preference";
-					repositoryValidated = true;
-				} catch {
-					repository = "";
-				}
-			}
-		}
-		if (!repository) {
-			repository = await validateGithubRepositoryAccess(DEFAULT_GITHUB_REPOSITORY, authorization);
-			source = "default";
-			repositoryValidated = true;
-		}
-		const candidates = await discoverGithubRepositories(authorization);
 		entry.githubContext.candidates = candidates;
 		entry.githubContext.resolved = true;
-		applyGithubRepository(entry, repository, source);
+		applyGithubRepository(entry, validatedRepository, "parameters");
 		cmdEnd(entry, command, {
 			ok: true,
-			note: `${repository} (${source})${candidates.length ? `; ${candidates.length} suggested repositories discovered` : ""}`,
+			note:
+				`${validatedRepository} (parameters)` +
+				(candidates.length ? `; ${candidates.length} suggested repositories discovered` : "") +
+				(discoveryError ? `; suggestions unavailable: ${discoveryError}` : ""),
 		});
 	} catch (error) {
 		entry.githubContext.resolved = true;
-		if (repositoryValidated) {
-			entry.githubContext.candidates = [];
-			applyGithubRepository(entry, repository, source);
-			cmdEnd(entry, command, {
-				ok: true,
-				note: `${repository} (${source}); broader repository discovery was unavailable: ${shortError(error)}`,
-			});
-		} else {
-			entry.githubContext.candidates = [];
-			applyGithubRepository(entry, "", "");
-			entry.githubContext.error = shortError(error);
-			cmdEnd(entry, command, { ok: false, note: shortError(error) });
-			broadcast(entry, "state", snapshot(entry));
-			throw error;
-		}
+		entry.githubContext.candidates = [];
+		applyGithubRepository(entry, "", "");
+		entry.githubContext.error = shortError(error);
+		cmdEnd(entry, command, { ok: false, note: shortError(error) });
+		broadcast(entry, "state", snapshot(entry));
+		throw error;
 	}
 	broadcast(entry, "state", snapshot(entry));
 	return entry.githubContext;
 }
 
-function contextualDigestPrompt(entry, prompt) {
-	const requested = String(prompt || "").trim() || DEFAULT_HTTP_PROMPT;
-	const end = new Date();
-	const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-	const repository = entry.githubContext.repository
-		? `Repository: ${entry.githubContext.repository}.`
-		: "Infer the repository from available GitHub or runtime context; if none exists, state that repository identity is missing.";
-	return `${requested}\n\n${repository} Exact UTC reporting window: ${start.toISOString()} through ${end.toISOString()}. Use authenticated GitHub tools and never ask for a token.`;
+function githubRequirement(entry) {
+	return entry.parameterContract?.github || null;
+}
+
+function parametersFromHttpRequest(entry, draft = currentHttpRequestDraft(entry)) {
+	const parsed = parseHttpRequestDraft(draft);
+	return validateParameters(entry.parameterContract, parsed.body);
+}
+
+function githubRepositoryFromParameters(entry, parameters) {
+	const property = githubRequirement(entry)?.repositoryParameter;
+	return property ? String(parameters[property] || "") : "";
+}
+
+async function initializeDeclaredIntegrations(entry, { force = false, draft } = {}) {
+	const github = githubRequirement(entry);
+	if (!github) return;
+	const parameters = parametersFromHttpRequest(entry, draft || currentHttpRequestDraft(entry));
+	await initializeGithubContext(entry, {
+		force,
+		repository: githubRepositoryFromParameters(entry, parameters),
+	});
 }
 
 const azureCliSession = createAzureCliSession(runAz);
@@ -929,6 +890,97 @@ function stripFrontmatter(text) {
 function frontmatterOf(text) {
 	const match = /^\s*(---\r?\n[\s\S]*?\r?\n---\r?\n?)/.exec(text);
 	return match ? match[1] : "---\nname: Agent\ndescription: Agent\n---\n";
+}
+
+function inputSchemaOf(text) {
+	const frontmatter = frontmatterOf(text);
+	const raw = frontmatter.match(/^\s*input_schema:\s*(\{.*\})\s*$/m)?.[1];
+	if (!raw) return null;
+	let schema;
+	try {
+		schema = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(`input_schema must be an inline JSON object: ${error.message}`);
+	}
+	if (!schema || typeof schema !== "object" || Array.isArray(schema) || schema.type !== "object") {
+		throw new Error("input_schema must be a JSON Schema object with type \"object\".");
+	}
+	if (schema.properties != null && (!schema.properties || typeof schema.properties !== "object" || Array.isArray(schema.properties))) {
+		throw new Error("input_schema.properties must be an object.");
+	}
+	if (schema.required != null && (!Array.isArray(schema.required) || schema.required.some((name) => typeof name !== "string"))) {
+		throw new Error("input_schema.required must be an array of property names.");
+	}
+	return schema;
+}
+
+function parameterDefaults(schema) {
+	if (!schema) return {};
+	const defaults = {};
+	for (const [name, property] of Object.entries(schema.properties || {})) {
+		if (property && typeof property === "object" && Object.hasOwn(property, "default")) {
+			defaults[name] = structuredClone(property.default);
+		}
+	}
+	return defaults;
+}
+
+function parameterContractOf(text) {
+	const schema = inputSchemaOf(text);
+	const metadata = schema?.["x-functions-hosted-skills"];
+	const github = metadata?.github && typeof metadata.github === "object"
+		? {
+				repositoryParameter: String(metadata.github.repositoryParameter || ""),
+				requiredTools: Array.isArray(metadata.github.requiredTools)
+					? metadata.github.requiredTools.map(String).filter(Boolean)
+					: [],
+			}
+		: null;
+	return { schema, defaults: parameterDefaults(schema), github };
+}
+
+function validateParameters(contract, value) {
+	const parameters = value == null ? {} : value;
+	if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+		throw new Error("Parameters must be a JSON object.");
+	}
+	const normalized = structuredClone(parameters);
+	const schema = contract?.schema;
+	if (!schema) return normalized;
+	for (const name of schema.required || []) {
+		if (!Object.hasOwn(normalized, name) || normalized[name] === "" || normalized[name] == null) {
+			throw new Error(`Missing required parameter "${name}".`);
+		}
+	}
+	for (const [name, property] of Object.entries(schema.properties || {})) {
+		if (!Object.hasOwn(normalized, name) || !property || typeof property !== "object") continue;
+		const valueAtName = normalized[name];
+		if (property.type === "string" && typeof valueAtName !== "string") {
+			throw new Error(`Parameter "${name}" must be a string.`);
+		}
+		if (property.type === "number" && typeof valueAtName !== "number") {
+			throw new Error(`Parameter "${name}" must be a number.`);
+		}
+		if (property.type === "integer" && (!Number.isInteger(valueAtName))) {
+			throw new Error(`Parameter "${name}" must be an integer.`);
+		}
+		if (property.type === "boolean" && typeof valueAtName !== "boolean") {
+			throw new Error(`Parameter "${name}" must be a boolean.`);
+		}
+		if (Array.isArray(property.enum) && !property.enum.some((candidate) => Object.is(candidate, valueAtName))) {
+			throw new Error(`Parameter "${name}" must be one of the declared values.`);
+		}
+		if (property["x-functions-hosted-skills-format"] === "github-repository") {
+			const repository = normalizeGithubRepository(valueAtName);
+			if (!repository) {
+				throw new Error(
+					`Parameter "${name}" must be owner/name or a https://github.com/owner/name URL.`,
+				);
+			}
+			normalized[name] = repository;
+		}
+	}
+	return normalized;
 }
 
 function skillNameOf(text) {
@@ -1195,7 +1247,24 @@ function httpRequestDraftKey(entry) {
 
 function currentHttpRequestDraft(entry) {
 	const key = httpRequestDraftKey(entry);
-	return key ? entry.httpRequestDrafts[key] || defaultHttpRequestDraft() : defaultHttpRequestDraft();
+	if (key && entry.httpRequestDrafts[key]) {
+		const stored = entry.httpRequestDrafts[key];
+		if (entry.target !== "local" || !entry.parameterContract?.schema) return stored;
+		try {
+			const parsed = parseHttpRequestDraft(stored);
+			const parameters = validateParameters(entry.parameterContract, {
+				...entry.parameterContract.defaults,
+				...(parsed.body || {}),
+			});
+			return { ...stored, bodyText: JSON.stringify(parameters, null, 2) };
+		} catch {
+			return stored;
+		}
+	}
+	const draft = defaultHttpRequestDraft();
+	const defaults = entry.target === "local" ? entry.parameterContract?.defaults || {} : {};
+	if (Object.keys(defaults).length) draft.bodyText = JSON.stringify(defaults, null, 2);
+	return draft;
 }
 
 async function persistHttpRequestDrafts(entry) {
@@ -1212,17 +1281,28 @@ async function persistHttpRequestDrafts(entry) {
 
 async function saveHttpRequestDraft(entry, draft) {
 	const key = httpRequestDraftKey(entry);
-	if (!key) throw new Error("Select an HTTP trigger before saving an HTTP request.");
+	if (!key) throw new Error("Select an invokable HTTP endpoint or local Timer test before saving parameters.");
 	const parsed = parseHttpRequestDraft(draft);
+	const contract = entry.target === "local" ? entry.parameterContract : { schema: null, defaults: {}, github: null };
+	const parameters = validateParameters(contract, parsed.body);
+	if (entry.target === "local" && githubRequirement(entry)) {
+		await initializeGithubContext(entry, {
+			force: true,
+			repository: githubRepositoryFromParameters(entry, parameters),
+		});
+	}
+	const normalizedDraft = {
+		headersText: String(draft?.headersText ?? ""),
+		bodyText: contract.schema
+			? JSON.stringify(parameters, null, 2)
+			: String(draft?.bodyText ?? ""),
+	};
 	entry.httpRequestError = "";
 	if (parsed.persistable) {
-		entry.httpRequestDrafts[key] = {
-			headersText: String(draft?.headersText ?? ""),
-			bodyText: String(draft?.bodyText ?? ""),
-		};
+		entry.httpRequestDrafts[key] = normalizedDraft;
 		await persistHttpRequestDrafts(entry);
 	}
-	return parsed;
+	return { ...parsed, parameters, normalizedDraft };
 }
 
 async function loadHttpRequestDrafts(entry) {
@@ -1279,8 +1359,14 @@ function isRequiredGithubDigestTool(name) {
 	return REQUIRED_GITHUB_TOOLS.has(sourceMcpToolName(name));
 }
 
-function hasRequiredGithubDigestEvidence(invocation) {
-	return invocation.tools.some((tool) => tool.ok && isRequiredGithubDigestTool(tool.name));
+function hasRequiredGithubDigestEvidence(invocation, requiredTools = [...REQUIRED_GITHUB_TOOLS]) {
+	const acceptedNames = new Set(
+		requiredTools.flatMap((name) => {
+			const normalized = sourceMcpToolName(name);
+			return [normalized, normalized.startsWith("github_") ? normalized.slice(7) : `github_${normalized}`];
+		}),
+	);
+	return invocation.tools.some((tool) => tool.ok && acceptedNames.has(sourceMcpToolName(tool.name)));
 }
 
 function invocationTrigger(entry, functionName) {
@@ -1512,6 +1598,12 @@ function snapshot(entry) {
 		fetchError: entry.fetchError || "",
 		prompt: entry.prompt,
 		httpPrompt: entry.httpPrompt,
+		parameters: {
+			schema: entry.target === "local" ? entry.parameterContract.schema : null,
+			defaults: entry.target === "local" ? entry.parameterContract.defaults : {},
+			github: entry.target === "local" ? entry.parameterContract.github : null,
+			suggestions: entry.target === "local" ? entry.githubContext.candidates : [],
+		},
 		githubContext: entry.githubContext,
 		githubCredential: {
 			status: entry.githubCredential.status,
@@ -1683,6 +1775,11 @@ function ensureEntry(instanceId) {
 			error: "",
 		},
 		httpPrompt: DEFAULT_HTTP_PROMPT,
+		parameterContract: {
+			schema: null,
+			defaults: {},
+			github: null,
+		},
 		githubContext: {
 			resolved: false,
 			repository: "",
@@ -1927,7 +2024,7 @@ function endAzdOperation(entry, kind) {
 // agent (copied verbatim, never rewritten by hand), with http_trigger front
 // matter so HTTP has a real, direct-invoke endpoint. Written only into the
 // working copy this canvas manages - never pushed to the upstream repo.
-function httpTwinContent(bodyText, skillName = "Hosted skill") {
+function httpTwinContent(bodyText, skillName = "Hosted skill", inputSchema = null) {
 	const frontmatter = [
 		"---",
 		`name: ${JSON.stringify(`${skillName} (HTTP)`)}`,
@@ -1939,6 +2036,7 @@ function httpTwinContent(bodyText, skillName = "Hosted skill") {
 		"    route: digest",
 		'    methods: ["POST"]',
 		"    auth_level: function",
+		...(inputSchema ? [`input_schema: ${JSON.stringify(inputSchema)}`] : []),
 		"",
 		"mcp: true",
 		"timeout: 1800",
@@ -2632,7 +2730,8 @@ async function ensureLocalFoundryToken(entry, options = {}) {
 }
 
 async function ensureLocalFoundryRuntimeSettings(entry, options = {}) {
-	const [token, githubAuthorization] = await Promise.all([fetchLocalFoundryToken(entry), githubAuthHeader(entry)]);
+	const token = await fetchLocalFoundryToken(entry);
+	const githubAuthorization = githubRequirement(entry) ? await githubAuthHeader(entry) : "";
 	return withSourceWorkspaceMutation(
 		entry,
 		"Writing local Foundry runtime settings",
@@ -2640,13 +2739,37 @@ async function ensureLocalFoundryRuntimeSettings(entry, options = {}) {
 			const tokenPath = await writeLocalFoundryToken(entry, token);
 			const { path: settingsPath, json } = await readLocalSettings(entry);
 			json.Values.FOUNDRY_TOKEN_FILE = tokenPath;
-			json.Values.GITHUB_MCP_AUTHORIZATION = githubAuthorization;
-			if (entry.githubContext.repository) json.Values.GITHUB_REPOSITORY = entry.githubContext.repository;
-			else delete json.Values.GITHUB_REPOSITORY;
+			if (githubAuthorization) json.Values.GITHUB_MCP_AUTHORIZATION = githubAuthorization;
+			else delete json.Values.GITHUB_MCP_AUTHORIZATION;
+			if (githubRequirement(entry) && entry.githubContext.repository) {
+				json.Values.GITHUB_REPOSITORY = entry.githubContext.repository;
+			} else {
+				delete json.Values.GITHUB_REPOSITORY;
+			}
 			await writeTextIfChanged(settingsPath, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
 			await chmod(settingsPath, 0o600);
 			await protectLocalSettings(requireTemplateDir(entry));
 			return tokenPath;
+		},
+		options,
+	);
+}
+
+async function ensureDeclaredParameterRuntimeSettings(entry, options = {}) {
+	return withSourceWorkspaceMutation(
+		entry,
+		"Writing declared parameter runtime settings",
+		async () => {
+			const { path: settingsPath, json } = await readLocalSettings(entry);
+			if (githubRequirement(entry) && entry.githubContext.repository) {
+				json.Values.GITHUB_REPOSITORY = entry.githubContext.repository;
+			} else {
+				delete json.Values.GITHUB_REPOSITORY;
+				delete json.Values.GITHUB_MCP_AUTHORIZATION;
+			}
+			await writeTextIfChanged(settingsPath, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
+			await chmod(settingsPath, 0o600);
+			await protectLocalSettings(requireTemplateDir(entry));
 		},
 		options,
 	);
@@ -2790,7 +2913,7 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
 		}
 		if (source === "foundry") {
 			await ensureGatewayProviderFiles(entry, "public");
-			const githubAuthorization = await githubAuthHeader(entry);
+			const githubAuthorization = githubRequirement(entry) ? await githubAuthHeader(entry) : "";
 			const tokenPath = await ensureLocalFoundryToken(entry);
 			await writeModelBindingSettings(entry, {
 				AZURE_FUNCTIONS_AGENTS_PROVIDER: "foundry",
@@ -2798,8 +2921,10 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
 				FOUNDRY_MODEL: model.id,
 				AZURE_FUNCTIONS_AGENTS_MODEL: model.id,
 				FOUNDRY_TOKEN_FILE: tokenPath,
-				GITHUB_MCP_AUTHORIZATION: githubAuthorization,
-				GITHUB_REPOSITORY: entry.githubContext.repository,
+				...(githubAuthorization ? { GITHUB_MCP_AUTHORIZATION: githubAuthorization } : {}),
+				...(githubRequirement(entry) && entry.githubContext.repository
+					? { GITHUB_REPOSITORY: entry.githubContext.repository }
+					: {}),
 			});
 		} else {
 			await ensureGatewayProviderFiles(entry, "gateway");
@@ -2811,7 +2936,9 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
 				AZURE_AI_GATEWAY_MCP_URL: runtimeUrls.githubMcpUrl,
 				AZURE_AI_GATEWAY_API_KEY: key,
 				AZURE_FUNCTIONS_AGENTS_MODEL: model.id,
-				GITHUB_REPOSITORY: entry.githubContext.repository,
+				...(githubRequirement(entry) && entry.githubContext.repository
+					? { GITHUB_REPOSITORY: entry.githubContext.repository }
+					: {}),
 			});
 		}
 		entry.modelBinding.resourceId = resource.id;
@@ -3519,6 +3646,7 @@ async function configureTemplateDirectory(entry, dir, options = {}) {
 	await ensureAgentResponseLogging(entry);
 	const raw = await readFile(timerPath, "utf8");
 	entry.prompt = stripFrontmatter(raw);
+	entry.parameterContract = parameterContractOf(raw);
 	const skillName = skillNameOf(raw);
 
 	const currentHttpTwin = (await exists(httpPath)) ? await readFile(httpPath, "utf8") : "";
@@ -3535,7 +3663,7 @@ async function configureTemplateDirectory(entry, dir, options = {}) {
 				"Generate a local HTTP-triggered twin of the Timer agent (same instructions, http_trigger front matter) so HTTP has a real direct-invoke endpoint",
 		});
 		try {
-			await writeFile(httpPath, httpTwinContent(entry.prompt, skillName));
+			await writeFile(httpPath, httpTwinContent(entry.prompt, skillName, entry.parameterContract.schema));
 			cmdEnd(entry, c, { ok: true });
 		} catch (error) {
 			cmdEnd(entry, c, { ok: false, note: shortError(error) });
@@ -3554,6 +3682,7 @@ async function loadTemplateDirectory(entry, dir) {
 	entry.queueName = queueNameForWorkspace(dir);
 	const raw = await readFile(timerPath, "utf8");
 	entry.prompt = stripFrontmatter(raw);
+	entry.parameterContract = parameterContractOf(raw);
 	const skillName = skillNameOf(raw);
 	entry.hero = {
 		title: skillName,
@@ -3885,7 +4014,7 @@ async function ensureSourceMaterialized(entry, options = {}) {
 
 async function startGeneratedWorkspace(entry, options = {}) {
 	await ensureSourceMaterialized(entry, options);
-	await initializeGithubContext(entry);
+	await initializeDeclaredIntegrations(entry);
 	await initializeModelBindings(entry);
 	if (entry.target === "local") await startLocalEnvironment(entry);
 	return entry.hero;
@@ -4171,11 +4300,13 @@ async function syncInstructionsFromDiskUnlocked(entry) {
 	const raw = await readFile(timerPath, "utf8");
 	const prompt = stripFrontmatter(raw);
 	const currentSkillName = skillNameOf(raw);
-	const httpContent = httpTwinContent(prompt, currentSkillName);
+	const parameterContract = parameterContractOf(raw);
+	const httpContent = httpTwinContent(prompt, currentSkillName, parameterContract.schema);
 	const currentHttp = (await exists(httpPath)) ? await readFile(httpPath, "utf8") : "";
 	if (currentHttp !== httpContent) await writeFile(httpPath, httpContent);
 	await syncGeneratedTriggerFiles(entry, prompt, currentSkillName, { lockHeld: true });
 	entry.prompt = prompt;
+	entry.parameterContract = parameterContract;
 	if (entry.hero) entry.hero.title = currentSkillName;
 	await loadTimerSchedule(entry);
 	return entry.hero;
@@ -4218,7 +4349,10 @@ async function saveInstructions(entry, bodyText) {
 		const timerPath = path.join(dir, HERO_TEMPLATE.timerAgentRelPath);
 		const httpPath = path.join(dir, HERO_TEMPLATE.httpAgentRelPath);
 		await writeAgentBody(timerPath, clean);
-		await writeFile(httpPath, httpTwinContent(clean, entry.hero?.title || "Hosted skill"));
+		await writeFile(
+			httpPath,
+			httpTwinContent(clean, entry.hero?.title || "Hosted skill", entry.parameterContract.schema),
+		);
 		await syncGeneratedTriggerFiles(entry, clean, entry.hero?.title || "Hosted skill", { lockHeld: true });
 	});
 	entry.prompt = clean;
@@ -5343,6 +5477,7 @@ function startLocalEnvironment(entry) {
 				entry.modelBinding.activeSource === "gateway" ? "gateway" : "public",
 			);
 			if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
+			else await ensureDeclaredParameterRuntimeSettings(entry);
 			await assertLocalQueueStorageSafe(entry);
 			ensureCurrent();
 			await checkLocalPrereqs(entry);
@@ -5425,7 +5560,7 @@ async function invokeLocal(
 		// instructions, model, and tools, but returns the actual agent output.
 		// The Functions Timer admin endpoint only returns 202 and may recycle
 		// the worker before publishing a completion event.
-		return invokeLocalHttp(entry, base, trigger, promptOverride, true, undefined, { fetchImpl });
+		return invokeLocalHttp(entry, base, trigger, promptOverride, true, httpRequestDraft, { fetchImpl });
 	}
 
 	return invokeLocalHttp(entry, base, trigger, promptOverride, false, httpRequestDraft, { fetchImpl });
@@ -5567,15 +5702,14 @@ async function invokeLocalHttp(
 		);
 	}
 	const fullUrl = fn.route.startsWith("http") ? fn.route : `${base}${fn.route}`;
-	const prompt = contextualDigestPrompt(entry, promptOverride || entry.httpPrompt);
+	const fallbackDraft = promptOverride != null
+		? { headersText: "{}", bodyText: JSON.stringify({ prompt: String(promptOverride) }) }
+		: currentHttpRequestDraft(entry);
 	const request = buildHttpPostRequest(
-		timerTwin
-			? { headersText: "{}", bodyText: JSON.stringify({ prompt }) }
-			: httpRequestDraft ||
-				(promptOverride != null
-					? { headersText: "{}", bodyText: JSON.stringify({ prompt }) }
-					: currentHttpRequestDraft(entry)),
+		httpRequestDraft || fallbackDraft,
 	);
+	const requiresGithubEvidence = Boolean(githubRequirement(entry));
+	const requiredGithubTools = githubRequirement(entry)?.requiredTools || [];
 	const invocation = recordInvocation(entry, {
 		functionName: fn.name,
 		target: "local",
@@ -5586,7 +5720,7 @@ async function invokeLocalHttp(
 		ms: null,
 		tools: [],
 		payloads: [],
-		requiresGithubEvidence: true,
+		requiresGithubEvidence,
 		note: timerTwin ? "Running the Timer agent through its HTTP test twin." : "Sending HTTP trigger.",
 	});
 	const c = cmdStart(entry, {
@@ -5605,18 +5739,21 @@ async function invokeLocalHttp(
 		const resp = await fetchImpl(fullUrl, request.init);
 		const ms = Date.now() - started;
 		const text = await resp.text();
-		if (resp.ok) {
+		if (resp.ok && requiresGithubEvidence) {
 			const evidenceDeadline = Date.now() + 2_000;
-			while (!hasRequiredGithubDigestEvidence(invocation) && Date.now() < evidenceDeadline) {
+			while (!hasRequiredGithubDigestEvidence(invocation, requiredGithubTools) && Date.now() < evidenceDeadline) {
 				await new Promise((resolve) => setTimeout(resolve, 50));
 			}
 		}
-		const accepted = resp.ok && hasRequiredGithubDigestEvidence(invocation);
+		const accepted =
+			resp.ok && (!requiresGithubEvidence || hasRequiredGithubDigestEvidence(invocation, requiredGithubTools));
 		cmdEnd(entry, c, {
 			ok: accepted,
 			note: accepted
-				? `${resp.status} in ${ms}ms with authenticated GitHub MCP evidence`
-				: resp.ok
+				? requiresGithubEvidence
+					? `${resp.status} in ${ms}ms with authenticated GitHub MCP evidence`
+					: `${resp.status} in ${ms}ms`
+				: resp.ok && requiresGithubEvidence
 					? `${resp.status} in ${ms}ms but no required GitHub MCP call completed`
 					: `${resp.status} in ${ms}ms`,
 		});
@@ -5630,7 +5767,7 @@ async function invokeLocalHttp(
 		if (request.display.overriddenHeaders.length) {
 			invocation.note += ` Azure Functions Hosted Skills Preview overrode ${request.display.overriddenHeaders.join(", ")} with application/json.`;
 		}
-		if (!accepted && resp.ok) {
+		if (!accepted && resp.ok && requiresGithubEvidence) {
 			invocation.note =
 				"The function returned HTTP 200 without a successful required GitHub MCP call; the plausible digest was rejected.";
 		} else if (invocation.response) {
@@ -5652,15 +5789,24 @@ async function invokeLocalHttp(
 	}
 }
 
-async function prepareInvocation(entry) {
+async function prepareInvocation(entry, httpRequestDraft) {
 	if (entry.target !== "local") return;
 	await ensureTemplate(entry);
-	await initializeGithubContext(entry, { force: true });
-	if (!entry.githubContext.repository) {
-		throw new Error(
-			entry.githubContext.error ||
-				"Select a GitHub repository before invoking so the digest cannot silently target an empty projectless context.",
-		);
+	const github = githubRequirement(entry);
+	if (github) {
+		await initializeDeclaredIntegrations(entry, {
+			force: false,
+			draft: httpRequestDraft || currentHttpRequestDraft(entry),
+		});
+	} else {
+		entry.githubContext = {
+			resolved: true,
+			repository: "",
+			reportingWindow: "previous 24 hours",
+			source: "",
+			candidates: [],
+			error: "",
+		};
 	}
 	if (
 		entry.modelBinding.loading ||
@@ -5672,6 +5818,7 @@ async function prepareInvocation(entry) {
 	}
 	await ensureGatewayProviderFiles(entry, entry.modelBinding.activeSource === "gateway" ? "gateway" : "public");
 	if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
+	else await ensureDeclaredParameterRuntimeSettings(entry);
 	if (
 		entry.local.status === "running" &&
 		(entry.local.githubCredentialFingerprint !== entry.githubCredential.fingerprint ||
@@ -6239,7 +6386,7 @@ async function runLoadTestBurst(entry) {
 		);
 	}
 	const { url, headerArgs, headerNote } = await resolveLoadTestTarget(entry);
-	const body = JSON.stringify({ prompt: entry.httpPrompt });
+	const body = currentHttpRequestDraft(entry).bodyText || "{}";
 	const args = [
 		"-z",
 		`${LOAD_TEST_BURST_SECONDS}s`,
@@ -6607,44 +6754,6 @@ async function startServer(
 			return;
 		}
 
-		if (req.method === "POST" && req.url === "/github/refresh") {
-			initializeGithubContext(entry, { force: true })
-				.then((context) => responseJson(res, { ok: true, context }))
-				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
-			return;
-		}
-
-		if (req.method === "POST" && req.url === "/github/select-repository") {
-			readJsonBody(req)
-				.then(async (body) => {
-					const repository = normalizeGithubRepository(body.repository);
-					if (!repository) {
-						applyGithubRepository(entry, "", "");
-						entry.githubContext.error = "Enter a valid GitHub repository as owner/name or a https://github.com/owner/name URL.";
-						broadcast(entry, "state", snapshot(entry));
-						throw new Error(entry.githubContext.error);
-					}
-					let changed = false;
-					try {
-						const authorization = await githubAuthHeader(entry);
-						const validated = await validateGithubRepositoryAccess(repository, authorization);
-						changed = validated !== entry.githubContext.repository;
-						applyGithubRepository(entry, validated, "user preference");
-						await writeGithubRepositoryPreference(validated);
-						broadcast(entry, "state", snapshot(entry));
-					} catch (error) {
-						applyGithubRepository(entry, "", "");
-						entry.githubContext.error = shortError(error);
-						broadcast(entry, "state", snapshot(entry));
-						throw error;
-					}
-					if (changed && entry.local.status === "running") await restartLocalEnvironment(entry);
-					responseJson(res, { ok: true, repository: entry.githubContext.repository });
-				})
-				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
-			return;
-		}
-
 		if (req.method === "POST" && req.url === "/source/select") {
 			readJsonBody(req)
 				.then((body) => {
@@ -6855,6 +6964,7 @@ async function startServer(
 						ok: true,
 						persisted: parsed.persistable,
 						overriddenHeaders: parsed.overriddenHeaders,
+						bodyText: parsed.normalizedDraft.bodyText,
 					});
 					broadcast(entry, "state", snapshot(entry));
 				} catch (error) {
@@ -6883,9 +6993,12 @@ async function startServer(
 		if (req.method === "POST" && req.url === "/invoke") {
 			readJsonBody(req).then(async (body) => {
 				try {
-					const httpRequestDraft = entry.trigger === "http" ? body.httpRequest : undefined;
+					const httpRequestDraft =
+						entry.target === "local" && (entry.trigger === "http" || entry.trigger === "timer")
+							? body.httpRequest
+							: entry.trigger === "http" ? body.httpRequest : undefined;
 					if (httpRequestDraft) await saveHttpRequestDraft(entry, httpRequestDraft);
-					await prepareInvocationImpl(entry);
+					await prepareInvocationImpl(entry, httpRequestDraft);
 					const result =
 						entry.target === "azure"
 							? await invokeAzureImpl(entry, body.input, httpRequestDraft)
@@ -7823,7 +7936,7 @@ const canvas = createCanvas({
 				/* The failure is recorded on the entry and broadcast to the UI. */
 			});
 		} else if (entry.target === "local" && entry.sourceWorkspace.materialized) {
-			initializeGithubContext(entry)
+			initializeDeclaredIntegrations(entry)
 				.then(() => initializeModelBindings(entry))
 				.then(() => startLocalEnvironment(entry))
 				.catch(() => {
@@ -7911,6 +8024,12 @@ export const functionStudioTestHooks = Object.freeze({
 	resolveGithubMcpCredential,
 	githubFunctionEnvironment,
 	hasRequiredGithubDigestEvidence,
+	inputSchemaOf,
+	parameterContractOf,
+	validateParameters,
+	parametersFromHttpRequest,
+	githubRequirement,
+	initializeDeclaredIntegrations,
 	validateGithubRepositoryAccess,
 	ensureEntry,
 	snapshot,

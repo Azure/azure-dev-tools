@@ -7,6 +7,7 @@ trigger:
     route: hosted-skill
     methods: ["POST"]
     auth_level: function
+input_schema: {"type":"object","properties":{"repository":{"type":"string","title":"Repository to analyze","description":"GitHub repository as owner/repo or a normal https://github.com/owner/repo URL.","default":"Azure/azure-functions-host","x-functions-hosted-skills-format":"github-repository"}},"required":["repository"],"additionalProperties":true,"x-functions-hosted-skills":{"github":{"repositoryParameter":"repository","requiredTools":["actions_list","list_issues","list_pull_requests"]}}}
 mcp: true
 timeout: 1800
 ---

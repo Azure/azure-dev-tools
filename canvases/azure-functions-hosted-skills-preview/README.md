@@ -33,12 +33,17 @@ and restarts the local host after rehydration.
 
 - **Timer**, **HTTP**, **Queue**, and **Connector** have implemented local flows.
 - **Blob** and **Cosmos DB** remain visible but disabled until implemented.
-- **Repository to analyze** accepts `owner/repo` or a normal GitHub repository
-  URL, validates access through the authenticated GitHub CLI/MCP context, and
-  persists the normalized choice. Repository discovery supplies autocomplete
-  suggestions, not an allowlist. The target is independent of the current
-  project: after an explicit repository, a still-accessible saved preference
-  wins; otherwise the canvas validates and selects `Azure/azure-functions-host`.
+- Hosted Skills declare request parameters with the runtime's `input_schema`
+  frontmatter field. The generic **Parameters JSON object** editor applies
+  declared defaults, safely persists non-credential drafts, and sends the same
+  body to HTTP invocation and Timer's HTTP test twin. Canvas-authored templates
+  encode the schema as an inline JSON object, which is valid YAML and avoids
+  ambiguous prompt parsing.
+- The daily digest declares a required `repository` parameter defaulting to
+  `Azure/azure-functions-host`. It accepts `owner/repo` or a normal GitHub
+  repository URL, validates token access without requiring ownership or
+  `/user/repos` membership, and enables GitHub credential/MCP evidence gates
+  only for that declared requirement.
 - GitHub daily digests apply an exact 24-hour UTC window and compact tool
   results before they reach the model.
 - **Commands** records bounded, redacted activity for Azure discovery, local

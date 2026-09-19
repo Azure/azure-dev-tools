@@ -216,9 +216,6 @@ export function renderHostedSkillsHtml(profile) {
     background: var(--panel); color: var(--ink); border: 1px solid var(--line);
     border-radius: 9px; padding: 7px 10px; font: inherit; font-size: .8rem; max-width: 300px;
   }
-  .repository-field { display: grid; gap: .25rem; flex: 1 1 300px; max-width: 420px; }
-  .repository-field input { width: 100%; max-width: none !important; box-sizing: border-box; }
-  .repository-field span { font-size: .78rem; font-weight: 600; }
   .inline-note { font-size: .78rem; color: var(--muted); line-height: 1.5; }
   .inline-note.err { color: var(--bad); }
   .inline-note.warn { color: var(--warn, #d9a441); }
@@ -610,16 +607,6 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
         </div>` : ''}
       </div>
     </details>
-${withGitHubSession ? `    <h2 class="sec">GITHUB REPOSITORY</h2>
-    <div class="controls" id="github-panel">
-      <label class="repository-field"><span>Repository to analyze</span>
-        <input id="github-repository" type="text" list="github-repository-suggestions" autocomplete="off" spellcheck="false" placeholder="owner/repo or https://github.com/owner/repo" title="Repository to analyze as owner/repo or a GitHub URL">
-      </label>
-      <datalist id="github-repository-suggestions"></datalist>
-      <button class="btn ghost" id="github-refresh" title="Refresh repository suggestions and credential">Refresh</button>
-    </div>
-    <div class="inline-note">Enter <code>owner/repo</code> or a GitHub repository URL. Suggestions are optional and do not limit which accessible repository you can use.</div>
-    <div class="inline-note" id="github-status"></div>` : ''}
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
 ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project" title="Creates a separate session from the isolated generated working copy; it does not add files to your current project." hidden>${ICONS.github}<span class="label">Create isolated GitHub Session</span></button>\n` : ''}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `\n      <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ''}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ''}
@@ -646,15 +633,20 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
       </label>
       <p class="inline-note" id="trigger-input-guidance"></p>
     </div>
-    <div class="http-request-editor" id="http-request-editor" hidden>
-      <label>Request headers JSON
-        <textarea id="http-request-headers" maxlength="16384" spellcheck="false" placeholder='{"X-Correlation-Id":"demo-run"}'></textarea>
-      </label>
-      <label>Request body JSON object
-        <textarea id="http-request-body" maxlength="65536" spellcheck="false" placeholder='{"prompt":"Summarize open incidents"}'></textarea>
-      </label>
-      <p class="inline-note http-request-note" id="http-request-note"></p>
-    </div>
+    <details class="panel parameter-panel" id="parameters-panel" hidden>
+      <summary><span><strong>Parameters</strong><span class="model-summary-detail" id="parameters-summary">JSON request body</span></span></summary>
+      <div class="body">
+        <div class="http-request-editor" id="http-request-editor">
+          <label>Request headers JSON
+            <textarea id="http-request-headers" maxlength="16384" spellcheck="false" placeholder='{"X-Correlation-Id":"demo-run"}'></textarea>
+          </label>
+          <label>Parameters JSON object
+            <textarea id="http-request-body" maxlength="65536" spellcheck="false" placeholder='{"topic":"Summarize open incidents"}'></textarea>
+          </label>
+          <p class="inline-note http-request-note" id="http-request-note"></p>
+        </div>
+      </div>
+    </details>
     <div class="timer-schedule" id="timer-schedule">
       <select id="timer-cadence" aria-label="Timer cadence">
         <option value="daily">Daily</option>
@@ -912,11 +904,6 @@ ${commandClientScript()}
   const modelCreateAlternatives = document.getElementById('model-create-alternatives');
   const modelCreateConfirm = document.getElementById('model-create-confirm');
   const modelCreateStatus = document.getElementById('model-create-status');
-  const githubRepository = document.getElementById('github-repository');
-  const githubRepositorySuggestions = document.getElementById('github-repository-suggestions');
-  const githubRefresh = document.getElementById('github-refresh');
-  const githubStatus = document.getElementById('github-status');
-  const githubPanel = document.getElementById('github-panel');
   const localBuildActions = document.getElementById('local-build-actions');
   const registerAppProject = document.getElementById('register-app-project');
   const deployAzureBtn = document.getElementById('deploy-azure');
@@ -932,6 +919,8 @@ ${commandClientScript()}
   const triggerTestInput = document.getElementById('trigger-test-input');
   const triggerTestInputLabel = document.getElementById('trigger-test-input-label');
   const triggerInputGuidance = document.getElementById('trigger-input-guidance');
+  const parametersPanel = document.getElementById('parameters-panel');
+  const parametersSummary = document.getElementById('parameters-summary');
   const httpRequestEditor = document.getElementById('http-request-editor');
   const httpRequestHeaders = document.getElementById('http-request-headers');
   const httpRequestBody = document.getElementById('http-request-body');
@@ -1247,27 +1236,6 @@ ${commandClientScript()}
     if (state.openStatus) setStatus(state.openStatus);
   }
 
-  function renderGithub(state) {
-    const context = state.githubContext || {};
-    const credential = state.githubCredential || {};
-    const repositories = context.candidates || [];
-    githubRepositorySuggestions.innerHTML = repositories.map((repository) =>
-      '<option value="' + esc(repository) + '"></option>').join('');
-    if (document.activeElement !== githubRepository) {
-      githubRepository.value = context.repository || '';
-    }
-    githubRepository.disabled = credential.status === 'pending';
-    githubRefresh.disabled = credential.status === 'pending';
-    githubStatus.textContent = context.error || credential.error ||
-      (context.repository
-        ? 'Daily digest target: ' + context.repository + (context.source ? ' (' + context.source + ')' : '') +
-          (credential.source ? ' · credential: ' + credential.source : '')
-        : repositories.length
-          ? 'Enter a repository to analyze or choose an authenticated suggestion. Invocation stays blocked until access is validated.'
-          : 'Validating the repository and signed-in GitHub credential.');
-    githubStatus.className = 'inline-note' + ((context.error || credential.error) ? ' err' : '');
-  }
-
   function renderLocal(state) {
     const running = state.local.status === 'running';
     const localControl = localRuntimeControlState(state);
@@ -1325,22 +1293,6 @@ ${commandClientScript()}
     if (!state.sourceWorkspace.materialized) {
       return { blocked: true, reason: 'Create the generated app in the selected source location first.', focus: 'source' };
     }
-    if (!state.githubContext || !state.githubContext.repository) {
-      return {
-        blocked: true,
-        reason: (state.githubContext && state.githubContext.error) ||
-          'Select a GitHub repository before invoking the daily digest.',
-        focus: 'github'
-      };
-    }
-    if (!state.githubCredential || state.githubCredential.status !== 'ready') {
-      return {
-        blocked: true,
-        reason: (state.githubCredential && state.githubCredential.error) ||
-          'Validate the signed-in GitHub credential before invoking.',
-        focus: 'github'
-      };
-    }
     const cooldownSeconds = binding.activeSource === 'gateway'
       ? Math.max(0, Math.ceil(((binding.nextInvokeAt || 0) - Date.now()) / 1000))
       : 0;
@@ -1363,8 +1315,8 @@ ${commandClientScript()}
   function renderTriggerEditors(state, selectedAzure) {
     const queueInput = state.trigger === 'queue' && (state.target === 'local' || (selectedAzure && selectedAzure.kind === 'queue'));
     const connectorInput = state.trigger === 'connector' && state.target === 'local';
-    const httpInput = state.trigger === 'http' && (
-      state.target === 'local' ||
+    const httpInput = (state.target === 'local' && (state.trigger === 'http' || state.trigger === 'timer')) || (
+      state.trigger === 'http' &&
       (selectedAzure && selectedAzure.kind === 'http' && (!(selectedAzure.methods || []).length || selectedAzure.methods.includes('POST')))
     );
     const nextTriggerInputKey = queueInput
@@ -1402,15 +1354,29 @@ ${commandClientScript()}
     const nextHttpRequestInputKey = httpInput
       ? state.target + ':http:' + (selectedAzure ? selectedAzure.name : 'local')
       : '';
-    httpRequestEditor.hidden = !httpInput;
+    parametersPanel.hidden = !httpInput;
+    httpRequestEditor.hidden = false;
+    const draft = state.httpRequestDraft || {};
     if (nextHttpRequestInputKey !== httpRequestInputKey) {
       httpRequestInputKey = nextHttpRequestInputKey;
-      const draft = state.httpRequestDraft || {};
       httpRequestHeaders.value = draft.headersText == null ? '{}' : draft.headersText;
       httpRequestBody.value = draft.bodyText == null ? '' : draft.bodyText;
+    } else {
+      if (document.activeElement !== httpRequestHeaders && draft.headersText != null &&
+          httpRequestHeaders.value !== draft.headersText) httpRequestHeaders.value = draft.headersText;
+      if (document.activeElement !== httpRequestBody && draft.bodyText != null &&
+          httpRequestBody.value !== draft.bodyText) httpRequestBody.value = draft.bodyText;
     }
+    const parameterSchema = (state.parameters || {}).schema;
+    const requiredParameters = parameterSchema && Array.isArray(parameterSchema.required) ? parameterSchema.required : [];
+    const parameterCount = parameterSchema ? Object.keys(parameterSchema.properties || {}).length : 0;
+    parametersSummary.textContent = parameterCount
+      ? parameterCount + ' declared · ' + requiredParameters.length + ' required'
+      : 'JSON request body';
     httpRequestNote.textContent = state.httpRequestError ||
-      'POST sends this JSON object exactly. Empty body is allowed. Azure Functions Hosted Skills Preview owns Content-Type and authentication; protected or credential-bearing headers are rejected.';
+      'Parameters are sent as the JSON request body to HTTP and Timer manual tests.' +
+      (requiredParameters.length ? ' Required: ' + requiredParameters.join(', ') + '.' : '') +
+      ' Safe drafts persist for this canvas; credential-like values do not.';
     httpRequestNote.className = 'inline-note http-request-note' + (state.httpRequestError ? ' err' : '');
     return { queueInput, connectorInput, httpInput };
   }
@@ -1580,7 +1546,6 @@ ${commandClientScript()}
     renderTriggers(state);
     renderDoctor(state);
     renderSource(state);
-    renderGithub(state);
     renderLocal(state);
     renderDeployment(state);
     renderInvoke(state);
@@ -1632,26 +1597,6 @@ ${commandClientScript()}
   }
   [timerCadence, timerTime, timerWeekday, timerWeeklyTime, timerMinute].forEach((control) => {
     control.addEventListener('change', applyTimerSchedule);
-  });
-  githubRefresh.addEventListener('click', async () => {
-    githubRefresh.disabled = true;
-    setStatus('Refreshing GitHub credential and repository suggestions...');
-    const result = await postJson('/github/refresh');
-    setStatus(result.ok ? 'GitHub repository suggestions refreshed.' : result.message);
-  });
-  async function applyGithubRepository() {
-    if (!githubRepository.value) return;
-    githubRepository.disabled = true;
-    setStatus('Validating repository access...');
-    const result = await postJson('/github/select-repository', { repository: githubRepository.value });
-    if (result.ok) githubRepository.value = result.repository;
-    setStatus(result.ok ? 'Repository to analyze selected.' : result.message);
-  }
-  githubRepository.addEventListener('change', applyGithubRepository);
-  githubRepository.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    applyGithubRepository();
   });
 
   sourceCustomize.addEventListener('click', () => {
@@ -1782,6 +1727,7 @@ ${commandClientScript()}
     clearTimeout(httpDraftTimer);
     const result = await postJson('/http-request/draft', currentHttpRequestPayload());
     if (!result.ok) throw new Error(result.message || 'HTTP request is invalid.');
+    if (result.bodyText) httpRequestBody.value = result.bodyText;
     const overridden = result.overriddenHeaders || [];
     httpRequestNote.textContent = overridden.length
       ? 'Azure Functions Hosted Skills Preview will override ' + overridden.join(', ') + ' with application/json.'
@@ -1852,11 +1798,6 @@ ${commandClientScript()}
       invokeGate.textContent = gate.reason;
       setStatus('Invoke blocked: ' + gate.reason);
       if (gate.focus === 'model' && modelBindingPanel) modelBindingPanel.open = true;
-      if (gate.focus === 'github' && githubPanel) {
-        githubPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        githubRepository.focus({ preventScroll: true });
-        return;
-      }
       if (gate.focus === 'source' && sourceWorkspacePanel) {
         sourceWorkspacePanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
@@ -1904,15 +1845,19 @@ ${commandClientScript()}
     const selectedHttpFunction = latest && latest.target === 'azure'
       ? (latest.azure.functions || []).find((fn) => fn.name === latest.azure.functionName)
       : null;
-    const httpInput = latest && latest.trigger === 'http' && (
-      latest.target === 'local' ||
+    const httpInput = latest && (
+      (latest.target === 'local' && (latest.trigger === 'http' || latest.trigger === 'timer')) ||
+      (latest.trigger === 'http' &&
       (selectedHttpFunction && (!(selectedHttpFunction.methods || []).length || selectedHttpFunction.methods.includes('POST')))
+      )
     );
     let httpRequest;
     if (httpInput) {
       try {
+        await saveHttpRequestDraftNow();
         httpRequest = currentHttpRequestPayload();
       } catch (error) {
+        parametersPanel.open = true;
         httpRequestNote.textContent = error.message;
         httpRequestNote.className = 'inline-note http-request-note err';
         (error.message.startsWith('HTTP headers') ? httpRequestHeaders : httpRequestBody).focus();
@@ -1931,8 +1876,10 @@ ${commandClientScript()}
     if (r.ok) setStatus((r.result.ok ? 'Invoked: ' : 'Invoke failed: ') + (r.result.note || ''));
     else {
       if (httpInput) {
+        parametersPanel.open = true;
         httpRequestNote.textContent = r.message || 'HTTP request failed.';
         httpRequestNote.className = 'inline-note http-request-note err';
+        httpRequestBody.focus({ preventScroll: true });
       }
       setStatus(r.message);
     }
