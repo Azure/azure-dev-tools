@@ -65,7 +65,7 @@ If the official skill is not available, say so rather than claiming it ran.
 
 For the daily GitHub repository digest:
 
-- Choose **New local function** and confirm the **MODEL ENDPOINT** selection.
+- Choose **Local Function App** and confirm the **MODEL ENDPOINT** selection.
 - Use **Create Models** only after an explicit user decision; it provisions
   real Azure resources and is separate from Function App deployment.
 - Click **Start local function** and wait for the local Functions host.

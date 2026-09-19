@@ -54,7 +54,7 @@ launcher does not duplicate that official skill. Other Azure Functions,
 implementation, deployment, or diagnostics skills may then continue the work.
 Do not claim an unavailable official skill was loaded.
 
-Guide the user through **New local function**, **MODEL ENDPOINT**,
+Guide the user through **Local Function App**, **MODEL ENDPOINT**,
 **Start local function**, and **Timer → Invoke Trigger**. Watch **Trigger
 activity**, **Commands**, the local host log, and **Agent digest**. Creating
 models is a separate Azure write from deploying the Function App. Do not

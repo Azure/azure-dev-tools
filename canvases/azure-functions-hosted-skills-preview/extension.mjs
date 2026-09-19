@@ -7510,7 +7510,7 @@ async function startServer(
 
 		if (req.method === "POST" && req.url === "/local/start") {
 			if (entry.target !== "local") {
-				responseJson(res, { ok: false, message: "Select New local function first." });
+				responseJson(res, { ok: false, message: "Select Local Function App first." });
 				return;
 			}
 			if (entry.deployment.status === "preparing") {
@@ -7928,7 +7928,7 @@ async function startServer(
 
 		if (req.method === "POST" && req.url === "/register-app-project") {
 			if (entry.target !== "local") {
-				responseJson(res, { ok: false, message: "Select New local function first." });
+				responseJson(res, { ok: false, message: "Select Local Function App first." });
 				return;
 			}
 			(async () => {
@@ -7954,7 +7954,7 @@ async function startServer(
 
 		if (req.method === "POST" && req.url === "/deploy-azure") {
 			if (entry.target !== "local") {
-				responseJson(res, { ok: false, message: "Select New local function first." });
+				responseJson(res, { ok: false, message: "Select Local Function App first." });
 				return;
 			}
 			(async () => {
@@ -8211,7 +8211,7 @@ const canvas = createCanvas({
 			inputSchema: { type: "object", properties: {} },
 			async handler({ instanceId }) {
 				const entry = ensureEntry(instanceId);
-				if (entry.target !== "local") return { ok: false, message: "Select New local function first." };
+				if (entry.target !== "local") return { ok: false, message: "Select Local Function App first." };
 				try {
 					await startLocalEnvironment(entry);
 					return { ok: true, port: entry.local.port };

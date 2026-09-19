@@ -654,7 +654,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
     <h2 class="sec">BUILD NEW OR SELECT EXISTING</h2>
     <div class="controls">
       <div class="seg" role="tablist">
-        <button id="target-local">New local function</button>${withAzureExistingApp ? '\n        <button id="target-azure">Azure Function App</button>' : ''}
+        <button id="target-local">Local Function App</button>${withAzureExistingApp ? '\n        <button id="target-azure">Azure Function App</button>' : ''}
       </div>${withAzureExistingApp ? '\n      <select id="sub" style="display:none" title="Azure subscription"></select>\n      <select id="app" style="display:none" title="Azure Function App"></select>\n      <button class="btn ghost" id="refresh-apps" style="display:none" title="Reload the Function App list">Refresh</button>' : ''}
     </div>
     <div class="local-path" id="source-workspace-panel">
