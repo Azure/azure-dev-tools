@@ -174,6 +174,12 @@ export function renderHostedSkillsHtml(profile) {
 	const withDeploymentPreflight = enabled("deploymentPreflight");
 	const withFullClient = HOSTED_SKILLS_RENDERER_FEATURES.every(enabled);
 	const displayName = "Azure Functions Hosted Skills Preview";
+	const feedbackUrl =
+		"https://github.com/microsoft/azure-dev-tools/issues/new" +
+		`?title=${encodeURIComponent(`${displayName} feedback`)}` +
+		`&body=${encodeURIComponent(
+			`Product: ${displayName}\nCanvas: ${PLUGIN_ID}\nVersion: ${STUDIO_VERSION}\nRevision: ${STUDIO_REVISION}\n\n## Feedback\n\n`,
+		)}`;
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -463,7 +469,10 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ''}
      long lines instead of truncating them with an ellipsis. */
   .doctor-detail, .doctor-fix { font-size: .76rem; color: var(--muted); margin-top: .3rem; white-space: normal; overflow-wrap: anywhere; }
   .doctor-fix { color: var(--ink); }
-  .build-stamp { margin-top: 1rem; color: var(--muted); font: 10px/1.2 ui-monospace, "SFMono-Regular", Menlo, monospace; text-align: right; opacity: .7; }
+  .footer-meta { margin-top: 1rem; display: flex; justify-content: flex-end; align-items: center; gap: .6rem; color: var(--muted); font: 10px/1.2 ui-monospace, "SFMono-Regular", Menlo, monospace; opacity: .7; }
+  .build-stamp { text-align: right; }
+  .feedback-link { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; }
+  .feedback-link:hover, .feedback-link:focus-visible { color: var(--ink); border-bottom-color: currentColor; }
   .local-path {
     margin: .35rem 0 .8rem; padding: .65rem .75rem; border: 1px solid var(--line);
     border-radius: 10px; background: var(--panel);
@@ -757,7 +766,10 @@ ${withLoadTest ? `    <div class="panel" id="load-test-panel" style="display:non
       </div>
     </div>` : ''}
 
-    <div class="build-stamp">${displayName} v${STUDIO_VERSION} &middot; rev ${STUDIO_REVISION} &middot; ${PLUGIN_ID}</div>
+    <div class="footer-meta">
+      <div class="build-stamp">${displayName} v${STUDIO_VERSION} &middot; rev ${STUDIO_REVISION} &middot; ${PLUGIN_ID}</div>
+      <a class="feedback-link" href="${feedbackUrl.replaceAll("&", "&amp;")}" target="_blank" rel="noopener noreferrer">Send feedback</a>
+    </div>
   </div>
 
 ${withFullClient ? `<script>
