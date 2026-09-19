@@ -95,7 +95,6 @@ function retainedHostedSkillsClient() {
     $('model-create-confirm').disabled = Boolean(create.running);
     $('model-create-status').textContent = create.running ? 'Creating Foundry models...' : (create.message || '');
     $('local-log-tag').textContent = next.local.status + (next.local.port ? ' · :' + next.local.port : '');
-    $('local-note').textContent = next.local.error || '';
     $('local-log').textContent = (next.local.logTail || []).join('\n');
     $('skill-name').textContent = next.hero?.title || 'Skill';
     const skills = (next.hostedSkills || []).filter((skill) => skill.trigger === next.trigger);
@@ -138,6 +137,7 @@ function retainedHostedSkillsClient() {
       }
       instructionRevision = result.revision || instructionRevision;
       if ($('prompt-preview').value === prompt) {
+        $('prompt-preview').value = result.prompt == null ? prompt : result.prompt;
         instructionDirty = false;
         $('instruction-status').textContent = 'Saved';
       } else {
@@ -735,8 +735,6 @@ ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project"
         </div>
       </form>
     </dialog>
-    <div class="inline-note" id="local-note" hidden></div>
-    <div class="inline-note" id="code-location" hidden></div>
 ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment-output" hidden>
       <summary><span class="ttl">Deployment output</span><span class="cmdlog-sub" id="deployment-summary"></span></summary>
       <div class="body">
@@ -1045,7 +1043,6 @@ ${commandClientScript()}
   const deploymentCancel = document.getElementById('deployment-cancel');
   const deploymentOutputNote = document.getElementById('deployment-output-note');
   const deploymentTerminal = document.getElementById('deployment-terminal');
-  const codeLocation = document.getElementById('code-location');
   const triggersEl = document.getElementById('triggers');
   const triggerTestInputWrap = document.getElementById('trigger-test-input-wrap');
   const triggerTestInput = document.getElementById('trigger-test-input');
@@ -1073,7 +1070,6 @@ ${commandClientScript()}
   const invokeLabel = document.getElementById('invoke-label');
   const invokeGate = document.getElementById('invoke-gate');
   const localToggleBtn = document.getElementById('local-toggle');
-  const localNote = document.getElementById('local-note');
   const localLogEl = document.getElementById('local-log');
   const localLogTag = document.getElementById('local-log-tag');
   const localLogWrap = document.getElementById('local-log-wrap');
@@ -1384,7 +1380,6 @@ ${commandClientScript()}
     sourceNote.hidden = !showAzure;
     localBuildActions.style.display = localControl.visible ? '' : 'none';
     deploymentOutput.style.display = showAzure ? 'none' : '';
-    codeLocation.hidden = true;
     localLogWrap.style.display = showAzure ? 'none' : '';
     observeLabel.style.display = (!showAzure || state.azure.app) ? '' : 'none';
     openAiBtn.style.display = showAzure ? '' : 'none';
@@ -1426,9 +1421,6 @@ ${commandClientScript()}
     localToggleBtn.textContent = localControl.label;
     localToggleBtn.disabled = localControl.disabled;
     localLogTag.textContent = state.local.status + (running && state.local.port ? (' · :' + state.local.port) : '');
-    localNote.textContent = state.local.error || (running ? state.local.functions.map((f) => f.name + ' (' + f.kind + (f.route ? ', ' + f.route : '') + ')').join(' · ') : '');
-    localNote.className = 'inline-note' + (state.local.error ? ' err' : '');
-    localNote.hidden = state.target !== 'local' || !localNote.textContent;
     localLogEl.textContent = (state.local.logTail || []).join('\\n');
     localLogEl.scrollTop = localLogEl.scrollHeight;
   }
@@ -2186,6 +2178,7 @@ ${commandClientScript()}
         if (!result.ok) throw new Error(result.message || 'Could not save skill instructions.');
         instructionRevision = result.revision || instructionRevision;
         if (promptPreview.value === prompt) {
+          promptPreview.value = result.prompt == null ? prompt : result.prompt;
           instructionDirty = false;
           instructionStatus.textContent = 'Saved';
         } else {

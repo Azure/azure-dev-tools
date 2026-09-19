@@ -72,6 +72,14 @@ export function agentDocument(text, relativePath = "") {
 	};
 }
 
+export function completeAgentDocument(text, relativePath = "") {
+	const source = String(text);
+	if (!/^(?:\uFEFF)?---\r?\n/.test(source)) return null;
+	const parsed = agentDocument(source, relativePath);
+	if (!parsed.frontmatter || !parsed.trigger || !/^\s*name:\s*\S+/m.test(parsed.frontmatter)) return null;
+	return parsed;
+}
+
 export async function discoverHostedSkills(root) {
 	const nestedSourceDir = path.join(root, "src");
 	const sourceDir = await readdir(nestedSourceDir, { withFileTypes: true })
@@ -129,7 +137,7 @@ export function replaceAgentBody(source, bodyText) {
 	return `${frontmatter}\n${String(bodyText).trim()}\n`;
 }
 
-export async function writeAgentBodyIfRevision(filePath, bodyText, expectedRevision) {
+export async function writeAgentDocumentIfRevision(filePath, nextSource, expectedRevision) {
 	const source = await readFile(filePath, "utf8");
 	const currentRevision = createHash("sha256").update(source).digest("hex");
 	if (!expectedRevision || currentRevision !== expectedRevision) {
@@ -139,7 +147,7 @@ export async function writeAgentBodyIfRevision(filePath, bodyText, expectedRevis
 	}
 	const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	try {
-		await writeFile(temporary, replaceAgentBody(source, bodyText));
+		await writeFile(temporary, String(nextSource));
 		const beforeReplace = await readFile(filePath, "utf8");
 		if (createHash("sha256").update(beforeReplace).digest("hex") !== currentRevision) {
 			throw new Error(
@@ -151,4 +159,9 @@ export async function writeAgentBodyIfRevision(filePath, bodyText, expectedRevis
 		await rm(temporary, { force: true }).catch(() => {});
 		throw error;
 	}
+}
+
+export async function writeAgentBodyIfRevision(filePath, bodyText, expectedRevision) {
+	const source = await readFile(filePath, "utf8");
+	return writeAgentDocumentIfRevision(filePath, replaceAgentBody(source, bodyText), expectedRevision);
 }

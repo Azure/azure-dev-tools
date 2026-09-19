@@ -171,9 +171,11 @@ import {
 } from "./trigger-drafts.mjs";
 import {
 	chooseHostedSkill,
+	completeAgentDocument,
 	discoverHostedSkills,
 	timerHttpTwin,
 	writeAgentBodyIfRevision,
+	writeAgentDocumentIfRevision,
 } from "./hosted-skill-workspace.mjs";
 
 const { version: STUDIO_VERSION, revision: STUDIO_REVISION } = resolveStudioBuildInfo(import.meta.url);
@@ -1074,9 +1076,40 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, foll
 	if (!Object.keys(entry.hostedSkillSelections).length) {
 		entry.hostedSkillSelections = await loadHostedSkillSelections(entry);
 	}
+	const knownSelectedPath = entry.selectedSkillPath || entry.hostedSkillSelections[entry.trigger] || "";
+	const selectedOnDisk = skills.find((skill) => skill.relativePath === knownSelectedPath);
+	const nestedImport = selectedOnDisk
+		? completeAgentDocument(selectedOnDisk.body, selectedOnDisk.relativePath)
+		: null;
+	let recoveryNotice = "";
+	if (selectedOnDisk && nestedImport && entry.sourceWorkspace.sourceMode === "managed") {
+		await writeAgentDocumentIfRevision(
+			path.join(requireTemplateDir(entry), selectedOnDisk.relativePath),
+			selectedOnDisk.body,
+			selectedOnDisk.revision,
+		);
+		if (selectedOnDisk.relativePath === HERO_TEMPLATE.timerAgentRelPath && nestedImport.trigger === "timer") {
+			const twin = skills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
+			if (twin) {
+				const importedContract = parameterContractOf(`${nestedImport.frontmatter}\n${nestedImport.body}`);
+				await writeAgentDocumentIfRevision(
+					path.join(requireTemplateDir(entry), twin.relativePath),
+					httpTwinContent(nestedImport.body, nestedImport.name, importedContract.schema),
+					twin.revision,
+				);
+			}
+		}
+		skills = await discoverHostedSkills(requireTemplateDir(entry));
+		recoveryNotice = `Recovered the complete hosted-skill document pasted into ${selectedOnDisk.relativePath}.`;
+	} else if (selectedOnDisk && nestedImport) {
+		recoveryNotice = `Detected a complete hosted-skill document nested inside ${selectedOnDisk.relativePath}. Existing apps are not rewritten during Refresh; open the instructions editor and save explicitly to replace it.`;
+	}
 	if (followSelectedFileTrigger && entry.selectedSkillPath) {
-		const selectedOnDisk = skills.find((skill) => skill.relativePath === entry.selectedSkillPath);
-		if (selectedOnDisk?.trigger) entry.trigger = selectedOnDisk.trigger;
+		const refreshedSelected = skills.find((skill) => skill.relativePath === entry.selectedSkillPath);
+		if (refreshedSelected?.trigger) {
+			entry.trigger = refreshedSelected.trigger;
+			entry.hostedSkillSelections[entry.trigger] = refreshedSelected.relativePath;
+		}
 	}
 	const preferredPath = entry.hostedSkillSelections[entry.trigger] || "";
 	const choice = chooseHostedSkill(skills, entry.trigger, preferredPath);
@@ -1088,7 +1121,7 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, foll
 	entry.hostedSkillSelections[entry.trigger] = choice.selected.relativePath;
 	const notice = choice.fallback
 		? `${choice.missingPath} is no longer available; selected ${choice.selected.relativePath}.`
-		: "";
+		: recoveryNotice;
 	applySelectedHostedSkill(entry, choice.selected, notice);
 	if (choice.selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
 		const httpSkill = skills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
@@ -4732,13 +4765,29 @@ async function saveInstructions(entry, bodyText, expectedRevision) {
 		const selected = entry.selectedHostedSkill;
 		if (!selected) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
 		const selectedPath = path.join(dir, selected.relativePath);
-		await writeAgentBodyIfRevision(selectedPath, clean, expectedRevision);
-		if (selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
+		const imported = completeAgentDocument(bodyText, selected.relativePath);
+		if (imported) {
+			await writeAgentDocumentIfRevision(selectedPath, String(bodyText), expectedRevision);
+		} else {
+			await writeAgentBodyIfRevision(selectedPath, clean, expectedRevision);
+		}
+		if (selected.relativePath === HERO_TEMPLATE.timerAgentRelPath && (!imported || imported.trigger === "timer")) {
 			const twinPath = path.join(dir, HERO_TEMPLATE.httpAgentRelPath);
 			const twin = entry.hostedSkills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
-			if (await exists(twinPath)) await writeAgentBodyIfRevision(twinPath, clean, twin?.revision);
+			if (await exists(twinPath)) {
+				if (imported) {
+					const importedContract = parameterContractOf(`${imported.frontmatter}\n${imported.body}`);
+					await writeAgentDocumentIfRevision(
+						twinPath,
+						httpTwinContent(imported.body, imported.name, importedContract.schema),
+						twin?.revision,
+					);
+				} else {
+					await writeAgentBodyIfRevision(twinPath, clean, twin?.revision);
+				}
+			}
 		}
-		await refreshHostedSkillsFromDiskUnlocked(entry);
+		await refreshHostedSkillsFromDiskUnlocked(entry, { followSelectedFileTrigger: Boolean(imported) });
 	});
 	broadcast(entry, "state", snapshot(entry));
 }
