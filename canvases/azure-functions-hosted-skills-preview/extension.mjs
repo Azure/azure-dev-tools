@@ -171,8 +171,8 @@ import {
 import {
 	chooseHostedSkill,
 	discoverHostedSkills,
-	replaceAgentBody,
 	timerHttpTwin,
+	writeAgentBodyIfRevision,
 } from "./hosted-skill-workspace.mjs";
 
 const { version: STUDIO_VERSION, revision: STUDIO_REVISION } = resolveStudioBuildInfo(import.meta.url);
@@ -1054,6 +1054,7 @@ function applySelectedHostedSkill(entry, skill, notice = "") {
 	entry.selectedSkillPath = skill?.relativePath || "";
 	entry.skillSelectionNotice = notice;
 	entry.prompt = skill?.body || "";
+	entry.instructionRevision = skill?.revision || "";
 	entry.parameterContract = skill ? parameterContractOf(`${skill.frontmatter}\n${skill.body}`) : {
 		schema: null,
 		defaults: {},
@@ -1065,10 +1066,14 @@ function applySelectedHostedSkill(entry, skill, notice = "") {
 	}
 }
 
-async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true } = {}) {
+async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, followSelectedFileTrigger = false } = {}) {
 	let skills = await discoverHostedSkills(requireTemplateDir(entry));
 	if (!Object.keys(entry.hostedSkillSelections).length) {
 		entry.hostedSkillSelections = await loadHostedSkillSelections(entry);
+	}
+	if (followSelectedFileTrigger && entry.selectedSkillPath) {
+		const selectedOnDisk = skills.find((skill) => skill.relativePath === entry.selectedSkillPath);
+		if (selectedOnDisk?.trigger) entry.trigger = selectedOnDisk.trigger;
 	}
 	const preferredPath = entry.hostedSkillSelections[entry.trigger] || "";
 	const choice = chooseHostedSkill(skills, entry.trigger, preferredPath);
@@ -1085,9 +1090,10 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true } = {
 	if (choice.selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
 		const httpSkill = skills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
 		if (httpSkill && httpSkill.body.trim() !== choice.selected.body.trim()) {
-			await writeAgentBody(
+			await writeAgentBodyIfRevision(
 				path.join(requireTemplateDir(entry), httpSkill.relativePath),
 				choice.selected.body,
+				httpSkill.revision,
 			);
 			skills = await discoverHostedSkills(requireTemplateDir(entry));
 			entry.hostedSkills = skills;
@@ -1103,7 +1109,10 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true } = {
 	return { changed: false, restarted: false };
 }
 
-async function refreshWorkspaceFromDisk(entry, { restartIfRunning = true, persist = true } = {}) {
+async function refreshWorkspaceFromDisk(
+	entry,
+	{ restartIfRunning = true, persist = true, followSelectedFileTrigger = true } = {},
+) {
 	if (!entry.sourceWorkspace.materialized || !entry.templateDir) {
 		throw new Error("Create the generated app in the current worktree or an isolated workspace first.");
 	}
@@ -1111,7 +1120,7 @@ async function refreshWorkspaceFromDisk(entry, { restartIfRunning = true, persis
 	await withSourceWorkspaceMutation(
 		entry,
 		"Refreshing hosted skills from disk",
-		() => refreshHostedSkillsFromDiskUnlocked(entry, { persist }),
+		() => refreshHostedSkillsFromDiskUnlocked(entry, { persist, followSelectedFileTrigger }),
 	);
 	const currentFingerprint = await runtimeSourceFingerprint(entry);
 	const changed = Boolean(previousFingerprint && currentFingerprint !== previousFingerprint);
@@ -1736,16 +1745,19 @@ function snapshot(entry) {
 		hero: entry.hero,
 		fetchError: entry.fetchError || "",
 		prompt: entry.prompt,
-		hostedSkills: entry.hostedSkills.map(({ relativePath, fileName, name, trigger, route, functionName }) => ({
-			relativePath, fileName, name, trigger, route, functionName,
+		hostedSkills: entry.hostedSkills.map(({ relativePath, fileName, name, description, trigger, triggerArgs, route, functionName }) => ({
+			relativePath, fileName, name, description, trigger, triggerArgs, route, functionName,
 		})),
 		selectedSkillPath: entry.selectedSkillPath,
+		instructionRevision: entry.instructionRevision,
 		skillSelectionNotice: entry.skillSelectionNotice,
 		selectedHostedSkill: entry.selectedHostedSkill
 			? {
 					relativePath: entry.selectedHostedSkill.relativePath,
 					name: entry.selectedHostedSkill.name,
+					description: entry.selectedHostedSkill.description,
 					trigger: entry.selectedHostedSkill.trigger,
+					triggerArgs: entry.selectedHostedSkill.triggerArgs,
 					functionName: entry.selectedHostedSkill.functionName,
 					timerHttpTwinPath: timerHttpTwin(entry.selectedHostedSkill, entry.hostedSkills)?.relativePath || "",
 				}
@@ -1922,6 +1934,7 @@ function ensureEntry(instanceId) {
 		hostedSkillSelections: {},
 		selectedHostedSkill: null,
 		selectedSkillPath: "",
+		instructionRevision: "",
 		skillSelectionNotice: "",
 		timerSchedule: {
 			cadence: "daily",
@@ -3713,17 +3726,8 @@ async function initializeModelBindings(entry) {
 	return entry.modelBinding.initializePromise;
 }
 
-async function writeAgentBody(filePath, bodyText) {
-	const source = await readFile(filePath, "utf8");
-	const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-	await writeFile(temporary, replaceAgentBody(source, bodyText));
-	await rename(temporary, filePath);
-}
-
 async function loadTimerSchedule(entry) {
-	const timerPath = path.join(requireTemplateDir(entry), entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.timerAgentRelPath);
-	const source = await readFile(timerPath, "utf8");
-	const expression = source.match(/^\s*schedule:\s*["']?([^"'\r\n]+)["']?\s*$/m)?.[1]?.trim() || "";
+	const expression = String(entry.selectedHostedSkill?.triggerArgs?.schedule || "");
 	const parsed = timerScheduleFromExpression(expression);
 	if (parsed) {
 		entry.timerSchedule = parsed;
@@ -4522,7 +4526,7 @@ async function ensureTemplate(entry) {
 }
 
 async function refreshTemplateFromDisk(entry) {
-	await refreshWorkspaceFromDisk(entry, { restartIfRunning: false });
+	await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
 	return entry.hero;
 }
 
@@ -4534,7 +4538,7 @@ function requireTemplateDir(entry) {
 // Save instructions: writes the same body into the Timer agent file
 // (preserving its own front matter) and regenerates the HTTP twin so both
 // stay in sync with the canonical instructions text.
-async function saveInstructions(entry, bodyText) {
+async function saveInstructions(entry, bodyText, expectedRevision) {
 	let clean = "";
 	await withSourceWorkspaceMutation(entry, "Saving skill instructions", async () => {
 		clean = String(bodyText).trim();
@@ -4542,10 +4546,11 @@ async function saveInstructions(entry, bodyText) {
 		const selected = entry.selectedHostedSkill;
 		if (!selected) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
 		const selectedPath = path.join(dir, selected.relativePath);
-		await writeAgentBody(selectedPath, clean);
+		await writeAgentBodyIfRevision(selectedPath, clean, expectedRevision);
 		if (selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
 			const twinPath = path.join(dir, HERO_TEMPLATE.httpAgentRelPath);
-			if (await exists(twinPath)) await writeAgentBody(twinPath, clean);
+			const twin = entry.hostedSkills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
+			if (await exists(twinPath)) await writeAgentBodyIfRevision(twinPath, clean, twin?.revision);
 		}
 		await refreshHostedSkillsFromDiskUnlocked(entry);
 	});
@@ -7054,10 +7059,10 @@ async function startServer(
 				const previousSkillName = entry.selectedHostedSkill?.name || entry.hero?.title || "Hosted skill";
 				entry.trigger = id;
 				if (changed && entry.sourceWorkspace.materialized) {
-					await refreshWorkspaceFromDisk(entry, { restartIfRunning: false });
+					await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
 					if (!entry.selectedHostedSkill && (id === "queue" || id === "connector")) {
 						await syncGeneratedTriggerFilesImpl(entry, previousPrompt, previousSkillName);
-						await refreshWorkspaceFromDisk(entry, { restartIfRunning: false });
+						await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
 					}
 				}
 				broadcast(entry, "state", snapshot(entry));
@@ -7115,9 +7120,8 @@ async function startServer(
 			readJsonBody(req).then(async (body) => {
 				try {
 					assertWorkspaceMutationAllowed(entry, "Editing skill instructions");
-					await refreshTemplateFromDisk(entry);
-					await saveInstructions(entry, String(body.prompt ?? ""));
-					responseJson(res, { ok: true, prompt: entry.prompt });
+					await saveInstructions(entry, String(body.prompt ?? ""), String(body.revision || ""));
+					responseJson(res, { ok: true, prompt: entry.prompt, revision: entry.instructionRevision });
 				} catch (error) {
 					responseJson(res, { ok: false, message: shortError(error) });
 				}
@@ -7141,7 +7145,11 @@ async function startServer(
 		if (req.method === "POST" && req.url === "/hosted-skill/select") {
 			readJsonBody(req).then(async (body) => {
 				const relativePath = String(body.relativePath || "");
-				await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, persist: false });
+				await refreshWorkspaceFromDisk(entry, {
+					restartIfRunning: false,
+					persist: false,
+					followSelectedFileTrigger: false,
+				});
 				const selected = entry.hostedSkills.find(
 					(skill) => skill.trigger === entry.trigger && skill.relativePath === relativePath,
 				);

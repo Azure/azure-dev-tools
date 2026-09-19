@@ -95,13 +95,16 @@ function retainedHostedSkillsClient() {
     $('local-note').textContent = next.local.error || '';
     $('local-log').textContent = (next.local.logTail || []).join('\n');
     $('skill-name').textContent = next.hero?.title || 'Skill';
-    if (document.activeElement !== $('prompt-preview')) $('prompt-preview').value = next.prompt || '';
     const skills = (next.hostedSkills || []).filter((skill) => skill.trigger === next.trigger);
     $('hosted-skill-picker').innerHTML = skills.length
       ? skills.map((skill) => '<option value="' + esc(skill.relativePath) + '">' + esc(skill.name + ' · ' + skill.fileName) + '</option>').join('')
       : '<option value="">No hosted skills for this trigger</option>';
     $('hosted-skill-picker').value = next.selectedSkillPath || '';
     $('hosted-skill-picker').disabled = !skills.length;
+    if (!instructionDirty && document.activeElement !== $('prompt-preview')) {
+      $('prompt-preview').value = next.prompt || '';
+      instructionRevision = next.instructionRevision || '';
+    }
     const invocations = next.invocations || [];
     $('inv-total').textContent = invocations.length + ' event' + (invocations.length === 1 ? '' : 's');
     $('inv-list').innerHTML = invocations.length ? invocations.map((item) => '<div class="invocation ' + (item.ok ? 'ok' : 'bad') + '"><div class="inv-note">' + esc(item.note) + '</div></div>').join('') : '<div class="empty">Waiting for local trigger activity.</div>';
@@ -113,8 +116,57 @@ function retainedHostedSkillsClient() {
   $('doctor-toggle').addEventListener('click', () => { const panel = $('doctor-panel'); panel.hidden = !panel.hidden; });
   $('doctor-run').addEventListener('click', () => post('/doctor/run'));
   $('source-customize').addEventListener('click', () => { $('source-path-editor').hidden = false; $('source-create').hidden = false; });
-  $('source-create').addEventListener('click', () => post('/source/create', { mode: 'current', relativePath: $('source-relative-path').value || '' }));
-  $('target-local').addEventListener('click', () => state?.sourceWorkspace?.materialized ? Promise.resolve({ ok: true }) : post('/source/create', { mode: 'current', relativePath: state?.sourceWorkspace?.relativePath || $('source-relative-path').value || '' }));
+  let instructionTimer;
+  let instructionDirty = false;
+  let instructionRevision = '';
+  let instructionSavePromise = null;
+  async function saveInstructionsNow() {
+    clearTimeout(instructionTimer);
+    if (!instructionDirty) return { ok: true };
+    if (instructionSavePromise) return instructionSavePromise;
+    const prompt = $('prompt-preview').value;
+    const revision = instructionRevision;
+    instructionSavePromise = (async () => {
+      $('instruction-status').textContent = 'Saving…';
+      const result = await post('/prompt', { prompt, revision });
+      if (!result.ok) {
+        $('instruction-status').textContent = result.message || 'Save failed.';
+        throw new Error(result.message || 'Save failed.');
+      }
+      instructionRevision = result.revision || instructionRevision;
+      if ($('prompt-preview').value === prompt) {
+        instructionDirty = false;
+        $('instruction-status').textContent = 'Saved';
+      } else {
+        instructionTimer = setTimeout(() => saveInstructionsNow().catch(() => {}), 500);
+      }
+      return result;
+    })();
+    try {
+      return await instructionSavePromise;
+    } finally {
+      instructionSavePromise = null;
+    }
+  }
+  async function flushInstructions() {
+    do {
+      await saveInstructionsNow();
+    } while (instructionDirty);
+  }
+  $('prompt-preview').addEventListener('input', () => {
+    instructionDirty = true;
+    $('instruction-status').textContent = 'Saving…';
+    clearTimeout(instructionTimer);
+    instructionTimer = setTimeout(() => saveInstructionsNow().catch(() => {}), 500);
+  });
+  $('target-local').addEventListener('click', async () => {
+    try { await flushInstructions(); } catch { return; }
+    return state?.sourceWorkspace?.materialized ? Promise.resolve({ ok: true }) : post('/source/create', { mode: 'current', relativePath: state?.sourceWorkspace?.relativePath || $('source-relative-path').value || '' });
+  });
+  $('source-create').addEventListener('click', async () => {
+    try { await flushInstructions(); } catch { return; }
+    await post('/source/create', { mode: 'current', relativePath: $('source-relative-path').value || '' });
+  });
   $('model-subscription').addEventListener('change', () => post('/models/select-subscription', { subscription: $('model-subscription').value }));
   $('model-source').addEventListener('change', () => post('/models/select-source', { source: 'foundry' }));
   $('model-resource').addEventListener('change', () => {
@@ -126,13 +178,12 @@ function retainedHostedSkillsClient() {
   $('model-mode-existing').addEventListener('click', () => { $('model-existing-view').style.display = ''; $('model-create-view').hidden = true; });
   $('model-mode-create').addEventListener('click', () => { $('model-existing-view').style.display = 'none'; $('model-create-view').hidden = false; post('/models/create-plan'); });
   $('model-create-confirm').addEventListener('click', () => post('/models/create', { confirm: true }));
-  $('open-vscode').addEventListener('click', () => post('/open-vscode'));
-  $('refresh-source').addEventListener('click', () => post('/source/refresh'));
-  $('hosted-skill-picker').addEventListener('change', () => post('/hosted-skill/select', { relativePath: $('hosted-skill-picker').value }));
-  $('save-instructions').addEventListener('click', () => post('/prompt', { prompt: $('prompt-preview').value }));
-  $('edit-instructions').addEventListener('click', () => post('/edit-instructions-vscode'));
+  $('open-vscode').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/open-vscode'); });
+  $('refresh-source').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/source/refresh'); });
+  $('hosted-skill-picker').addEventListener('change', async () => { try { await flushInstructions(); } catch { return; } await post('/hosted-skill/select', { relativePath: $('hosted-skill-picker').value }); });
+  $('edit-instructions').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/edit-instructions-vscode'); });
   $('local-toggle').addEventListener('click', () => post(state?.local?.status === 'running' ? '/local/stop' : '/local/start'));
-  $('invoke').addEventListener('click', () => post('/invoke', { prompt: $('trigger-test-input').value || '' }));
+  $('invoke').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/invoke', { prompt: $('trigger-test-input').value || '' }); });
   $('clear-invocations').addEventListener('click', () => post('/clear'));
   $('deployment-preflight').addEventListener('click', () => post('/deployment/prepare'));
   const events = new EventSource('/events');
@@ -370,7 +421,8 @@ export function renderHostedSkillsHtml(profile) {
   .instr summary::-webkit-details-marker { display: none; }
   .instr summary::before { content: "›"; color: var(--accent); font-size: 1rem; transition: transform .2s; }
   .instr[open] summary::before { transform: rotate(90deg); }
-  .instr summary > span:first-child { flex: 1 1 auto; }
+  .instr summary > span:first-child { flex: 0 0 auto; }
+  .instr summary .skill-picker { margin-left: auto; }
   .instr[open] summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
   .instr .ibody { background: var(--panel); border: 1px solid var(--line); border-top: none; border-radius: 0 0 12px 12px; padding: .8rem 1rem; }
   .instr pre {
@@ -400,10 +452,10 @@ export function renderHostedSkillsHtml(profile) {
   #invoke.running .invoke-spinner { display: inline-block; }
   @keyframes invoke-spin { to { transform: rotate(360deg); } }
   .bar { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0 .45rem; align-items: center; }
-  .skill-picker { min-width: 240px; max-width: 390px; flex: 1 1 280px; }
+  .skill-picker { min-width: 180px; max-width: 360px; flex: 1 1 240px; }
   .skill-picker select {
-    width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 10px; padding: 9px 10px; font: inherit; font-size: .8rem;
+    width: 100%; background: #fff; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 8px; font: inherit; font-size: .74rem;
   }
   .status { min-height: 1.1rem; color: var(--muted); font-size: .78rem; margin: 0 0 1rem; }
   .status a { color: var(--accent2); text-decoration: none; }
@@ -638,9 +690,6 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
       <button class="btn ghost" id="refresh-source">Refresh</button>
-      <label class="skill-picker" id="hosted-skill-picker-wrap">Hosted skill
-        <select id="hosted-skill-picker" aria-label="Hosted skill"></select>
-      </label>
 ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project" title="Creates a separate session from the isolated generated working copy; it does not add files to your current project." hidden>${ICONS.github}<span class="label">Create isolated GitHub Session</span></button>\n` : ''}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `\n      <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ''}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ''}
     </div>
     <div class="inline-note" id="local-note" hidden></div>
@@ -713,11 +762,14 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
     <div class="inline-note" id="trigger-guidance"></div>
 
     <details class="instr" id="instr" open>
-      <summary><span>SKILL INSTRUCTIONS</span><span class="tag" id="skill-name">Skill</span></summary>
+      <summary>
+        <span>SKILL INSTRUCTIONS</span>
+        <span class="skill-picker" id="hosted-skill-picker-wrap"><select id="hosted-skill-picker" aria-label="Hosted skill"></select></span>
+        <span class="tag" id="skill-name">Skill</span>
+      </summary>
       <div class="ibody">
         <textarea id="prompt-preview" maxlength="131072" spellcheck="false" aria-label="Skill instructions"></textarea>
         <div class="row2">
-          <button class="btn" id="save-instructions">Save instructions</button>
           <button class="btn ghost" id="edit-instructions">${ICONS.vscode}<span class="label">Edit in VS Code</span></button>
           <span class="inline-note" id="instruction-status"></span>
         </div>
@@ -964,8 +1016,8 @@ ${commandClientScript()}
   const instructions = document.getElementById('instr');
   const skillName = document.getElementById('skill-name');
   const promptPreview = document.getElementById('prompt-preview');
-  const saveInstructionsBtn = document.getElementById('save-instructions');
   const instructionStatus = document.getElementById('instruction-status');
+  const openVscodeBtn = document.getElementById('open-vscode');
   const refreshSourceBtn = document.getElementById('refresh-source');
   const hostedSkillPickerWrap = document.getElementById('hosted-skill-picker-wrap');
   const hostedSkillPicker = document.getElementById('hosted-skill-picker');
@@ -1009,7 +1061,11 @@ ${commandClientScript()}
   let triggerInputKey = '';
   let httpRequestInputKey = '';
   let sourceEditorOpen = false;
-  let instructionInputKey = '';
+  let instructionPath = '';
+  let instructionRevision = '';
+  let instructionDirty = false;
+  let instructionSaveTimer = null;
+  let instructionSavePromise = null;
 
   function renderHostedSkillPicker(state) {
     const local = state.target === 'local';
@@ -1623,13 +1679,14 @@ ${commandClientScript()}
     renderInvocations(state);
     renderDigest(state);
     if (typeof window.applyCommandState === 'function') window.applyCommandState(state);
-    skillName.textContent = state.hero && state.hero.title ? state.hero.title : 'Skill';
-    saveInstructionsBtn.disabled = state.target !== 'local' || !state.selectedHostedSkill;
-    const nextInstructionKey = (state.selectedSkillPath || '') + ':' + (state.prompt || '');
-    if (document.activeElement !== promptPreview && instructionInputKey !== nextInstructionKey) {
+    skillName.textContent = state.selectedHostedSkill?.fileName || 'Skill';
+    const nextInstructionPath = state.selectedSkillPath || '';
+    if (!instructionDirty && document.activeElement !== promptPreview &&
+        (instructionPath !== nextInstructionPath || instructionRevision !== (state.instructionRevision || ''))) {
       promptPreview.value = state.prompt || '';
-      instructionInputKey = nextInstructionKey;
-      instructionStatus.textContent = state.selectedSkillPath || '';
+      instructionPath = nextInstructionPath;
+      instructionRevision = state.instructionRevision || '';
+      instructionStatus.textContent = nextInstructionPath;
       instructionStatus.className = 'inline-note';
     }
   }
@@ -1642,6 +1699,7 @@ ${commandClientScript()}
     const btn = e.target.closest('.trig');
     if (!btn || btn.disabled) return;
     try {
+      await saveInstructionsNow();
       if (latest && latest.trigger === 'http') await saveHttpRequestDraftNow();
       if (latest && latest.target === 'local' && (latest.trigger === 'queue' || latest.trigger === 'connector')) {
         await saveTriggerPayloadDraftNow(latest.trigger);
@@ -1688,6 +1746,7 @@ ${commandClientScript()}
     const source = latest && latest.sourceWorkspace ? latest.sourceWorkspace : {};
     const moving = Boolean(source.materialized);
     if (moving && !window.confirm('Move the complete generated app to ' + sourceRelativePath.value + '?')) return;
+    if (!(await flushInstructionEdits())) return;
     sourceCreate.disabled = true;
     setStatus(moving ? 'Moving generated app...' : 'Creating generated app...');
     const result = await postJson(moving ? '/source/move-current' : '/source/create', moving
@@ -1702,6 +1761,7 @@ ${commandClientScript()}
   sourceRemove.addEventListener('click', async () => {
     const source = latest && latest.sourceWorkspace ? latest.sourceWorkspace : {};
     if (!window.confirm('Remove the generated app at ' + source.destination + '? Removal stops if generated files changed.')) return;
+    if (!(await flushInstructionEdits())) return;
     sourceRemove.disabled = true;
     setStatus('Checking and removing owned files...');
     const result = await postJson('/source/remove', { confirm: true });
@@ -1712,8 +1772,8 @@ ${commandClientScript()}
     setStatus(result.message || (result.ok ? 'Generated app removed.' : 'Nothing was removed.'));
   });
 
-  targetLocalBtn.addEventListener('click', () => postJson('/select-target', { target: 'local' }));
-  targetAzureBtn.addEventListener('click', () => postJson('/select-target', { target: 'azure' }));
+  targetLocalBtn.addEventListener('click', async () => { if (await flushInstructionEdits()) await postJson('/select-target', { target: 'local' }); });
+  targetAzureBtn.addEventListener('click', async () => { if (await flushInstructionEdits()) await postJson('/select-target', { target: 'azure' }); });
   modelSubscription.addEventListener('change', () => postJson('/models/select-subscription', { subscription: modelSubscription.value }));
   modelSource.addEventListener('change', () => postJson('/models/select-source', { source: modelSource.value }));
   modelResource.addEventListener('change', () => {
@@ -1748,6 +1808,7 @@ ${commandClientScript()}
   appSel.addEventListener('change', () => { if (!appSel.value) return; setStatus('Discovering functions…'); postJson('/az/select-app', { resourceId: appSel.value }).then(() => setStatus('')); });
   refreshAppsBtn.addEventListener('click', () => postJson('/az/refresh-apps'));
   refreshSourceBtn.addEventListener('click', async () => {
+    if (!(await flushInstructionEdits())) return;
     refreshSourceBtn.disabled = true;
     setStatus('Refreshing hosted skills from disk...');
     try {
@@ -1760,6 +1821,10 @@ ${commandClientScript()}
   hostedSkillPicker.addEventListener('change', async () => {
     const relativePath = hostedSkillPicker.value;
     if (!relativePath) return;
+    if (!(await flushInstructionEdits())) {
+      hostedSkillPicker.value = latest?.selectedSkillPath || '';
+      return;
+    }
     hostedSkillPicker.disabled = true;
     setStatus('Selecting hosted skill...');
     const result = await postJson('/hosted-skill/select', { relativePath });
@@ -1876,6 +1941,7 @@ ${commandClientScript()}
   triggerTestInput.addEventListener('input', scheduleTriggerPayloadDraftSave);
 
   invokeBtn.addEventListener('click', async () => {
+    if (!(await flushInstructionEdits())) return;
     const invocationRunning = latest && (latest.invocations || []).some((item) => item.phase === 'running');
     if (invocationRunning) {
       if (!window.confirm('An invocation is already running. Cancel it and restart the local function host?')) return;
@@ -2010,31 +2076,72 @@ ${commandClientScript()}
     setStatus('Trigger activity cleared.');
   });
 
-  promptPreview.addEventListener('input', () => {
-    instructionStatus.textContent = 'Unsaved changes';
-    instructionStatus.className = 'inline-note warn';
-  });
-  saveInstructionsBtn.addEventListener('click', async () => {
-    saveInstructionsBtn.disabled = true;
-    instructionStatus.textContent = 'Saving...';
-    instructionStatus.className = 'inline-note';
-    try {
-      const result = await postJson('/prompt', { prompt: promptPreview.value });
-      if (!result.ok) throw new Error(result.message || 'Could not save skill instructions.');
-      instructionInputKey = (latest?.selectedSkillPath || '') + ':' + result.prompt;
-      instructionStatus.textContent = 'Saved to ' + (latest?.selectedSkillPath || 'selected skill') + '.';
+  async function saveInstructionsNow() {
+    clearTimeout(instructionSaveTimer);
+    if (!instructionDirty) return { ok: true };
+    if (instructionSavePromise) return instructionSavePromise;
+    const prompt = promptPreview.value;
+    const revision = instructionRevision;
+    instructionSavePromise = (async () => {
+      instructionStatus.textContent = 'Saving…';
       instructionStatus.className = 'inline-note';
-      setStatus(instructionStatus.textContent);
-    } catch (error) {
-      instructionStatus.textContent = error.message;
-      instructionStatus.className = 'inline-note err';
-      setStatus('Save failed: ' + error.message);
+      try {
+        const result = await postJson('/prompt', { prompt, revision });
+        if (!result.ok) throw new Error(result.message || 'Could not save skill instructions.');
+        instructionRevision = result.revision || instructionRevision;
+        if (promptPreview.value === prompt) {
+          instructionDirty = false;
+          instructionStatus.textContent = 'Saved';
+        } else {
+          scheduleInstructionSave();
+        }
+        return result;
+      } catch (error) {
+        instructionStatus.textContent = error.message;
+        instructionStatus.className = 'inline-note err';
+        setStatus('Save failed: ' + error.message);
+        throw error;
+      }
+    })();
+    try {
+      return await instructionSavePromise;
     } finally {
-      saveInstructionsBtn.disabled = false;
+      instructionSavePromise = null;
     }
+  }
+  function scheduleInstructionSave() {
+    clearTimeout(instructionSaveTimer);
+    instructionSaveTimer = setTimeout(() => saveInstructionsNow().catch(() => {}), 500);
+  }
+  async function flushInstructionEdits() {
+    try {
+      do {
+        await saveInstructionsNow();
+      } while (instructionDirty);
+      return true;
+    } catch {
+      promptPreview.focus({ preventScroll: true });
+      return false;
+    }
+  }
+  promptPreview.addEventListener('input', () => {
+    instructionDirty = true;
+    instructionStatus.textContent = 'Saving…';
+    instructionStatus.className = 'inline-note';
+    scheduleInstructionSave();
   });
 
+  openVscodeBtn.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!(await flushInstructionEdits())) return;
+    setStatus('Opening VS Code...');
+    const result = await postJson('/open-vscode');
+    setStatus(result.ok ? (result.message || 'Opened in VS Code: ' + result.dir) : result.message);
+  }, true);
+
   document.getElementById('edit-instructions').addEventListener('click', async () => {
+    if (!(await flushInstructionEdits())) return;
     setStatus('Opening agent instructions in VS Code...');
     const r = await postJson('/edit-instructions-vscode');
     setStatus(r.ok ? 'Opened agent instructions in VS Code.' : r.message);
