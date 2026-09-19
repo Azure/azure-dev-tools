@@ -247,7 +247,9 @@ export function renderHostedSkillsHtml(profile) {
 	const withModelCreation = enabled("modelCreation");
 	const withDeployment = enabled("deployment");
 	const withTelemetry = enabled("applicationInsights") && enabled("liveTelemetry");
-	const withLoadTest = enabled("loadTest");
+	// Keep the runtime capability available, but shelve its Hosted Skills UI
+	// until load testing has a broader Functions-focused experience.
+	const withLoadTest = false;
 	const withDeploymentPreflight = enabled("deploymentPreflight");
 	const withFullClient = HOSTED_SKILLS_RENDERER_FEATURES.every(enabled);
 	const displayName = "Azure Functions Hosted Skills Preview";
@@ -570,6 +572,7 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ''}
   .local-path-label { color: var(--muted); font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; flex: 1 1 auto; }
   .local-path code { color: var(--ink); font: .76rem/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace; overflow-wrap: anywhere; }
   .local-path-value { display: block; margin-top: .35rem; }
+  .source-management-actions { display: flex; align-items: center; gap: .55rem; margin-top: .35rem; flex-wrap: wrap; }
   .path-action {
     border: 0; background: transparent; color: var(--accent2); cursor: pointer;
     padding: 3px 4px; font: 600 .74rem/1 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -655,15 +658,19 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
     <div class="controls">
       <div class="seg" role="tablist">
         <button id="target-local">Local Function App</button>${withAzureExistingApp ? '\n        <button id="target-azure">Azure Function App</button>' : ''}
-      </div>${withAzureExistingApp ? '\n      <select id="sub" style="display:none" title="Azure subscription"></select>\n      <select id="app" style="display:none" title="Azure Function App"></select>\n      <button class="btn ghost" id="refresh-apps" style="display:none" title="Reload the Function App list">Refresh</button>' : ''}
+      </div>
     </div>
     <div class="local-path" id="source-workspace-panel">
       <div class="local-path-head">
         <span class="local-path-label">Local function path</span>
         <span class="tag" id="source-workspace-tag">creating</span>
-        <button class="path-action" id="source-customize">Change</button>
       </div>
       <code class="local-path-value" id="source-path-display">Preparing…</code>
+      <div class="source-management-actions" aria-label="Local Function App source">
+        <button class="path-action" id="source-customize">Change</button>
+        <button class="path-action" id="open-existing-app">Open existing app…</button>
+        <button class="path-action" id="return-generated-app" hidden>Return to generated app</button>
+      </div>
       <div class="local-path-editor" id="source-path-editor" hidden>
         <label>Subfolder in current worktree
           <input id="source-relative-path" value="functions/daily-repo-digest" autocomplete="off" spellcheck="false">
@@ -676,8 +683,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
       </div>
       <p class="inline-note" id="source-workspace-note"></p>
     </div>
-    <div class="inline-note" id="source-note"></div>
-    <h2 class="sec">MODEL ENDPOINT</h2>
+    <h2 class="sec" id="model-endpoint-label">MODEL ENDPOINT</h2>
     <details class="panel model-binding" id="model-binding-panel">
       <summary>
         <span class="model-summary"><strong>Existing</strong><span class="model-summary-detail" id="model-summary-detail">Discovering available models...</span></span>
@@ -715,10 +721,26 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
         </div>` : ''}
       </div>
     </details>
+${withAzureExistingApp ? `    <details class="panel model-binding" id="azure-function-app-panel" hidden>
+      <summary>
+        <span class="model-summary"><strong>Azure Function App</strong><span class="model-summary-detail" id="azure-function-app-summary">Select a Function App</span></span>
+        <span class="tag" id="azure-function-app-tag">select app</span>
+      </summary>
+      <div class="body">
+        <div class="fields">
+          <label>Subscription<select id="sub" title="Azure subscription"></select></label>
+          <label>Function App<select id="app" title="Azure Function App"></select></label>
+        </div>
+        <div class="model-actions">
+          <button class="btn ghost" id="refresh-apps" title="Reload the Function App list">Refresh</button>
+          <span class="model-status" id="source-note"></span>
+        </div>
+        <div class="chips" id="azure-function-picker" aria-label="Azure functions"></div>
+      </div>
+    </details>
+` : ''}
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
-      <button class="btn ghost" id="open-existing-app">Open existing app…</button>
-      <button class="btn ghost" id="return-generated-app" hidden>Return to generated app</button>
       <button class="btn ghost" id="refresh-source">Refresh</button>
 ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project" title="Creates a separate session from the isolated generated working copy; it does not add files to your current project." hidden>${ICONS.github}<span class="label">Create isolated GitHub Session</span></button>\n` : ''}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `\n      <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ''}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ''}
     </div>
@@ -747,7 +769,7 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
       </div>
     </details>` : ''}
 
-    <h2 class="sec">Trigger</h2>
+    <h2 class="sec" id="trigger-section-label">Trigger</h2>
     <div class="chips" id="triggers"></div>
     <div class="trigger-test-input" id="trigger-test-input-wrap" hidden>
       <label><span id="trigger-test-input-label">Trigger/test input (optional)</span>
@@ -1001,6 +1023,11 @@ ${commandClientScript()}
   const appSel = document.getElementById('app');
   const refreshAppsBtn = document.getElementById('refresh-apps');
   const sourceNote = document.getElementById('source-note');
+  const azureFunctionAppPanel = document.getElementById('azure-function-app-panel');
+  const azureFunctionAppSummary = document.getElementById('azure-function-app-summary');
+  const azureFunctionAppTag = document.getElementById('azure-function-app-tag');
+  const azureFunctionPicker = document.getElementById('azure-function-picker');
+  const triggerSectionLabel = document.getElementById('trigger-section-label');
   const doctorToggleBtn = document.getElementById('doctor-toggle');
   const doctorToggleLabel = document.getElementById('doctor-toggle-label');
   const doctorPanel = document.getElementById('doctor-panel');
@@ -1017,6 +1044,7 @@ ${commandClientScript()}
   const sourceCancel = document.getElementById('source-cancel');
   const sourceRemove = document.getElementById('source-remove');
   const sourceWorkspaceNote = document.getElementById('source-workspace-note');
+  const modelEndpointLabel = document.getElementById('model-endpoint-label');
   const modelBindingPanel = document.getElementById('model-binding-panel');
   const modelBindingTag = document.getElementById('model-binding-tag');
   const modelSummaryDetail = document.getElementById('model-summary-detail');
@@ -1075,18 +1103,7 @@ ${commandClientScript()}
   const localLogWrap = document.getElementById('local-log-wrap');
   const observeLabel = document.getElementById('observe-label');
   const openAiBtn = document.getElementById('open-app-insights');
-  const loadTestToggleBtn = document.getElementById('load-test-toggle');
   const clearInvocationsBtn = document.getElementById('clear-invocations');
-  const loadTestPanel = document.getElementById('load-test-panel');
-  const ltTargetSel = document.getElementById('lt-target');
-  const ltDuration = document.getElementById('lt-duration');
-  const ltConcurrency = document.getElementById('lt-concurrency');
-  const ltRps = document.getElementById('lt-rps');
-  const ltNote = document.getElementById('lt-note');
-  const ltChart = document.getElementById('lt-chart');
-  const ltStats = document.getElementById('lt-stats');
-  const ltTerminal = document.getElementById('lt-terminal');
-  const ltStatus = document.getElementById('load-test-status');
   const telemetryPanel = document.getElementById('telemetry-panel');
   const telemetryToggleBtn = document.getElementById('telemetry-toggle');
   const telemetryTag = document.getElementById('telemetry-tag');
@@ -1110,6 +1127,7 @@ ${commandClientScript()}
   let instructionDirty = false;
   let instructionSaveTimer = null;
   let instructionSavePromise = null;
+  let azurePanelWasVisible = false;
 
   function renderHostedSkillPicker(state) {
     const local = state.target === 'local';
@@ -1134,7 +1152,8 @@ ${commandClientScript()}
     const schedule = state.timerSchedule || { cadence: 'daily', localTime: '09:00', weekday: 1, hourlyMinute: 0, status: '', error: '' };
     if (state.target === 'azure') {
       const selected = (state.azure.functions || []).find((fn) => fn.name === state.azure.functionName);
-      triggersEl.innerHTML = (state.azure.functions || []).map((fn) => {
+      triggersEl.innerHTML = '';
+      azureFunctionPicker.innerHTML = (state.azure.functions || []).map((fn) => {
         const on = fn.name === state.azure.functionName ? ' on' : '';
         const unsupported = fn.supportsInvoke ? '' : ' nyi';
         const tag = fn.supportStatus === 'conditional'
@@ -1144,12 +1163,14 @@ ${commandClientScript()}
       }).join('') || '<span class="inline-note">Select an app to discover its deployed functions and trigger bindings.</span>';
       triggerBadge.textContent = selected ? ('Function: ' + selected.name + ' · ' + selected.label) : 'Trigger: none';
     } else {
+      azureFunctionPicker.innerHTML = '';
       triggersEl.innerHTML = state.triggerTypes.map((t) => {
+        const unavailable = t.nyi || t.id === 'connector';
         const on = t.id === state.trigger ? ' on' : '';
-        const nyi = t.nyi ? ' nyi' : '';
-        const tag = t.nyi ? '<span class="nyi-tag">NYI</span>' : '';
-        const title = t.nyi ? 'Not implemented in this canvas yet' : 'Manually invoke via ' + t.label;
-        return '<button class="trig' + on + nyi + '" data-id="' + t.id + '" title="' + title + '"' + (t.nyi || !state.sourceWorkspace.materialized || state.azdOperation.active ? ' disabled' : '') + '>' + t.label + tag + '</button>';
+        const nyi = unavailable ? ' nyi' : '';
+        const tag = unavailable ? '<span class="nyi-tag">NYI</span>' : '';
+        const title = unavailable ? 'Not implemented in this canvas yet' : 'Manually invoke via ' + t.label;
+        return '<button class="trig' + on + nyi + '" data-id="' + t.id + '" title="' + title + '"' + (unavailable || !state.sourceWorkspace.materialized || state.azdOperation.active ? ' disabled' : '') + '>' + t.label + tag + '</button>';
       }).join('');
       triggerBadge.textContent = 'Trigger: ' + ((state.triggerTypes.find((t) => t.id === state.trigger) || {}).label || 'none');
     }
@@ -1374,10 +1395,13 @@ ${commandClientScript()}
     modelResource.disabled = attached || Boolean(state.modelBinding?.loading);
     modelModel.disabled = attached || Boolean(state.modelBinding?.loading);
     const localControl = localRuntimeControlState(state);
-    subSel.style.display = showAzure ? '' : 'none';
-    appSel.style.display = showAzure ? '' : 'none';
-    refreshAppsBtn.style.display = showAzure ? '' : 'none';
-    sourceNote.hidden = !showAzure;
+    modelEndpointLabel.hidden = showAzure;
+    modelBindingPanel.hidden = showAzure;
+    azureFunctionAppPanel.hidden = !showAzure;
+    triggerSectionLabel.hidden = showAzure;
+    triggersEl.hidden = showAzure;
+    if (showAzure && !azurePanelWasVisible) azureFunctionAppPanel.open = true;
+    azurePanelWasVisible = showAzure;
     localBuildActions.style.display = localControl.visible ? '' : 'none';
     deploymentOutput.style.display = showAzure ? 'none' : '';
     localLogWrap.style.display = showAzure ? 'none' : '';
@@ -1398,9 +1422,22 @@ ${commandClientScript()}
         note = state.azure.functions.length + ' function(s) found on ' + state.azure.app.name +
           (selected ? '. Selected ' + selected.name + ' (' + selected.label + '). ' + selected.hostedSkillNote + '. ' + selected.guidance : '');
       }
+      const selected = (state.azure.functions || []).find((fn) => fn.name === state.azure.functionName);
+      azureFunctionAppSummary.textContent = state.azure.app
+        ? state.azure.app.name + (selected ? ' · ' + selected.name + ' (' + selected.label + ')' : '')
+        : 'Select a Function App';
+      azureFunctionAppTag.textContent = state.azure.subscriptionsError || state.azure.appsError || state.azure.functionsError
+        ? 'error'
+        : selected ? 'ready' : state.azure.app ? state.azure.functions.length + ' functions' : 'select app';
+      azureFunctionAppTag.className = 'tag' + (selected ? ' ok' : '');
       sourceNote.textContent = note;
       sourceNote.className = 'inline-note' + ((state.azure.subscriptionsError || state.azure.appsError || state.azure.functionsError) ? ' err' : '');
-    } else sourceNote.textContent = '';
+    } else {
+      sourceNote.textContent = '';
+      azureFunctionAppSummary.textContent = 'Select a Function App';
+      azureFunctionAppTag.textContent = 'select app';
+      azureFunctionAppTag.className = 'tag';
+    }
     const reg = state.appRegistration || {};
     const registerLabel = registerAppProject.querySelector('.label');
     registerAppProject.disabled = Boolean(reg.pending || reg.ok === true);
@@ -1596,56 +1633,7 @@ ${commandClientScript()}
     }
     openAiBtn.disabled = !(state.target === 'azure' && state.azure.app);
     renderTriggerEditors(state, selectedAzure);
-    loadTestToggleBtn.style.display = state.target === 'azure' && (!selectedAzure || selectedAzure.kind !== 'http') ? 'none' : '';
     telemetryPanel.style.display = (state.azure.app) ? '' : 'none';
-  }
-
-  function chartPath(values, w, h, pad) {
-    if (!values.length) return '';
-    const max = Math.max(1, ...values);
-    const stepX = values.length > 1 ? (w - pad * 2) / (values.length - 1) : 0;
-    return values.map((v, i) => {
-      const x = pad + i * stepX;
-      const y = h - pad - (v / max) * (h - pad * 2);
-      return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1);
-    }).join(' ');
-  }
-  function renderChart(svgEl, values, color) {
-    const path = chartPath(values, 600, 90, 8);
-    svgEl.innerHTML = path ? '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2"/>' : '<text x="10" y="45" font-size="11" fill="#9ca3af">No data yet</text>';
-  }
-
-  function renderLoadTest(state) {
-    const lt = state.loadTest;
-    loadTestToggleBtn.textContent = lt.running ? 'Stop load test' : 'Load test';
-    loadTestPanel.style.display = loadTestPanel.dataset.open === '1' ? '' : (lt.running ? '' : loadTestPanel.style.display);
-    if (document.activeElement !== ltTargetSel) ltTargetSel.value = lt.target;
-    if (document.activeElement !== ltDuration) ltDuration.value = lt.durationSec;
-    if (document.activeElement !== ltConcurrency) ltConcurrency.value = lt.concurrency;
-    if (document.activeElement !== ltRps) ltRps.value = lt.maxRps;
-    ltStatus.textContent = lt.running ? 'running…' : (lt.points.length ? 'stopped' : '');
-    if (!lt.ohaAvailable && lt.ohaChecked) {
-      ltNote.className = 'inline-note err';
-      ltNote.textContent = 'oha is not installed. Install it: brew install oha (macOS) or cargo install oha, then retry. No traffic is sent without it.';
-    } else if (lt.error) {
-      ltNote.className = 'inline-note err';
-      ltNote.textContent = lt.error;
-    } else {
-      ltNote.className = 'inline-note';
-      ltNote.textContent = 'Each point is a real 3s oha burst, logged live below.';
-    }
-    const terminalText = (lt.logTail || []).join('\\n') || 'Waiting for a load test.';
-    if (ltTerminal.textContent !== terminalText) {
-      ltTerminal.textContent = terminalText;
-      ltTerminal.scrollTop = ltTerminal.scrollHeight;
-    }
-    renderChart(ltChart, lt.points.map((p) => p.rps), '#6b3fd6');
-    const last = lt.points[lt.points.length - 1];
-    const instances = lt.instanceCount == null ? '—' : lt.instanceCount;
-    const configStats = '<span title="' + esc(lt.instanceCountNote || '') + '">instances <b>' + instances + '</b></span><span>concurrency <b>' + lt.concurrency + '</b></span>';
-    ltStats.innerHTML = configStats + (last
-      ? '<span>RPS <b>' + last.rps.toFixed(1) + '</b></span><span>avg <b>' + last.avgMs.toFixed(1) + 'ms</b></span><span>p95 <b>' + last.p95Ms.toFixed(1) + 'ms</b></span><span>errors <b>' + last.errors + '</b></span><span>total <b>' + last.total + '</b></span>'
-      : '');
   }
 
   function renderTelemetry(state) {
@@ -1732,7 +1720,6 @@ ${commandClientScript()}
     renderLocal(state);
     renderDeployment(state);
     renderInvoke(state);
-    renderLoadTest(state);
     renderTelemetry(state);
     renderCommands(state);
     renderInvocations(state);
@@ -1754,7 +1741,7 @@ ${commandClientScript()}
   es.addEventListener('state', (e) => render(JSON.parse(e.data)));
   setInterval(() => { if (latest) renderInvoke(latest); }, 500);
 
-  triggersEl.addEventListener('click', async (e) => {
+  async function selectTriggerOrFunction(e) {
     const btn = e.target.closest('.trig');
     if (!btn || btn.disabled) return;
     try {
@@ -1769,7 +1756,9 @@ ${commandClientScript()}
     }
     if (btn.dataset.function) await postJson('/az/select-function', { functionName: btn.dataset.function });
     else await postJson('/select-trigger', { trigger: btn.dataset.id });
-  });
+  }
+  triggersEl.addEventListener('click', selectTriggerOrFunction);
+  azureFunctionPicker.addEventListener('click', selectTriggerOrFunction);
   function timerSchedulePayload() {
     const cadence = timerCadence.value;
     if (cadence === 'weekly') {
@@ -2145,18 +2134,6 @@ ${commandClientScript()}
     setStatus('Resolving Application Insights…');
     const r = await postJson('/telemetry/start');
     setStatus(r.ok ? '' : r.message);
-  });
-
-  loadTestToggleBtn.addEventListener('click', async () => {
-    if (latest && latest.loadTest.running) { await postJson('/load-test/stop'); return; }
-    loadTestPanel.style.display = '';
-    loadTestPanel.dataset.open = '1';
-    await postJson('/load-test/start', {
-      target: ltTargetSel.value,
-      durationSec: Number(ltDuration.value) || 60,
-      concurrency: Number(ltConcurrency.value) || 16,
-      maxRps: Number(ltRps.value) || 50,
-    });
   });
 
   clearInvocationsBtn.addEventListener('click', async () => {
