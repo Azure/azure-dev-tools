@@ -490,14 +490,6 @@ async function githubAuthHeader(entry) {
 	}
 }
 
-function githubRepositoryFromRemote(remote) {
-	const value = String(remote || "").trim();
-	const match =
-		value.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i) ||
-		value.match(/^ssh:\/\/git@github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/i);
-	return normalizeGithubRepository(match?.[1] || value);
-}
-
 function normalizeGithubRepository(value) {
 	const repository = String(value || "").trim();
 	if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return repository;
@@ -650,18 +642,6 @@ async function initializeGithubContext(entry, { force = false } = {}) {
 	const selectionError = environmentRepository && !repository
 		? new Error("GITHUB_REPOSITORY must be owner/name or a https://github.com/owner/name URL.")
 		: null;
-	if (!environmentRepository && !repository && entry.sourceWorkspace.workingDirectory) {
-		try {
-			const { stdout } = await runExternalCommandText(
-				"git",
-				["-C", entry.sourceWorkspace.workingDirectory, "config", "--get", "remote.origin.url"],
-			);
-			repository = githubRepositoryFromRemote(stdout);
-			if (repository) source = "git remote";
-		} catch {
-			/* Fall through to the authenticated GitHub CLI context. */
-		}
-	}
 	try {
 		if (selectionError) throw selectionError;
 		if (repository) {
@@ -7928,7 +7908,6 @@ export const functionStudioTestHooks = Object.freeze({
 	fixtureAuthenticationAttempts,
 	normalizeGithubAuthorization,
 	normalizeGithubRepository,
-	githubRepositoryFromRemote,
 	resolveGithubMcpCredential,
 	githubFunctionEnvironment,
 	hasRequiredGithubDigestEvidence,

@@ -36,9 +36,9 @@ and restarts the local host after rehydration.
 - **Repository to analyze** accepts `owner/repo` or a normal GitHub repository
   URL, validates access through the authenticated GitHub CLI/MCP context, and
   persists the normalized choice. Repository discovery supplies autocomplete
-  suggestions, not an allowlist. When no explicit repository, valid Git remote,
-  or still-accessible saved preference exists, the canvas validates and selects
-  `Azure/azure-functions-host`.
+  suggestions, not an allowlist. The target is independent of the current
+  project: after an explicit repository, a still-accessible saved preference
+  wins; otherwise the canvas validates and selects `Azure/azure-functions-host`.
 - GitHub daily digests apply an exact 24-hour UTC window and compact tool
   results before they reach the model.
 - **Commands** records bounded, redacted activity for Azure discovery, local
