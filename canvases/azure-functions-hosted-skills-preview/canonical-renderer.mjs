@@ -633,8 +633,8 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
       </label>
       <p class="inline-note" id="trigger-input-guidance"></p>
     </div>
-    <details class="panel parameter-panel" id="parameters-panel" hidden>
-      <summary><span><strong>Parameters</strong><span class="model-summary-detail" id="parameters-summary">JSON request body</span></span></summary>
+    <details class="panel model-binding parameter-panel" id="parameters-panel" hidden>
+      <summary><span class="model-summary"><strong>Parameters</strong></span></summary>
       <div class="body">
         <div class="http-request-editor" id="http-request-editor">
           <label>Request headers JSON
@@ -920,7 +920,6 @@ ${commandClientScript()}
   const triggerTestInputLabel = document.getElementById('trigger-test-input-label');
   const triggerInputGuidance = document.getElementById('trigger-input-guidance');
   const parametersPanel = document.getElementById('parameters-panel');
-  const parametersSummary = document.getElementById('parameters-summary');
   const httpRequestEditor = document.getElementById('http-request-editor');
   const httpRequestHeaders = document.getElementById('http-request-headers');
   const httpRequestBody = document.getElementById('http-request-body');
@@ -1369,10 +1368,6 @@ ${commandClientScript()}
     }
     const parameterSchema = (state.parameters || {}).schema;
     const requiredParameters = parameterSchema && Array.isArray(parameterSchema.required) ? parameterSchema.required : [];
-    const parameterCount = parameterSchema ? Object.keys(parameterSchema.properties || {}).length : 0;
-    parametersSummary.textContent = parameterCount
-      ? parameterCount + ' declared · ' + requiredParameters.length + ' required'
-      : 'JSON request body';
     httpRequestNote.textContent = state.httpRequestError ||
       'Parameters are sent as the JSON request body to HTTP and Timer manual tests.' +
       (requiredParameters.length ? ' Required: ' + requiredParameters.join(', ') + '.' : '') +
