@@ -1,0 +1,14 @@
+{
+  "name": "azure-functions-hosted-skills-preview",
+  "description": "Azure Functions Hosted Skills: build and run Hosted Skills in Azure Functions, locally or in Azure.",
+  "version": "0.4.0",
+  "author": {
+    "name": "Cloud Foundation",
+    "url": "https://github.com/coreai-microsoft/canvases-cloud-foundation"
+  },
+  "extensions": ".",
+  "skills": [
+    "./skills/azure-functions-hosted-skills-preview-canvas/",
+    "./skills/azure-functions-hosted-skills-preview-github-daily-digest/"
+  ]
+}

@@ -1,0 +1,4 @@
+.azure-functions-hosted-skills/
+.venv/
+__pycache__/
+local.settings.json
