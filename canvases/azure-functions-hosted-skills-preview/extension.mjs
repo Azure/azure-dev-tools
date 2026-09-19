@@ -944,15 +944,22 @@ function validateParameters(contract, value) {
 	if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
 		throw new Error("Parameters must be a JSON object.");
 	}
-	const normalized = structuredClone(parameters);
 	const schema = contract?.schema;
-	if (!schema) return normalized;
+	if (!schema) return structuredClone(parameters);
+	const properties = schema.properties || {};
+	const normalized = schema.additionalProperties === true
+		? structuredClone(parameters)
+		: Object.fromEntries(
+				Object.keys(properties)
+					.filter((name) => Object.hasOwn(parameters, name))
+					.map((name) => [name, structuredClone(parameters[name])]),
+			);
 	for (const name of schema.required || []) {
 		if (!Object.hasOwn(normalized, name) || normalized[name] === "" || normalized[name] == null) {
 			throw new Error(`Missing required parameter "${name}".`);
 		}
 	}
-	for (const [name, property] of Object.entries(schema.properties || {})) {
+	for (const [name, property] of Object.entries(properties)) {
 		if (!Object.hasOwn(normalized, name) || !property || typeof property !== "object") continue;
 		const valueAtName = normalized[name];
 		if (property.type === "string" && typeof valueAtName !== "string") {
@@ -1258,7 +1265,12 @@ function currentHttpRequestDraft(entry) {
 			});
 			return { ...stored, bodyText: JSON.stringify(parameters, null, 2) };
 		} catch {
-			return stored;
+			try {
+				const defaults = validateParameters(entry.parameterContract, entry.parameterContract.defaults);
+				return { ...stored, bodyText: JSON.stringify(defaults, null, 2) };
+			} catch {
+				return stored;
+			}
 		}
 	}
 	const draft = defaultHttpRequestDraft();

@@ -7,12 +7,12 @@ trigger:
     route: hosted-skill
     methods: ["POST"]
     auth_level: function
-input_schema: {"type":"object","properties":{"repository":{"type":"string","title":"Repository to analyze","description":"GitHub repository as owner/repo or a normal https://github.com/owner/repo URL.","default":"Azure/azure-functions-host","x-functions-hosted-skills-format":"github-repository"}},"required":["repository"],"additionalProperties":true,"x-functions-hosted-skills":{"github":{"repositoryParameter":"repository","requiredTools":["actions_list","list_issues","list_pull_requests"]}}}
+input_schema: {"type":"object","properties":{"repository":{"type":"string","title":"Repository to analyze","description":"GitHub repository as owner/repo or a normal https://github.com/owner/repo URL.","default":"Azure/azure-functions-host","x-functions-hosted-skills-format":"github-repository"},"reportingWindow":{"type":"string","title":"Reporting window","description":"Repository activity window to summarize.","default":"previous 24 hours"}},"required":["repository","reportingWindow"],"additionalProperties":false,"x-functions-hosted-skills":{"github":{"repositoryParameter":"repository","requiredTools":["actions_list","list_issues","list_pull_requests"]}}}
 mcp: true
 timeout: 1800
 ---
 
-Create a concise daily digest for the GitHub repository and reporting window provided by the HTTP request or configured runtime context.
+Create a concise daily digest for the GitHub repository in `repository` over the `reportingWindow` provided by the HTTP request or configured runtime context.
 
 Use available GitHub tools and repository context to review:
 - work items and issues, including newly opened, closed, reassigned, or blocked work;
