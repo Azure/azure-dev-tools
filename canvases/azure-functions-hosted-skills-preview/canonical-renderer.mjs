@@ -95,7 +95,13 @@ function retainedHostedSkillsClient() {
     $('local-note').textContent = next.local.error || '';
     $('local-log').textContent = (next.local.logTail || []).join('\n');
     $('skill-name').textContent = next.hero?.title || 'Skill';
-    $('prompt-preview').textContent = next.prompt || '';
+    if (document.activeElement !== $('prompt-preview')) $('prompt-preview').value = next.prompt || '';
+    const skills = (next.hostedSkills || []).filter((skill) => skill.trigger === next.trigger);
+    $('hosted-skill-picker').innerHTML = skills.length
+      ? skills.map((skill) => '<option value="' + esc(skill.relativePath) + '">' + esc(skill.name + ' · ' + skill.fileName) + '</option>').join('')
+      : '<option value="">No hosted skills for this trigger</option>';
+    $('hosted-skill-picker').value = next.selectedSkillPath || '';
+    $('hosted-skill-picker').disabled = !skills.length;
     const invocations = next.invocations || [];
     $('inv-total').textContent = invocations.length + ' event' + (invocations.length === 1 ? '' : 's');
     $('inv-list').innerHTML = invocations.length ? invocations.map((item) => '<div class="invocation ' + (item.ok ? 'ok' : 'bad') + '"><div class="inv-note">' + esc(item.note) + '</div></div>').join('') : '<div class="empty">Waiting for local trigger activity.</div>';
@@ -121,6 +127,9 @@ function retainedHostedSkillsClient() {
   $('model-mode-create').addEventListener('click', () => { $('model-existing-view').style.display = 'none'; $('model-create-view').hidden = false; post('/models/create-plan'); });
   $('model-create-confirm').addEventListener('click', () => post('/models/create', { confirm: true }));
   $('open-vscode').addEventListener('click', () => post('/open-vscode'));
+  $('refresh-source').addEventListener('click', () => post('/source/refresh'));
+  $('hosted-skill-picker').addEventListener('change', () => post('/hosted-skill/select', { relativePath: $('hosted-skill-picker').value }));
+  $('save-instructions').addEventListener('click', () => post('/prompt', { prompt: $('prompt-preview').value }));
   $('edit-instructions').addEventListener('click', () => post('/edit-instructions-vscode'));
   $('local-toggle').addEventListener('click', () => post(state?.local?.status === 'running' ? '/local/stop' : '/local/start'));
   $('invoke').addEventListener('click', () => post('/invoke', { prompt: $('trigger-test-input').value || '' }));
@@ -368,6 +377,11 @@ export function renderHostedSkillsHtml(profile) {
     white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; line-height: 1.55; color: var(--ink);
     max-height: 180px; overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
   }
+  .instr textarea {
+    width: 100%; min-height: 220px; resize: vertical; white-space: pre-wrap;
+    overflow-wrap: anywhere; font: .78rem/1.55 ui-monospace, "SFMono-Regular", Menlo, monospace;
+    color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
+  }
   .instr .row2 { display: flex; gap: .5rem; margin-top: .6rem; align-items: center; }
 
   .btn {
@@ -386,6 +400,11 @@ export function renderHostedSkillsHtml(profile) {
   #invoke.running .invoke-spinner { display: inline-block; }
   @keyframes invoke-spin { to { transform: rotate(360deg); } }
   .bar { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0 .45rem; align-items: center; }
+  .skill-picker { min-width: 240px; max-width: 390px; flex: 1 1 280px; }
+  .skill-picker select {
+    width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 10px; font: inherit; font-size: .8rem;
+  }
   .status { min-height: 1.1rem; color: var(--muted); font-size: .78rem; margin: 0 0 1rem; }
   .status a { color: var(--accent2); text-decoration: none; }
   .status a:hover { text-decoration: underline; }
@@ -618,6 +637,10 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
     </details>
     <div class="bar" id="local-build-actions">
       <button class="btn ghost" id="open-vscode">${ICONS.vscode}<span class="label">Open in VS Code</span></button>
+      <button class="btn ghost" id="refresh-source">Refresh</button>
+      <label class="skill-picker" id="hosted-skill-picker-wrap">Hosted skill
+        <select id="hosted-skill-picker" aria-label="Hosted skill"></select>
+      </label>
 ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project" title="Creates a separate session from the isolated generated working copy; it does not add files to your current project." hidden>${ICONS.github}<span class="label">Create isolated GitHub Session</span></button>\n` : ''}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `\n      <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ''}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ''}
     </div>
     <div class="inline-note" id="local-note" hidden></div>
@@ -692,9 +715,11 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
     <details class="instr" id="instr" open>
       <summary><span>SKILL INSTRUCTIONS</span><span class="tag" id="skill-name">Skill</span></summary>
       <div class="ibody">
-        <pre id="prompt-preview"></pre>
+        <textarea id="prompt-preview" maxlength="131072" spellcheck="false" aria-label="Skill instructions"></textarea>
         <div class="row2">
+          <button class="btn" id="save-instructions">Save instructions</button>
           <button class="btn ghost" id="edit-instructions">${ICONS.vscode}<span class="label">Edit in VS Code</span></button>
+          <span class="inline-note" id="instruction-status"></span>
         </div>
       </div>
     </details>
@@ -939,6 +964,11 @@ ${commandClientScript()}
   const instructions = document.getElementById('instr');
   const skillName = document.getElementById('skill-name');
   const promptPreview = document.getElementById('prompt-preview');
+  const saveInstructionsBtn = document.getElementById('save-instructions');
+  const instructionStatus = document.getElementById('instruction-status');
+  const refreshSourceBtn = document.getElementById('refresh-source');
+  const hostedSkillPickerWrap = document.getElementById('hosted-skill-picker-wrap');
+  const hostedSkillPicker = document.getElementById('hosted-skill-picker');
   const invokeBtn = document.getElementById('invoke');
   const invokeLabel = document.getElementById('invoke-label');
   const invokeGate = document.getElementById('invoke-gate');
@@ -979,6 +1009,26 @@ ${commandClientScript()}
   let triggerInputKey = '';
   let httpRequestInputKey = '';
   let sourceEditorOpen = false;
+  let instructionInputKey = '';
+
+  function renderHostedSkillPicker(state) {
+    const local = state.target === 'local';
+    hostedSkillPickerWrap.hidden = !local;
+    refreshSourceBtn.hidden = !local;
+    const skills = (state.hostedSkills || []).filter((skill) => skill.trigger === state.trigger);
+    const inventoryKey = skills.map((skill) => skill.relativePath + ':' + skill.name).join('|');
+    if (hostedSkillPicker.dataset.inventory !== inventoryKey) {
+      hostedSkillPicker.innerHTML = skills.length
+        ? skills.map((skill) => '<option value="' + esc(skill.relativePath) + '">' + esc(skill.name + ' · ' + skill.fileName) + '</option>').join('')
+        : '<option value="">No hosted skills for this trigger</option>';
+      hostedSkillPicker.dataset.inventory = inventoryKey;
+    }
+    hostedSkillPicker.disabled = !state.sourceWorkspace.materialized || !skills.length || state.local.status === 'starting';
+    if (document.activeElement !== hostedSkillPicker && hostedSkillPicker.value !== state.selectedSkillPath) {
+      hostedSkillPicker.value = state.selectedSkillPath || '';
+    }
+    if (state.skillSelectionNotice) setStatus(state.skillSelectionNotice);
+  }
 
   function renderTriggers(state) {
     const schedule = state.timerSchedule || { cadence: 'daily', localTime: '09:00', weekday: 1, hourlyMinute: 0, status: '', error: '' };
@@ -1304,6 +1354,16 @@ ${commandClientScript()}
     if (!state.sourceWorkspace.materialized) {
       return { blocked: true, reason: 'Create the generated app in the selected source location first.', focus: 'source' };
     }
+    if (!state.selectedHostedSkill) {
+      return { blocked: true, reason: 'Select a hosted skill for the current trigger.', focus: 'source' };
+    }
+    if (state.trigger === 'timer' && !state.selectedHostedSkill.timerHttpTwinPath) {
+      return {
+        blocked: true,
+        reason: 'The selected Timer skill has no deterministic sibling named <timer-name>-http.agent.md. Add that HTTP twin before manual invocation.',
+        focus: 'source',
+      };
+    }
     const cooldownSeconds = binding.activeSource === 'gateway'
       ? Math.max(0, Math.ceil(((binding.nextInvokeAt || 0) - Date.now()) / 1000))
       : 0;
@@ -1551,6 +1611,7 @@ ${commandClientScript()}
     instructions.style.display = state.target === 'azure' ? 'none' : '';
     if (state.target === 'local') instructions.open = true;
     renderTriggers(state);
+    renderHostedSkillPicker(state);
     renderDoctor(state);
     renderSource(state);
     renderLocal(state);
@@ -1563,7 +1624,14 @@ ${commandClientScript()}
     renderDigest(state);
     if (typeof window.applyCommandState === 'function') window.applyCommandState(state);
     skillName.textContent = state.hero && state.hero.title ? state.hero.title : 'Skill';
-    promptPreview.textContent = state.prompt || '';
+    saveInstructionsBtn.disabled = state.target !== 'local' || !state.selectedHostedSkill;
+    const nextInstructionKey = (state.selectedSkillPath || '') + ':' + (state.prompt || '');
+    if (document.activeElement !== promptPreview && instructionInputKey !== nextInstructionKey) {
+      promptPreview.value = state.prompt || '';
+      instructionInputKey = nextInstructionKey;
+      instructionStatus.textContent = state.selectedSkillPath || '';
+      instructionStatus.className = 'inline-note';
+    }
   }
 
   const es = new EventSource('/events');
@@ -1679,6 +1747,25 @@ ${commandClientScript()}
   subSel.addEventListener('change', () => { setStatus('Loading Function Apps…'); postJson('/az/select-subscription', { subscription: subSel.value }).then(() => setStatus('')); });
   appSel.addEventListener('change', () => { if (!appSel.value) return; setStatus('Discovering functions…'); postJson('/az/select-app', { resourceId: appSel.value }).then(() => setStatus('')); });
   refreshAppsBtn.addEventListener('click', () => postJson('/az/refresh-apps'));
+  refreshSourceBtn.addEventListener('click', async () => {
+    refreshSourceBtn.disabled = true;
+    setStatus('Refreshing hosted skills from disk...');
+    try {
+      const result = await postJson('/source/refresh');
+      setStatus(result.message || (result.ok ? 'Refreshed hosted skills from disk.' : 'Refresh failed.'));
+    } finally {
+      refreshSourceBtn.disabled = false;
+    }
+  });
+  hostedSkillPicker.addEventListener('change', async () => {
+    const relativePath = hostedSkillPicker.value;
+    if (!relativePath) return;
+    hostedSkillPicker.disabled = true;
+    setStatus('Selecting hosted skill...');
+    const result = await postJson('/hosted-skill/select', { relativePath });
+    setStatus(result.ok ? 'Selected ' + relativePath + '.' : result.message);
+    hostedSkillPicker.disabled = false;
+  });
   registerAppProject.addEventListener('click', async () => {
     if (latest && latest.sourceWorkspace && latest.sourceWorkspace.mode === 'current') {
       const destination = latest.sourceWorkspace.destination;
@@ -1921,6 +2008,30 @@ ${commandClientScript()}
   clearInvocationsBtn.addEventListener('click', async () => {
     await postJson('/clear', {});
     setStatus('Trigger activity cleared.');
+  });
+
+  promptPreview.addEventListener('input', () => {
+    instructionStatus.textContent = 'Unsaved changes';
+    instructionStatus.className = 'inline-note warn';
+  });
+  saveInstructionsBtn.addEventListener('click', async () => {
+    saveInstructionsBtn.disabled = true;
+    instructionStatus.textContent = 'Saving...';
+    instructionStatus.className = 'inline-note';
+    try {
+      const result = await postJson('/prompt', { prompt: promptPreview.value });
+      if (!result.ok) throw new Error(result.message || 'Could not save skill instructions.');
+      instructionInputKey = (latest?.selectedSkillPath || '') + ':' + result.prompt;
+      instructionStatus.textContent = 'Saved to ' + (latest?.selectedSkillPath || 'selected skill') + '.';
+      instructionStatus.className = 'inline-note';
+      setStatus(instructionStatus.textContent);
+    } catch (error) {
+      instructionStatus.textContent = error.message;
+      instructionStatus.className = 'inline-note err';
+      setStatus('Save failed: ' + error.message);
+    } finally {
+      saveInstructionsBtn.disabled = false;
+    }
   });
 
   document.getElementById('edit-instructions').addEventListener('click', async () => {

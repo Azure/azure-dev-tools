@@ -101,6 +101,7 @@ function ignoredRuntimePath(relativePath) {
 		parts.some((part) => RUNTIME_DIRS.has(part)) ||
 		base === ".DS_Store" ||
 		base === "local.settings.json" ||
+		base === ".foundry-token.json" ||
 		base.endsWith(".pyc")
 	);
 }

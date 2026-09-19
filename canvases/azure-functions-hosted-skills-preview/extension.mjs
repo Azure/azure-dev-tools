@@ -14,7 +14,7 @@
 
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -121,9 +121,10 @@ import {
 	sourceManifestPath,
 	writeOwnershipManifest,
 	validateRuntimeWorkspace,
+	snapshotWorkspaceTree,
 } from "./source-workspace.mjs";
 import { StudioState } from "./studio-state.mjs";
-import { studioStateEnvironment, studioStatePaths } from "./state-migration.mjs";
+import { STATE_PRODUCT, studioStateEnvironment, studioStatePaths } from "./state-migration.mjs";
 import { acquireStateLock } from "./state-lock.mjs";
 import {
 	describeTimerSchedule,
@@ -167,6 +168,12 @@ import {
 	persistTriggerPayloadDrafts,
 	validateTriggerPayloadDraft,
 } from "./trigger-drafts.mjs";
+import {
+	chooseHostedSkill,
+	discoverHostedSkills,
+	replaceAgentBody,
+	timerHttpTwin,
+} from "./hosted-skill-workspace.mjs";
 
 const { version: STUDIO_VERSION, revision: STUDIO_REVISION } = resolveStudioBuildInfo(import.meta.url);
 const AZD_DEPLOYMENT_ENVIRONMENT = "deployment";
@@ -876,12 +883,6 @@ function portListening(port) {
 
 const localPortReservations = createLocalPortReservationPool({ isListening: portListening });
 
-// File stem -> the runtime's registered function name (hyphens become
-// underscores). Verified against a real `func start` run of the template.
-function agentFunctionName(relPath) {
-	return path.basename(relPath, ".agent.md").replace(/-/g, "_");
-}
-
 function stripFrontmatter(text) {
 	const match = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
 	return (match ? text.slice(match[0].length) : text).trim();
@@ -995,6 +996,132 @@ function skillNameOf(text) {
 	const raw = frontmatter.match(/^\s*name:\s*(.*?)\s*$/m)?.[1]?.trim() || "";
 	const unquoted = raw.match(/^(["'])(.*)\1$/)?.[2] || raw;
 	return unquoted || "Untitled skill";
+}
+
+function hostedSkillSelectionPath(entry) {
+	return path.join(requireTemplateDir(entry), `.${STATE_PRODUCT}`, "hosted-skill-selection.json");
+}
+
+function hostedSkillWorkspaceIdentity(entry) {
+	return entry.sourceWorkspace.manifest?.generationId ||
+		createHash("sha256").update(path.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24);
+}
+
+async function loadHostedSkillSelections(entry) {
+	const file = hostedSkillSelectionPath(entry);
+	try {
+		const value = JSON.parse(await readFile(file, "utf8"));
+		if (
+			value?.version !== 1 ||
+			value.workspaceIdentity !== hostedSkillWorkspaceIdentity(entry) ||
+			!value.selections ||
+			typeof value.selections !== "object" ||
+			Array.isArray(value.selections)
+		) {
+			return {};
+		}
+		return Object.fromEntries(
+			Object.entries(value.selections)
+				.filter(([trigger, relPath]) => ["timer", "http", "queue", "connector"].includes(trigger) && typeof relPath === "string")
+				.map(([trigger, relPath]) => [trigger, relPath]),
+		);
+	} catch (error) {
+		if (error?.code === "ENOENT") return {};
+		throw error;
+	}
+}
+
+async function persistHostedSkillSelections(entry) {
+	const file = hostedSkillSelectionPath(entry);
+	await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+	const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+	const value = {
+		version: 1,
+		workspaceIdentity: hostedSkillWorkspaceIdentity(entry),
+		selections: entry.hostedSkillSelections,
+	};
+	await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+	await rename(temporary, file);
+}
+
+async function runtimeSourceFingerprint(entry) {
+	const files = await snapshotWorkspaceTree(entry.agentDir);
+	return createHash("sha256").update(JSON.stringify(files)).digest("hex");
+}
+
+function applySelectedHostedSkill(entry, skill, notice = "") {
+	entry.selectedHostedSkill = skill;
+	entry.selectedSkillPath = skill?.relativePath || "";
+	entry.skillSelectionNotice = notice;
+	entry.prompt = skill?.body || "";
+	entry.parameterContract = skill ? parameterContractOf(`${skill.frontmatter}\n${skill.body}`) : {
+		schema: null,
+		defaults: {},
+		github: null,
+	};
+	if (entry.hero && skill) {
+		entry.hero.title = skill.name;
+		entry.hero.agentFile = skill.relativePath;
+	}
+}
+
+async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true } = {}) {
+	let skills = await discoverHostedSkills(requireTemplateDir(entry));
+	if (!Object.keys(entry.hostedSkillSelections).length) {
+		entry.hostedSkillSelections = await loadHostedSkillSelections(entry);
+	}
+	const preferredPath = entry.hostedSkillSelections[entry.trigger] || "";
+	const choice = chooseHostedSkill(skills, entry.trigger, preferredPath);
+	entry.hostedSkills = skills;
+	if (!choice.selected) {
+		applySelectedHostedSkill(entry, null, `No ${entry.trigger} hosted skill was found in src/*.agent.md.`);
+		return { changed: false, restarted: false };
+	}
+	entry.hostedSkillSelections[entry.trigger] = choice.selected.relativePath;
+	const notice = choice.fallback
+		? `${choice.missingPath} is no longer available; selected ${choice.selected.relativePath}.`
+		: "";
+	applySelectedHostedSkill(entry, choice.selected, notice);
+	if (choice.selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
+		const httpSkill = skills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
+		if (httpSkill && httpSkill.body.trim() !== choice.selected.body.trim()) {
+			await writeAgentBody(
+				path.join(requireTemplateDir(entry), httpSkill.relativePath),
+				choice.selected.body,
+			);
+			skills = await discoverHostedSkills(requireTemplateDir(entry));
+			entry.hostedSkills = skills;
+			applySelectedHostedSkill(
+				entry,
+				skills.find((skill) => skill.relativePath === choice.selected.relativePath),
+				notice,
+			);
+		}
+	}
+	if (persist) await persistHostedSkillSelections(entry);
+	if (entry.trigger === "timer") await loadTimerSchedule(entry);
+	return { changed: false, restarted: false };
+}
+
+async function refreshWorkspaceFromDisk(entry, { restartIfRunning = true, persist = true } = {}) {
+	if (!entry.sourceWorkspace.materialized || !entry.templateDir) {
+		throw new Error("Create the generated app in the current worktree or an isolated workspace first.");
+	}
+	const previousFingerprint = entry.local.sourceFingerprint;
+	await withSourceWorkspaceMutation(
+		entry,
+		"Refreshing hosted skills from disk",
+		() => refreshHostedSkillsFromDiskUnlocked(entry, { persist }),
+	);
+	const currentFingerprint = await runtimeSourceFingerprint(entry);
+	const changed = Boolean(previousFingerprint && currentFingerprint !== previousFingerprint);
+	let restarted = false;
+	if (restartIfRunning && changed && entry.local.status === "running") {
+		await restartLocalEnvironment(entry);
+		restarted = true;
+	}
+	broadcast(entry, "state", snapshot(entry));
+	return { changed, restarted, selected: entry.selectedHostedSkill };
 }
 
 async function listTemplateFiles(dir) {
@@ -1609,6 +1736,20 @@ function snapshot(entry) {
 		hero: entry.hero,
 		fetchError: entry.fetchError || "",
 		prompt: entry.prompt,
+		hostedSkills: entry.hostedSkills.map(({ relativePath, fileName, name, trigger, route, functionName }) => ({
+			relativePath, fileName, name, trigger, route, functionName,
+		})),
+		selectedSkillPath: entry.selectedSkillPath,
+		skillSelectionNotice: entry.skillSelectionNotice,
+		selectedHostedSkill: entry.selectedHostedSkill
+			? {
+					relativePath: entry.selectedHostedSkill.relativePath,
+					name: entry.selectedHostedSkill.name,
+					trigger: entry.selectedHostedSkill.trigger,
+					functionName: entry.selectedHostedSkill.functionName,
+					timerHttpTwinPath: timerHttpTwin(entry.selectedHostedSkill, entry.hostedSkills)?.relativePath || "",
+				}
+			: null,
 		httpPrompt: entry.httpPrompt,
 		parameters: {
 			schema: entry.target === "local" ? entry.parameterContract.schema : null,
@@ -1777,6 +1918,11 @@ function ensureEntry(instanceId) {
 		fetchError: "",
 		fetchPromise: null,
 		prompt: "",
+		hostedSkills: [],
+		hostedSkillSelections: {},
+		selectedHostedSkill: null,
+		selectedSkillPath: "",
+		skillSelectionNotice: "",
 		timerSchedule: {
 			cadence: "daily",
 			localTime: "09:00",
@@ -1852,6 +1998,7 @@ function ensureEntry(instanceId) {
 			startGeneration: 0,
 			githubCredentialFingerprint: "",
 			githubRepository: "",
+			sourceFingerprint: "",
 			functions: [],
 			logTail: [],
 			logSequence: 0,
@@ -3567,17 +3714,14 @@ async function initializeModelBindings(entry) {
 }
 
 async function writeAgentBody(filePath, bodyText) {
-	let frontmatter;
-	try {
-		frontmatter = frontmatterOf(await readFile(filePath, "utf8"));
-	} catch {
-		frontmatter = "---\nname: Agent\ndescription: Agent\n---\n";
-	}
-	await writeFile(filePath, `${frontmatter}\n${bodyText.trim()}\n`);
+	const source = await readFile(filePath, "utf8");
+	const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+	await writeFile(temporary, replaceAgentBody(source, bodyText));
+	await rename(temporary, filePath);
 }
 
 async function loadTimerSchedule(entry) {
-	const timerPath = path.join(requireTemplateDir(entry), HERO_TEMPLATE.timerAgentRelPath);
+	const timerPath = path.join(requireTemplateDir(entry), entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.timerAgentRelPath);
 	const source = await readFile(timerPath, "utf8");
 	const expression = source.match(/^\s*schedule:\s*["']?([^"'\r\n]+)["']?\s*$/m)?.[1]?.trim() || "";
 	const parsed = timerScheduleFromExpression(expression);
@@ -3757,7 +3901,7 @@ async function loadTemplateDirectory(entry, dir) {
 		dir,
 		files: await listTemplateFiles(dir),
 	};
-	await loadTimerSchedule(entry);
+	await refreshHostedSkillsFromDiskUnlocked(entry);
 	broadcast(entry, "state", snapshot(entry));
 	return entry.hero;
 }
@@ -4362,20 +4506,7 @@ async function removeCurrentSourceWorkspace(entry) {
 
 async function syncInstructionsFromDiskUnlocked(entry) {
 	await ensureAgentResponseLogging(entry);
-	const timerPath = path.join(requireTemplateDir(entry), HERO_TEMPLATE.timerAgentRelPath);
-	const httpPath = path.join(requireTemplateDir(entry), HERO_TEMPLATE.httpAgentRelPath);
-	const raw = await readFile(timerPath, "utf8");
-	const prompt = stripFrontmatter(raw);
-	const currentSkillName = skillNameOf(raw);
-	const parameterContract = parameterContractOf(raw);
-	const httpContent = httpTwinContent(prompt, currentSkillName, parameterContract.schema);
-	const currentHttp = (await exists(httpPath)) ? await readFile(httpPath, "utf8") : "";
-	if (currentHttp !== httpContent) await writeFile(httpPath, httpContent);
-	await syncGeneratedTriggerFiles(entry, prompt, currentSkillName, { lockHeld: true });
-	entry.prompt = prompt;
-	entry.parameterContract = parameterContract;
-	if (entry.hero) entry.hero.title = currentSkillName;
-	await loadTimerSchedule(entry);
+	await refreshHostedSkillsFromDiskUnlocked(entry);
 	return entry.hero;
 }
 
@@ -4391,13 +4522,8 @@ async function ensureTemplate(entry) {
 }
 
 async function refreshTemplateFromDisk(entry) {
-	if (!entry.sourceWorkspace.materialized || !entry.templateDir) {
-		throw new Error("Create the generated app in the current worktree or an isolated workspace first.");
-	}
-	if (entry.sourceWorkspace.mode === "current") {
-		return withSourceWorkspaceMutation(entry, "Refreshing the generated app", () => entry.hero);
-	}
-	return loadTemplateDirectory(entry, entry.sourceWorkspace.destination);
+	await refreshWorkspaceFromDisk(entry, { restartIfRunning: false });
+	return entry.hero;
 }
 
 function requireTemplateDir(entry) {
@@ -4411,18 +4537,18 @@ function requireTemplateDir(entry) {
 async function saveInstructions(entry, bodyText) {
 	let clean = "";
 	await withSourceWorkspaceMutation(entry, "Saving skill instructions", async () => {
-		clean = bodyText.trim() || entry.prompt;
+		clean = String(bodyText).trim();
 		const dir = requireTemplateDir(entry);
-		const timerPath = path.join(dir, HERO_TEMPLATE.timerAgentRelPath);
-		const httpPath = path.join(dir, HERO_TEMPLATE.httpAgentRelPath);
-		await writeAgentBody(timerPath, clean);
-		await writeFile(
-			httpPath,
-			httpTwinContent(clean, entry.hero?.title || "Hosted skill", entry.parameterContract.schema),
-		);
-		await syncGeneratedTriggerFiles(entry, clean, entry.hero?.title || "Hosted skill", { lockHeld: true });
+		const selected = entry.selectedHostedSkill;
+		if (!selected) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
+		const selectedPath = path.join(dir, selected.relativePath);
+		await writeAgentBody(selectedPath, clean);
+		if (selected.relativePath === HERO_TEMPLATE.timerAgentRelPath) {
+			const twinPath = path.join(dir, HERO_TEMPLATE.httpAgentRelPath);
+			if (await exists(twinPath)) await writeAgentBody(twinPath, clean);
+		}
+		await refreshHostedSkillsFromDiskUnlocked(entry);
 	});
-	entry.prompt = clean;
 	broadcast(entry, "state", snapshot(entry));
 }
 
@@ -5497,6 +5623,7 @@ async function startFuncHost(entry, ensureCurrent = () => {}) {
 	entry.local.error = "";
 	entry.local.githubCredentialFingerprint = entry.githubCredential.fingerprint;
 	entry.local.githubRepository = entry.githubContext.repository;
+	entry.local.sourceFingerprint = await runtimeSourceFingerprint(entry);
 	broadcast(entry, "state", snapshot(entry));
 }
 
@@ -5607,6 +5734,7 @@ function stopLocal(entry) {
 	entry.local.status = "stopped";
 	entry.local.port = null;
 	entry.local.functions = [];
+	entry.local.sourceFingerprint = "";
 	broadcast(entry, "state", snapshot(entry));
 }
 
@@ -5634,7 +5762,9 @@ async function invokeLocal(
 }
 
 async function invokeLocalQueue(entry, messageOverride, { runAzureCliTextImpl = runAzureCliText } = {}) {
-	const fn = entry.local.functions.find((candidate) => candidate.kind === "queue");
+	const fn = entry.local.functions.find((candidate) =>
+		candidate.kind === "queue" && candidate.name === entry.selectedHostedSkill?.functionName,
+	);
 	if (!fn) throw new Error("No Queue-triggered hosted skill is registered on the local host yet.");
 	const { json } = await readLocalSettings(entry);
 	if (json.Values.AzureWebJobsStorage !== "UseDevelopmentStorage=true") {
@@ -5691,9 +5821,11 @@ async function invokeLocalQueue(entry, messageOverride, { runAzureCliTextImpl = 
 }
 
 async function invokeLocalM365Inbox(entry, base, promptOverride, { fetchImpl = fetch } = {}) {
-	const fn = entry.local.functions.find((candidate) => candidate.kind === "connector");
+	const fn = entry.local.functions.find((candidate) =>
+		candidate.kind === "connector" && candidate.name === entry.selectedHostedSkill?.functionName,
+	);
 	if (!fn) throw new Error("No Microsoft 365 Inbox connector-triggered hosted skill is registered locally yet.");
-	const url = `${base}/agents/${agentFunctionName(HERO_TEMPLATE.connectorAgentRelPath)}/chat`;
+	const url = `${base}/agents/${entry.selectedHostedSkill.functionName}/chat`;
 	const prompt = m365InboxDryRunPromptFromJson(promptOverride);
 	const invocation = recordInvocation(entry, {
 		functionName: fn.name,
@@ -5760,7 +5892,18 @@ async function invokeLocalHttp(
 	httpRequestDraft,
 	{ fetchImpl = fetch } = {},
 ) {
-	const fn = entry.local.functions.find((f) => f.kind === "http");
+	const selected = entry.selectedHostedSkill;
+	const twin = timerTwin ? timerHttpTwin(selected, entry.hostedSkills) : null;
+	if (timerTwin && !twin) {
+		throw new Error(
+			`The selected Timer skill ${selected?.relativePath || "(none)"} has no deterministic sibling named ` +
+			`${selected?.relativePath?.replace(/\.agent\.md$/, "-http.agent.md") || "(unknown)"}.`,
+		);
+	}
+	const expectedFunctionName = timerTwin ? twin.functionName : selected?.functionName;
+	const fn = entry.local.functions.find((candidate) =>
+		candidate.kind === "http" && candidate.name === expectedFunctionName,
+	);
 	if (!fn) {
 		throw new Error(
 			timerTwin
@@ -5858,7 +6001,8 @@ async function invokeLocalHttp(
 
 async function prepareInvocation(entry, httpRequestDraft) {
 	if (entry.target !== "local") return;
-	await ensureTemplate(entry);
+	await refreshWorkspaceFromDisk(entry, { restartIfRunning: true });
+	if (!entry.selectedHostedSkill) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
 	const github = githubRequirement(entry);
 	if (github) {
 		await initializeDeclaredIntegrations(entry, {
@@ -6906,9 +7050,17 @@ async function startServer(
 				if (!t || t.nyi) throw new Error(`Trigger ${id || "(missing)"} is not implemented.`);
 				assertWorkspaceMutationAllowed(entry, "Changing triggers");
 				const changed = Boolean(t && !t.nyi && entry.trigger !== id);
+				const previousPrompt = entry.prompt;
+				const previousSkillName = entry.selectedHostedSkill?.name || entry.hero?.title || "Hosted skill";
 				entry.trigger = id;
+				if (changed && entry.sourceWorkspace.materialized) {
+					await refreshWorkspaceFromDisk(entry, { restartIfRunning: false });
+					if (!entry.selectedHostedSkill && (id === "queue" || id === "connector")) {
+						await syncGeneratedTriggerFilesImpl(entry, previousPrompt, previousSkillName);
+						await refreshWorkspaceFromDisk(entry, { restartIfRunning: false });
+					}
+				}
 				broadcast(entry, "state", snapshot(entry));
-				if (changed && entry.sourceWorkspace.materialized) await syncGeneratedTriggerFilesImpl(entry);
 				if (changed && entry.target === "local") await restartLocalEnvironmentImpl(entry);
 				responseJson(res, { ok: true, trigger: entry.trigger });
 			}).catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
@@ -6970,6 +7122,37 @@ async function startServer(
 					responseJson(res, { ok: false, message: shortError(error) });
 				}
 			});
+			return;
+		}
+
+		if (req.method === "POST" && req.url === "/source/refresh") {
+			refreshWorkspaceFromDisk(entry, { restartIfRunning: true })
+				.then((result) => responseJson(res, {
+					ok: true,
+					restarted: result.restarted,
+					message: result.restarted
+						? "Refreshed hosted skills from disk and restarted the local function host."
+						: "Refreshed hosted skills from disk.",
+				}))
+				.catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
+			return;
+		}
+
+		if (req.method === "POST" && req.url === "/hosted-skill/select") {
+			readJsonBody(req).then(async (body) => {
+				const relativePath = String(body.relativePath || "");
+				await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, persist: false });
+				const selected = entry.hostedSkills.find(
+					(skill) => skill.trigger === entry.trigger && skill.relativePath === relativePath,
+				);
+				if (!selected) throw new Error(`Hosted skill ${relativePath || "(missing)"} is not available for the ${entry.trigger} trigger.`);
+				entry.hostedSkillSelections[entry.trigger] = selected.relativePath;
+				applySelectedHostedSkill(entry, selected);
+				await persistHostedSkillSelections(entry);
+				if (entry.trigger === "timer") await loadTimerSchedule(entry);
+				broadcast(entry, "state", snapshot(entry));
+				responseJson(res, { ok: true, selectedSkillPath: selected.relativePath });
+			}).catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
 			return;
 		}
 
@@ -7373,7 +7556,7 @@ async function startServer(
 			(async () => {
 				await refreshTemplateFromDisk(entry);
 				const dir = requireTemplateDir(entry);
-				const filePath = path.join(dir, HERO_TEMPLATE.timerAgentRelPath);
+				const filePath = path.join(dir, entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.timerAgentRelPath);
 				const c = cmdStart(entry, {
 					kind: "shell",
 					title: "code (agent instructions)",
@@ -8093,6 +8276,10 @@ export const functionStudioTestHooks = Object.freeze({
 	hasRequiredGithubDigestEvidence,
 	inputSchemaOf,
 	parameterContractOf,
+	discoverHostedSkills,
+	chooseHostedSkill,
+	timerHttpTwin,
+	refreshWorkspaceFromDisk,
 	validateParameters,
 	parametersFromHttpRequest,
 	githubRequirement,
