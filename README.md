@@ -3,15 +3,16 @@
 Azure Developer Tools is a home for tools that help developers work with Azure
 through GitHub Copilot.
 
-## Coming soon
+## Public staging
 
 | Canvas | Package location | Status |
 | --- | --- | --- |
-| **Azure Functions Hosted Skills** | [`canvases/azure-functions-hosted-skills/`](canvases/azure-functions-hosted-skills/) | Planned |
+| **Azure Functions Hosted Skills** | [`canvases/azure-functions-hosted-skills/`](canvases/azure-functions-hosted-skills/) | Candidate |
 | **Azure SRE Agent** | [`canvases/azure-sre-agent/`](canvases/azure-sre-agent/) | Planned |
 
-These package locations are scaffolds only. No canvas packages are available
-to install yet.
+Candidate packages are staged for public review and validation; staging does
+not constitute a production release. Follow the package README for its
+installation requirements.
 
 ## Get involved
 

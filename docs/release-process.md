@@ -1,9 +1,8 @@
 # Future release process
 
-This repository has no release artifacts or installable packages today. The
-planned Functions Hosted Skills and Azure SRE Agent package areas contain no
-payload. The following contract applies when a canvas package is proposed for
-public distribution:
+This repository has no production release artifacts today. Canvas packages may
+be staged here for public review before release. The following contract applies
+when a canvas package is proposed for public distribution:
 
 1. Start with content cleared for public distribution in this repository.
 2. Run the package's required tests and release checks.

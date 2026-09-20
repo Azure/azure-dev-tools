@@ -1,0 +1,331 @@
+{
+  "schemaVersion": 1,
+  "format": "plugin",
+  "name": "azure-functions-hosted-skills",
+  "version": "0.4.0",
+  "plugin": {
+    "manifest": ".github/plugin/plugin.json",
+    "extension": {
+      "name": "azure-functions-hosted-skills",
+      "canvasId": "azure-functions-hosted-skills",
+      "directory": "extensions/azure-functions-hosted-skills",
+      "entry": "extensions/azure-functions-hosted-skills/extension.mjs"
+    },
+    "skills": [
+      {
+        "name": "azure-functions-hosted-skills-canvas",
+        "directory": "skills/azure-functions-hosted-skills-canvas",
+        "files": [
+          "SKILL.md",
+          "resolve-canvas-launch.mjs"
+        ]
+      },
+      {
+        "name": "azure-functions-hosted-skills-github-daily-digest",
+        "directory": "skills/azure-functions-hosted-skills-github-daily-digest",
+        "files": [
+          "SKILL.md",
+          "resolve-canvas-launch.mjs"
+        ]
+      }
+    ]
+  },
+  "runtimeIdentity": "extensions/azure-functions-hosted-skills/studio-package.json",
+  "files": [
+    ".github/plugin/plugin.json",
+    "README.md",
+    "THIRD_PARTY_NOTICES.txt",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/icons/Subscription.svg",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui.mjs",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/azure-subscription-picker.mjs",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/icons.mjs",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/locations.mjs",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/styles.css",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.css",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.mjs",
+    "extensions/azure-functions-hosted-skills/extension.mjs",
+    "extensions/azure-functions-hosted-skills/studio-package.json",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/.gitignore",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/azure.yaml",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/abbreviations.json",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/app/api.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/app/connector-gateway.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/app/foundry.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/app/rbac.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/app/session-pool-rbac.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/app/session-pool.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/main.bicep",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/main.parameters.json",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/.funcignore",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/agents.config.yaml",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/daily-repo-digest-http.agent.md",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/daily-repo-digest.agent.md",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/function_app.py",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/host.json",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/requirements.txt",
+    "package.json",
+    "skills/azure-functions-hosted-skills-canvas/SKILL.md",
+    "skills/azure-functions-hosted-skills-canvas/resolve-canvas-launch.mjs",
+    "skills/azure-functions-hosted-skills-github-daily-digest/SKILL.md",
+    "skills/azure-functions-hosted-skills-github-daily-digest/resolve-canvas-launch.mjs"
+  ],
+  "status": "publication-controlled-by-external-approval",
+  "runtime": {
+    "node": ">=22",
+    "sdk": "@github/copilot-sdk/extension",
+    "azureCli": ">=2.61"
+  },
+  "build": {
+    "esbuild": "0.25.12",
+    "lockSha256": "d246705ca7c5bc314170ff3da7876479bcca46f4935a2be00327e7406b47ee63",
+    "inputSha256": "99d6dcf73f9190fddad42a8feccc59ace7b73f68b1346ddb33a94af2917e850e"
+  },
+  "dependencies": [
+    {
+      "name": "@azure/abort-controller",
+      "version": "2.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/core-client",
+      "version": "1.11.1",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/core-process",
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/core-rest-pipeline",
+      "version": "1.25.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/core-tracing",
+      "version": "1.4.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/core-util",
+      "version": "1.14.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/identity",
+      "version": "4.13.3",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/logger",
+      "version": "1.4.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/msal-common",
+      "version": "16.14.1",
+      "license": "MIT"
+    },
+    {
+      "name": "@azure/msal-node",
+      "version": "6.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "@cloud-foundation/function-app-core",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@cloud-foundation/studio-runtime",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@microsoft/canvas-toolkit",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@typespec/ts-http-runtime",
+      "version": "0.3.9",
+      "license": "MIT"
+    },
+    {
+      "name": "agent-base",
+      "version": "7.1.4",
+      "license": "MIT"
+    },
+    {
+      "name": "buffer-equal-constant-time",
+      "version": "1.0.1",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "license": "MIT"
+    },
+    {
+      "name": "ecdsa-sig-formatter",
+      "version": "1.0.11",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "has-flag",
+      "version": "4.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "http-proxy-agent",
+      "version": "7.0.2",
+      "license": "MIT"
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "7.0.6",
+      "license": "MIT"
+    },
+    {
+      "name": "jsonwebtoken",
+      "version": "9.0.3",
+      "license": "MIT"
+    },
+    {
+      "name": "jwa",
+      "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "jws",
+      "version": "4.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.includes",
+      "version": "4.3.0",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.isboolean",
+      "version": "3.0.3",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.isinteger",
+      "version": "4.0.4",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.isnumber",
+      "version": "3.0.3",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.isplainobject",
+      "version": "4.0.6",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.isstring",
+      "version": "4.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash.once",
+      "version": "4.1.1",
+      "license": "MIT"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "license": "MIT"
+    },
+    {
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "license": "MIT"
+    },
+    {
+      "name": "semver",
+      "version": "7.8.5",
+      "license": "ISC"
+    },
+    {
+      "name": "supports-color",
+      "version": "7.2.0",
+      "license": "MIT"
+    }
+  ],
+  "modules": [
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui.mjs",
+      "platform": "node"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/azure-subscription-picker.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/icons.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/locations.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/extension.mjs",
+      "platform": "node"
+    },
+    {
+      "file": "skills/azure-functions-hosted-skills-canvas/resolve-canvas-launch.mjs",
+      "platform": "node"
+    },
+    {
+      "file": "skills/azure-functions-hosted-skills-github-daily-digest/resolve-canvas-launch.mjs",
+      "platform": "node"
+    }
+  ],
+  "assets": [
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/icons/Subscription.svg",
+      "route": "icons/Subscription.svg",
+      "mime": "image/svg+xml"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/azure-subscription-picker.mjs",
+      "route": "canvas-ui/azure-subscription-picker.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/icons.mjs",
+      "route": "canvas-ui/icons.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/locations.mjs",
+      "route": "canvas-ui/locations.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/styles.css",
+      "route": "canvas-ui/styles.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.css",
+      "route": "canvas-ui/subscription-picker.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.mjs",
+      "route": "canvas-ui/subscription-picker.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    }
+  ]
+}

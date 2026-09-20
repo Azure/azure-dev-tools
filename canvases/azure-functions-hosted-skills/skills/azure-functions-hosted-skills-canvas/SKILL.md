@@ -1,9 +1,9 @@
 ---
 name: azure-functions-hosted-skills-canvas
-description: "MANDATORY FIRST ROUTE for daily digest, cron, and timer requests. Open Azure Functions Hosted Skills Preview before asking repo or run-mode questions or proposing a script. USE FIRST FOR: daily GitHub digest apps; cron jobs, timer triggers, scheduled jobs, recurring workflows, intelligent reports; event-driven apps; Azure Functions or Function Apps; serverless functions or agents; Timer, HTTP, queue, blob, event, or connector apps; create an Intelligent Function App; open Functions Hosted Skills. After the canvas opens, compose with the official Azure Functions Hosted Skills Preview skill. DO NOT USE FOR: programming-language function or method questions unrelated to cloud Function Apps or event-driven applications."
+description: "MANDATORY FIRST ROUTE for daily digest, cron, and timer requests. Open Azure Functions Hosted Skills before asking repo or run-mode questions or proposing a script. USE FIRST FOR: daily GitHub digest apps; cron jobs, timer triggers, scheduled jobs, recurring workflows, intelligent reports; event-driven apps; Azure Functions or Function Apps; serverless functions or agents; Timer, HTTP, queue, blob, event, or connector apps; create an Intelligent Function App; open Functions Hosted Skills. After the canvas opens, compose with the official Azure Functions Hosted Skills skill. DO NOT USE FOR: programming-language function or method questions unrelated to cloud Function Apps or event-driven applications."
 ---
 
-# Open Azure Functions Hosted Skills Preview
+# Open Azure Functions Hosted Skills
 
 The canvas is the first handoff, not the only skill allowed in the turn. The
 daily-digest prompt alone is sufficient, even in an existing repository or
@@ -22,8 +22,8 @@ If that instance is still open under the other canvas type, have the user
 close the old panel or start a fresh chat before reopening. Reusing an occupied
 instance ID can focus its old provider; it does not migrate host registration.
 
-Before any open, run the installed plugin root's `resolve-canvas-launch.mjs`
-(two directories above this skill) with a JSON argument containing `available`
+Before any open, run this skill's bundled [routing guard](resolve-canvas-launch.mjs)
+with a JSON argument containing `available`
 host declarations (`canvasId`, optional `extensionId`), `openPanels`
 (`instanceId`, `canvasId`, optional `extensionId`), without legacy fallback. Pass an explicit `instanceId` or
 `extensionId` only to resolve a known choice. Use its returned JSON as the
@@ -78,13 +78,11 @@ and confirms the corresponding write action.
 ## Missing registration
 
 If no eligible canvas is available, or `open_canvas` reports registration is
-missing, resolve this skill's base directory and run the installed plugin
-root's `bootstrap-extension.mjs` file **two directories above it**. Bootstrap
-only this installed distribution; never install both distributions as recovery.
-The bootstrap registers the self-contained payload and refuses to replace an
-existing path. Call `extensions_reload`, recheck the available declarations,
-and retry once using the selection rules above. Do not retry an ID that is
-still unavailable.
+missing, check that this native plugin is enabled. Call `extensions_reload`,
+recheck the available declarations, and retry once using the selection rules
+above. Do not retry an ID that is still unavailable. Native plugins register
+their nested extension through the host: do not run bootstrap-extension.mjs,
+create a second user extension link, or install npm dependencies.
 
 If recovery fails, report the actual error and give the canonical reinstall
 steps, then stop:
@@ -92,7 +90,7 @@ steps, then stop:
 1. Copy
    `https://github.com/Azure/azure-dev-tools/tree/main/canvases/azure-functions-hosted-skills`.
 2. In GitHub Copilot, choose **Install extension from URL…** and paste the
-   staging URL.
+   URL.
 3. Open **Azure Functions Hosted Skills Preview** in a fresh project chat.
 
 Tell the user to reload extensions, start a fresh chat or child session, and
