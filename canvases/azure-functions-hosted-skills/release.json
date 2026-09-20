@@ -43,6 +43,7 @@
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/styles.css",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.css",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.mjs",
+    "extensions/azure-functions-hosted-skills/azure-auth.mjs",
     "extensions/azure-functions-hosted-skills/extension.mjs",
     "extensions/azure-functions-hosted-skills/studio-package.json",
     "extensions/azure-functions-hosted-skills/templates/hosted-skill/.gitignore",
@@ -78,7 +79,7 @@
   "build": {
     "esbuild": "0.25.12",
     "lockSha256": "d246705ca7c5bc314170ff3da7876479bcca46f4935a2be00327e7406b47ee63",
-    "inputSha256": "99d6dcf73f9190fddad42a8feccc59ace7b73f68b1346ddb33a94af2917e850e"
+    "inputSha256": "d7fc86b48e4c60174a6af2fc4c8a5b9b52ca735c1114ba9ff4d301127d72e937"
   },
   "dependencies": [
     {
@@ -277,6 +278,10 @@
     {
       "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.mjs",
       "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/azure-auth.mjs",
+      "platform": "node"
     },
     {
       "file": "extensions/azure-functions-hosted-skills/extension.mjs",
