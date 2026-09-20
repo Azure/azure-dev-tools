@@ -5,9 +5,13 @@ import { homedir, tmpdir } from "node:os";
 import { acquireStateLock } from "./state-lock.mjs";
 
 // Deliberately independent of the installable distribution's CANVAS_ID.
-export const STATE_COMPONENT = "azure-functions-hosted-skills-preview";
-export const STATE_PRODUCT = "azure-functions-hosted-skills-preview";
+export const STATE_COMPONENT = "azure-functions-hosted-skills";
+export const STATE_PRODUCT = "azure-functions-hosted-skills";
 export const LEGACY_STATE_COMPONENT = "intelligent-function-app-studio";
+export const LEGACY_PREVIEW_STATE_COMPONENTS = Object.freeze([
+	"azure-functions-hosted-skills-preview",
+	"azure-functions-hosted-skills-preview-12",
+]);
 
 export function studioStateEnvironment({ env = process.env, homeDirectory = homedir, pathApi = path } = {}) {
 	const override = env.FUNCTION_STUDIO_STATE_HOME;
@@ -50,6 +54,11 @@ export function studioStatePaths({ home, copilotHome, instanceId, pathApi = path
 		pathApi.join(home, `.${LEGACY_STATE_COMPONENT}`, legacySegment),
 		pathApi.join(copilotHome, "extensions", LEGACY_STATE_COMPONENT, "state", legacySegment),
 		pathApi.join(copilotHome, "extensions", LEGACY_STATE_COMPONENT, "artifacts", legacySegment),
+		...LEGACY_PREVIEW_STATE_COMPONENTS.flatMap((identity) => [
+			pathApi.join(home, `.${identity}`, identity, legacySegment),
+			pathApi.join(copilotHome, "extensions", identity, "state", identity, legacySegment),
+			pathApi.join(copilotHome, "extensions", identity, "state", legacySegment),
+		]),
 	] : [];
 	return {
 		home,

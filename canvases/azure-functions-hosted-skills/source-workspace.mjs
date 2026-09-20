@@ -1,7 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { cp, link, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { STATE_COMPONENT, STATE_PRODUCT, LEGACY_STATE_COMPONENT, atomicStateWrite, migrateStateRecord, assertSafeStatePath } from "./state-migration.mjs";
+import {
+	STATE_COMPONENT,
+	STATE_PRODUCT,
+	LEGACY_STATE_COMPONENT,
+	LEGACY_PREVIEW_STATE_COMPONENTS,
+	atomicStateWrite,
+	migrateStateRecord,
+	assertSafeStatePath,
+} from "./state-migration.mjs";
 
 export const DEFAULT_CURRENT_SUBDIR = path.join("functions", "daily-repo-digest");
 const MANIFEST_VERSION = 2;
@@ -11,6 +19,9 @@ const OWNERSHIP_MARKER_RELATIVE_PATH = path.join(
 	"source-workspace-ownership.json",
 );
 const LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH = path.join(`.${LEGACY_STATE_COMPONENT}`, "source-workspace-ownership.json");
+const LEGACY_PREVIEW_OWNERSHIP_MARKER_RELATIVE_PATHS = LEGACY_PREVIEW_STATE_COMPONENTS.map(
+	(identity) => path.join(`.${identity}`, "source-workspace-ownership.json"),
+);
 const LEGACY_REMOVAL_MARKER = "Removed by the user. Create from the Studio to restore.\n";
 export const REMOVAL_MARKER = "Removed by the user. Create from Azure Functions Hosted Skills Preview to restore.\n";
 const RUNTIME_DIRS = new Set([
@@ -18,7 +29,8 @@ const RUNTIME_DIRS = new Set([
 	".azure",
 	".git",
 	".intelligent-function-app-studio",
-	".azure-functions-hosted-skills-preview",
+	".azure-functions-hosted-skills",
+	...LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) => `.${identity}`),
 	".mypy_cache",
 	".pytest_cache",
 	".python_packages",
@@ -175,12 +187,13 @@ export async function assertCurrentWorkspaceDestinationSafe(
 	return selected;
 }
 
-export function sourceManifestPath(copilotHome, sessionId, instanceId, { legacy = false, pathApi = path } = {}) {
+export function sourceManifestPath(copilotHome, sessionId, instanceId, { legacy = false, identity, pathApi = path } = {}) {
 	const key = createHash("sha256")
 		.update(`${String(sessionId || "unknown")}\0${String(instanceId || "unknown")}`)
 		.digest("hex")
 		.slice(0, 24);
-	return pathApi.join(copilotHome, "extensions", legacy ? LEGACY_STATE_COMPONENT : STATE_COMPONENT, "artifacts", "source-workspaces", `${key}.json`);
+	const component = identity || (legacy ? LEGACY_STATE_COMPONENT : STATE_COMPONENT);
+	return pathApi.join(copilotHome, "extensions", component, "artifacts", "source-workspaces", `${key}.json`);
 }
 
 function ignoredRuntimePath(relativePath) {
@@ -265,18 +278,36 @@ async function writeWorkspaceIdentityMarker(root, { templateId, generationId }, 
 	return marker;
 }
 
+async function readLegacyWorkspaceIdentityMarkers(root) {
+	const markers = [];
+	for (const relativePath of [
+		LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH,
+		...LEGACY_PREVIEW_OWNERSHIP_MARKER_RELATIVE_PATHS,
+	]) {
+		const marker = await readWorkspaceIdentityMarker(root, relativePath);
+		if (marker) markers.push({ marker, relativePath });
+	}
+	return markers;
+}
+
+async function readAnyWorkspaceIdentityMarker(root) {
+	return await readWorkspaceIdentityMarker(root) || (await readLegacyWorkspaceIdentityMarkers(root))[0]?.marker || null;
+}
+
 export async function assertWorkspaceIdentity(root, manifest, { upgrade = true } = {}) {
 	const canonical = await readWorkspaceIdentityMarker(root);
-	const legacy = await readWorkspaceIdentityMarker(root, LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH);
-	const marker = canonical || legacy;
+	const legacy = await readLegacyWorkspaceIdentityMarkers(root);
+	const marker = canonical || legacy[0]?.marker;
 	if (!marker) {
 		throw new Error("The generated workspace identity marker is missing.");
 	}
 	if (marker.templateId !== manifest.templateId || marker.generationId !== manifest.generationId) {
 		throw new Error("The folder at this path is not the generated workspace recorded by the ownership manifest.");
 	}
-	if (legacy && (legacy.templateId !== marker.templateId || legacy.generationId !== marker.generationId)) {
-		throw new Error("Canonical and legacy workspace ownership markers disagree.");
+	for (const candidate of legacy) {
+		if (candidate.marker.templateId !== marker.templateId || candidate.marker.generationId !== marker.generationId) {
+			throw new Error("Canonical and legacy workspace ownership markers disagree.");
+		}
 	}
 	if (!canonical && upgrade) await writeWorkspaceIdentityMarker(root, manifest);
 	return marker;
@@ -486,7 +517,7 @@ export async function migrateSourceOwnership({
 
 export async function validateRuntimeWorkspace(root, recoverySignatures, templateId) {
 	await assertSafeStatePath(root);
-	const marker = await readWorkspaceIdentityMarker(root) || await readWorkspaceIdentityMarker(root, LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH);
+	const marker = await readAnyWorkspaceIdentityMarker(root);
 	if (marker) {
 		if (marker.templateId !== templateId) throw new Error("Retained runtime workspace belongs to another template.");
 		await assertWorkspaceIdentity(root, marker);
@@ -595,7 +626,7 @@ export async function reenterOwnedWorkspace({
 			}
 		}
 		const previousIdentity = manifest.version === 1
-			? await readWorkspaceIdentityMarker(selected.destination) || await readWorkspaceIdentityMarker(selected.destination, LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH)
+			? await readAnyWorkspaceIdentityMarker(selected.destination)
 			: null;
 		if (previousIdentity && previousIdentity.templateId !== templateId) {
 			throw new Error("Legacy workspace identity belongs to another template.");

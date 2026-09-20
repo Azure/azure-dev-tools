@@ -1,5 +1,5 @@
 {
-  "name": "azure-functions-hosted-skills-preview",
+  "name": "azure-functions-hosted-skills",
   "description": "Azure Functions Hosted Skills: build and run Hosted Skills in Azure Functions, locally or in Azure.",
   "version": "0.4.0",
   "author": {
@@ -8,7 +8,7 @@
   },
   "extensions": ".",
   "skills": [
-    "./skills/azure-functions-hosted-skills-preview-canvas/",
-    "./skills/azure-functions-hosted-skills-preview-github-daily-digest/"
+    "./skills/azure-functions-hosted-skills-canvas/",
+    "./skills/azure-functions-hosted-skills-github-daily-digest/"
   ]
 }

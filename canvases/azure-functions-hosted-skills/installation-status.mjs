@@ -1,9 +1,14 @@
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { homedir } from "node:os";
-import { PRODUCT_ID, COMPONENT_ID, LEGACY_PLUGIN_ID } from "./canvas-identity.mjs";
+import {
+	PRODUCT_ID,
+	COMPONENT_ID,
+	LEGACY_PLUGIN_ID,
+	LEGACY_PREVIEW_PLUGIN_IDS,
+} from "./canvas-identity.mjs";
 
-const identities = new Set([PRODUCT_ID, LEGACY_PLUGIN_ID]);
+const identities = new Set([PRODUCT_ID, LEGACY_PLUGIN_ID, ...LEGACY_PREVIEW_PLUGIN_IDS]);
 
 /** @typedef {{ copilotHome?: string, projectRoot?: string }} InstallationStatusOptions */
 
@@ -47,7 +52,7 @@ export async function installationStatus({
 	await scan(path.join(copilotHome, "installed-plugins"), 0);
 	const installations = [...found.values()];
 	const mixedIdentities = new Set(installations.map((entry) => entry.pluginId)).size > 1;
-	const retiredOnly = installations.length > 0 && installations.every((entry) => entry.pluginId === LEGACY_PLUGIN_ID);
+	const retiredOnly = installations.length > 0 && installations.every((entry) => entry.pluginId !== PRODUCT_ID);
 	const duplicate = installations.length > 1;
 	return {
 		installations,

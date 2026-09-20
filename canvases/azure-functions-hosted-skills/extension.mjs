@@ -125,7 +125,12 @@ import {
 	snapshotWorkspaceTree,
 } from "./source-workspace.mjs";
 import { StudioState } from "./studio-state.mjs";
-import { STATE_PRODUCT, studioStateEnvironment, studioStatePaths } from "./state-migration.mjs";
+import {
+	STATE_PRODUCT,
+	LEGACY_PREVIEW_STATE_COMPONENTS,
+	studioStateEnvironment,
+	studioStatePaths,
+} from "./state-migration.mjs";
 import { acquireStateLock } from "./state-lock.mjs";
 import {
 	describeTimerSchedule,
@@ -368,7 +373,7 @@ function githubFunctionEnvironment(values = {}) {
 async function validateGithubMcpAuthorization(authorization, { fetchImpl = fetch } = {}) {
 	const commonHeaders = {
 		Authorization: authorization,
-		"User-Agent": "azure-functions-hosted-skills-preview",
+		"User-Agent": "azure-functions-hosted-skills",
 	};
 	const apiResponse = await fetchImpl("https://api.github.com/user", {
 		headers: {
@@ -403,7 +408,7 @@ async function validateGithubMcpAuthorization(authorization, { fetchImpl = fetch
 			params: {
 				protocolVersion: "2025-03-26",
 				capabilities: {},
-				clientInfo: { name: "azure-functions-hosted-skills-preview", version: STUDIO_VERSION },
+				clientInfo: { name: "azure-functions-hosted-skills", version: STUDIO_VERSION },
 			},
 		}),
 		signal: AbortSignal.timeout(15000),
@@ -535,7 +540,7 @@ async function discoverGithubRepositories(authorization, { fetchImpl = fetch } =
 				headers: {
 					Authorization: authorization,
 					Accept: "application/vnd.github+json",
-					"User-Agent": "azure-functions-hosted-skills-preview",
+					"User-Agent": "azure-functions-hosted-skills",
 					"X-GitHub-Api-Version": "2022-11-28",
 				},
 				signal: AbortSignal.timeout(15000),
@@ -570,7 +575,7 @@ async function validateGithubRepositoryAccess(repository, authorization, { fetch
 		headers: {
 			Authorization: authorization,
 			Accept: "application/vnd.github+json",
-			"User-Agent": "azure-functions-hosted-skills-preview",
+			"User-Agent": "azure-functions-hosted-skills",
 			"X-GitHub-Api-Version": "2022-11-28",
 		},
 		signal: AbortSignal.timeout(15000),
@@ -1005,34 +1010,60 @@ function hostedSkillSelectionPath(entry) {
 	return path.join(requireTemplateDir(entry), `.${STATE_PRODUCT}`, "hosted-skill-selection.json");
 }
 
+function legacyHostedSkillSelectionPaths(entry) {
+	return LEGACY_PREVIEW_STATE_COMPONENTS
+		.map((identity) => path.join(requireTemplateDir(entry), `.${identity}`, "hosted-skill-selection.json"));
+}
+
 function hostedSkillWorkspaceIdentity(entry) {
 	return entry.sourceWorkspace.manifest?.generationId ||
 		createHash("sha256").update(path.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24);
 }
 
-async function loadHostedSkillSelections(entry) {
-	if (entry.sourceWorkspace.sourceMode === "attached") return entry.hostedSkillSelections;
-	const file = hostedSkillSelectionPath(entry);
+function validatedHostedSkillSelections(value, entry) {
+	if (
+		value?.version !== 1 ||
+		value.workspaceIdentity !== hostedSkillWorkspaceIdentity(entry) ||
+		!value.selections ||
+		typeof value.selections !== "object" ||
+		Array.isArray(value.selections)
+	) {
+		return null;
+	}
+	return Object.fromEntries(
+		Object.entries(value.selections)
+			.filter(([trigger, relPath]) => ["timer", "http", "queue", "connector"].includes(trigger) && typeof relPath === "string")
+			.map(([trigger, relPath]) => [trigger, relPath]),
+	);
+}
+
+async function readHostedSkillSelections(file, entry) {
 	try {
 		const value = JSON.parse(await readFile(file, "utf8"));
-		if (
-			value?.version !== 1 ||
-			value.workspaceIdentity !== hostedSkillWorkspaceIdentity(entry) ||
-			!value.selections ||
-			typeof value.selections !== "object" ||
-			Array.isArray(value.selections)
-		) {
-			return {};
-		}
-		return Object.fromEntries(
-			Object.entries(value.selections)
-				.filter(([trigger, relPath]) => ["timer", "http", "queue", "connector"].includes(trigger) && typeof relPath === "string")
-				.map(([trigger, relPath]) => [trigger, relPath]),
-		);
+		return { exists: true, selections: validatedHostedSkillSelections(value, entry) };
 	} catch (error) {
-		if (error?.code === "ENOENT") return {};
+		if (error?.code === "ENOENT") return { exists: false, selections: null };
 		throw error;
 	}
+}
+
+async function loadHostedSkillSelections(entry) {
+	if (entry.sourceWorkspace.sourceMode === "attached") return entry.hostedSkillSelections;
+	const canonical = await readHostedSkillSelections(hostedSkillSelectionPath(entry), entry);
+	if (canonical.exists) return canonical.selections || {};
+	const legacy = [];
+	for (const file of legacyHostedSkillSelectionPaths(entry)) {
+		const candidate = await readHostedSkillSelections(file, entry);
+		if (candidate.selections) legacy.push({ file, selections: candidate.selections });
+	}
+	if (!legacy.length) return {};
+	const serialized = new Set(legacy.map(({ selections }) => JSON.stringify(selections)));
+	if (serialized.size > 1) {
+		throw new Error("Preview-named hosted-skill selection records disagree. Resolve them before refreshing this workspace.");
+	}
+	entry.hostedSkillSelections = legacy[0].selections;
+	await persistHostedSkillSelections(entry);
+	return legacy[0].selections;
 }
 
 async function persistHostedSkillSelections(entry) {
@@ -2329,7 +2360,7 @@ async function syncGeneratedTriggerFilesUnlocked(entry, bodyText, skillName) {
 
 async function protectLocalSettings(dir) {
 	const ignorePath = path.join(dir, ".gitignore");
-	const requiredRules = ["src/local.settings.json", "src/.foundry-token.json", ".intelligent-function-app-studio/", ".azure-functions-hosted-skills-preview/"];
+	const requiredRules = ["src/local.settings.json", "src/.foundry-token.json", ".intelligent-function-app-studio/", ".azure-functions-hosted-skills/"];
 	const current = (await exists(ignorePath)) ? await readFile(ignorePath, "utf8") : "";
 	const rules = current.split(/\r?\n/).map((line) => line.trim());
 	const missingRules = requiredRules.filter((rule) => !rules.includes(rule));
@@ -2981,7 +3012,7 @@ async function fetchLocalFoundryToken(entry) {
 }
 
 async function writeLocalFoundryToken(entry, token) {
-	const tokenDir = path.join(requireTemplateDir(entry), ".azure-functions-hosted-skills-preview");
+	const tokenDir = path.join(requireTemplateDir(entry), ".azure-functions-hosted-skills");
 	await mkdir(tokenDir, { recursive: true, mode: 0o700 });
 	await chmod(tokenDir, 0o700);
 	const tokenPath = path.join(tokenDir, "foundry-token.json");
@@ -3843,10 +3874,16 @@ function legacySourceOwnershipManifestPaths(entry) {
 	const { copilotHome } = runtimeStatePaths(entry);
 	const files = [
 		sourceManifestPath(copilotHome, entry.sessionId, entry.instanceId, { legacy: true }),
+		...LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) =>
+			sourceManifestPath(copilotHome, entry.sessionId, entry.instanceId, { identity })),
 		sourceManifestPath(copilotHome, entry.sessionId, entry.instanceId),
 	];
 	if (entry.sourceWorkspace.workingDirectory) {
-		files.unshift(sourceManifestPath(copilotHome, "workspace", path.resolve(entry.sourceWorkspace.workingDirectory), { legacy: true }));
+		files.unshift(
+			sourceManifestPath(copilotHome, "workspace", path.resolve(entry.sourceWorkspace.workingDirectory), { legacy: true }),
+			...LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) =>
+				sourceManifestPath(copilotHome, "workspace", path.resolve(entry.sourceWorkspace.workingDirectory), { identity })),
+		);
 	}
 	return [...new Set(files)].filter((file) => file !== entry.sourceWorkspace.manifestPath);
 }
@@ -5260,7 +5297,7 @@ async function ensureAzuriteCommand(args, entry) {
 	} catch (error) {
 		if (error?.code !== "EXTERNAL_COMMAND_NOT_FOUND") throw error;
 	}
-	const installRoot = path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills-preview", "tools", `azurite-${AZURITE_VERSION}`);
+	const installRoot = path.join(studioStateEnvironment().home, ".azure-functions-hosted-skills", "tools", `azurite-${AZURITE_VERSION}`);
 	const installBin = path.join(installRoot, "node_modules", ".bin");
 	try {
 		return await externalCommandSpawnSpec("azurite", args, { extraDirectories: [installBin] });

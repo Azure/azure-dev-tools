@@ -3,6 +3,19 @@
 Build, run, test, and deploy Azure Functions Hosted Skills from a canvas-enabled
 GitHub Copilot host.
 
+## Install the preview
+
+> **Temporary staging URL:** This will be replaced with the production URL
+> later.
+
+1. Copy
+   `https://github.com/coreai-microsoft/canvases-cloud-foundation/tree/paulyuk-microsoft-fix-hosted-skill-authoring/canvases/azure-functions-hosted-skills`.
+2. In GitHub Copilot, choose **Install extension from URL…** and paste the
+   staging URL.
+3. Open **Azure Functions Hosted Skills Preview** in a project chat.
+
+See [Key features](FEATURES.md) for the Local and Azure workflows.
+
 ## Prerequisites
 
 - Azure CLI, signed in with `az login`
@@ -15,15 +28,7 @@ storage. It uses the host process environment and the shared portable command
 resolver rather than assuming repository-level dependencies or shell PATH
 behavior.
 
-## Start
-
-Install this directory as a canvas extension, reload extensions, and ask:
-
-```text
-Open Azure Functions Hosted Skills
-```
-
-The canvas opens as `azure-functions-hosted-skills-preview`. On first open it creates a unique owned
+The canvas opens as `azure-functions-hosted-skills`. On first open it creates a unique owned
 workspace, discovers an accessible Microsoft Foundry project and model, writes
 credential-free source plus process-local runtime settings, and starts the local
 Functions host. It preserves the generated workspace across provider restarts
@@ -31,8 +36,8 @@ and restarts the local host after rehydration.
 
 ## Authoring
 
-- **Timer**, **HTTP**, **Queue**, and **Connector** have implemented local flows.
-- **Blob** and **Cosmos DB** remain visible but disabled until implemented.
+- **Timer**, **HTTP**, and **Queue** have implemented local flows.
+- **Connector**, **Blob**, and **Cosmos DB** remain visible but disabled.
 - Hosted Skills declare request parameters with the runtime's `input_schema`
   frontmatter field. The generic **Parameters JSON object** editor applies
   declared defaults, safely persists non-credential drafts, and sends the same

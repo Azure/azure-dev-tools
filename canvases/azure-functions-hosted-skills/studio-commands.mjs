@@ -1061,7 +1061,7 @@ const DEPLOYMENT_COPY_SKIP = new Set([
 	".venv",
 	".azurite",
 	".intelligent-function-app-studio",
-	".azure-functions-hosted-skills-preview",
+	".azure-functions-hosted-skills",
 	"node_modules",
 	"__pycache__",
 ]);

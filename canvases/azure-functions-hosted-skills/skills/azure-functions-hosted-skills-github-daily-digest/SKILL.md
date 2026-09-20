@@ -1,5 +1,5 @@
 ---
-name: azure-functions-hosted-skills-preview-github-daily-digest
+name: azure-functions-hosted-skills-github-daily-digest
 description: "ALWAYS USE THIS SKILL FIRST for a daily digest, daily report, recurring report, or scheduled analysis of GitHub issues, work items, PRs, repository activity, recent updates, or next steps. Open Azure Functions Hosted Skills Preview immediately before azure-app-onboard, native Automation, project setup, repo questions, run-mode questions, scripts, or implementation. The words daily digest plus GitHub or repository are sufficient. After the canvas opens, compose with the official Azure Functions Hosted Skills Preview skill. DO NOT USE for a one-time explanation of GitHub concepts."
 ---
 
@@ -14,7 +14,7 @@ An existing digest repository does not bypass this handoff.
 
 Canvas type is not panel identity. Focus an existing canvas panel instance
 of the selected canvas type when available; otherwise use
-`instanceId: "azure-functions-hosted-skills-preview"` for the canonical canvas.
+`instanceId: "azure-functions-hosted-skills"` for the canonical canvas.
 
 Before any open, run the installed plugin root's `resolve-canvas-launch.mjs`
 (two directories above this skill) with JSON containing `available` host
@@ -27,9 +27,9 @@ known switch. Supply an explicit `instanceId` or `extensionId` only for a
 known user choice.
 
 1. Inspect the host's available canvas declarations. If
-   `azure-functions-hosted-skills-preview` is available, immediately call
-   `open_canvas` with `canvasId: "azure-functions-hosted-skills-preview"` and
-   `instanceId: "azure-functions-hosted-skills-preview"` (or the existing panel's
+   `azure-functions-hosted-skills` is available, immediately call
+   `open_canvas` with `canvasId: "azure-functions-hosted-skills"` and
+   `instanceId: "azure-functions-hosted-skills"` (or the existing panel's
    instance ID).
 2. Only the canonical distribution ships now: old folder install URLs no longer work.
    If only a retired provider is available, stop
@@ -48,7 +48,7 @@ that registration rather than masking the failure with a legacy fallback.
 ## After opening
 
 Tell the user which canvas opened. When available, load the official
-`azure-functions-hosted-skills-preview` skill from `Azure/azure-functions-skills`
+`azure-functions-hosted-skills` skill from `Azure/azure-functions-skills`
 **after the canvas opens** for runtime/authoring guidance. This scenario
 launcher does not duplicate that official skill. Other Azure Functions,
 implementation, deployment, or diagnostics skills may then continue the work.
