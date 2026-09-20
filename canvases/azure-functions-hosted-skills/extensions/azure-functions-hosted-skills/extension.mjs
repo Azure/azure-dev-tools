@@ -1815,7 +1815,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
 
     <div class="doctor-panel" id="doctor-panel" hidden>
       <div class="doctor-head">
-        <button class="btn ghost" id="doctor-run">Check readiness</button>
+        <button class="btn ghost" id="doctor-run">Run Doctor</button>
         <span class="tag" id="doctor-tag">Not checked</span>
       </div>
       <p class="doctor-note">Read-only checks for uv, Python ${MIN_PYTHON_LABEL2}+, Core Tools, Node.js, Azurite, and the Azure CLI (including sign-in). Never installs anything, never opens a login prompt, never touches Azure resources.</p>
@@ -2462,7 +2462,7 @@ ${commandClientScript()}
     const doctor = state.doctor;
     const running = Boolean(state.doctorRunning);
     doctorRunBtn.disabled = running;
-    doctorRunBtn.textContent = running ? 'Checking\u2026' : 'Check readiness';
+    doctorRunBtn.textContent = running ? 'Running Doctor\u2026' : 'Run Doctor';
     if (running) {
       doctorTag.textContent = 'Checking\u2026';
       doctorTag.className = 'tag';
@@ -2473,7 +2473,7 @@ ${commandClientScript()}
       doctorTag.textContent = doctor.ready ? 'Ready' : 'Action needed';
       doctorTag.className = 'tag' + (doctor.ready ? ' ok' : ' err');
     }
-    doctorToggleLabel.textContent = !doctor ? 'Doctor' : doctor.ready ? 'Doctor: Ready' : 'Doctor: Action needed';
+    doctorToggleLabel.textContent = !doctor ? 'Doctor' : doctor.ready ? 'Doctor: ready' : 'Doctor: action needed';
     if (doctor && !doctor.ready && doctorPanel.hidden) {
       doctorPanel.hidden = false;
       doctorToggleBtn.setAttribute('aria-expanded', 'true');
@@ -9721,7 +9721,7 @@ async def compact_github_results(context: FunctionInvocationContext, call_next):
                 item.text = _compact_text(tool_name, item.text, cutoff)
 `;
 }
-async function writeGithubMcpConfig(sourceDir, mode, { githubRequired = true } = {}) {
+async function writeGithubMcpConfig(sourceDir, mode) {
   const mcpPath = path11.join(sourceDir, "mcp.json");
   let mcpConfig = { servers: {} };
   try {
@@ -9733,10 +9733,9 @@ async function writeGithubMcpConfig(sourceDir, mode, { githubRequired = true } =
   delete mcpConfig.servers["aigw-github"];
   delete mcpConfig.servers.github;
   delete mcpConfig.servers[M365_INBOX_CONNECTOR.connectorName];
-  if (!githubRequired) {
-    await writeTextIfChanged(mcpPath, `${JSON.stringify(mcpConfig, null, 2)}
+  if (mode === "none") {
+    return writeTextIfChanged(mcpPath, `${JSON.stringify(mcpConfig, null, 2)}
 `);
-    return;
   }
   if (mode === "gateway") {
     mcpConfig.servers["aigw-github"] = {
@@ -9762,7 +9761,7 @@ async function writeGithubMcpConfig(sourceDir, mode, { githubRequired = true } =
       }
     };
   }
-  await writeTextIfChanged(mcpPath, `${JSON.stringify(mcpConfig, null, 2)}
+  return writeTextIfChanged(mcpPath, `${JSON.stringify(mcpConfig, null, 2)}
 `);
 }
 async function migrateGithubToolInstructions(sourceDir, mode) {
@@ -9790,9 +9789,8 @@ async function ensureGatewayProviderFilesUnlocked(entry, mcpMode) {
   const agentsConfigPath = path11.join(sourceDir, "agents.config.yaml");
   await writeTextIfChanged(helperPath, gatewayClientManagerSource());
   await writeTextIfChanged(middlewarePath, githubMcpMiddlewareSource());
-  await writeGithubMcpConfig(sourceDir, mcpMode, {
-    githubRequired: Boolean(githubRequirement(entry))
-  });
+  const githubMode = githubRequirement(entry) ? mcpMode : "none";
+  const mcpChanged = await writeGithubMcpConfig(sourceDir, githubMode);
   await migrateGithubToolInstructions(sourceDir, mcpMode);
   const agentsConfig = await readFile9(agentsConfigPath, "utf8");
   if (agentsConfig.includes("model: $FOUNDRY_MODEL")) {
@@ -9801,6 +9799,7 @@ async function ensureGatewayProviderFilesUnlocked(entry, mcpMode) {
   const current = await readFile9(functionAppPath, "utf8");
   const next = canonicalizeModelProviderRouting(current, { addIfMissing: true });
   await writeFile4(functionAppPath, next);
+  return { githubMode, mcpChanged };
 }
 async function readLocalSettings(entry) {
   const settingsPath = path11.join(entry.agentDir || path11.join(requireTemplateDir(entry), "src"), "local.settings.json");
@@ -12727,12 +12726,17 @@ async function prepareInvocation(entry, httpRequestDraft) {
   if (entry.modelBinding.loading || entry.modelBinding.source !== entry.modelBinding.activeSource || entry.modelBinding.resourceId !== entry.modelBinding.activeResourceId || entry.modelBinding.modelId !== entry.modelBinding.activeModelId) {
     throw new Error("Wait for the selected model endpoint to finish binding before invoking.");
   }
+  let mcpConfigChanged = false;
   if (entry.sourceWorkspace.sourceMode === "managed") {
-    await ensureGatewayProviderFiles(entry, entry.modelBinding.activeSource === "gateway" ? "gateway" : "public");
+    const providerFiles = await ensureGatewayProviderFiles(
+      entry,
+      entry.modelBinding.activeSource === "gateway" ? "gateway" : "public"
+    );
+    mcpConfigChanged = Boolean(providerFiles?.mcpChanged);
     if (entry.modelBinding.activeSource === "foundry") await ensureLocalFoundryRuntimeSettings(entry);
     else await ensureDeclaredParameterRuntimeSettings(entry);
   }
-  if (entry.local.status === "running" && (entry.local.githubCredentialFingerprint !== entry.githubCredential.fingerprint || entry.local.githubRepository !== entry.githubContext.repository)) {
+  if (entry.local.status === "running" && (mcpConfigChanged || entry.local.githubCredentialFingerprint !== entry.githubCredential.fingerprint || entry.local.githubRepository !== entry.githubContext.repository)) {
     await restartLocalEnvironment(entry);
   } else {
     await startLocalEnvironment(entry);
