@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "format": "extension",
+  "name": "azure-functions-hosted-skills",
+  "version": "0.4.0",
+  "runtimeIdentity": "studio-package.json",
+  "files": [
+    "README.md",
+    "THIRD_PARTY_NOTICES.txt",
+    "extension.mjs",
+    "package.json",
+    "studio-package.json",
+    "templates/hosted-skill/.gitignore",
+    "templates/hosted-skill/azure.yaml",
+    "templates/hosted-skill/infra/abbreviations.json",
+    "templates/hosted-skill/infra/app/api.bicep",
+    "templates/hosted-skill/infra/app/connector-gateway.bicep",
+    "templates/hosted-skill/infra/app/foundry.bicep",
+    "templates/hosted-skill/infra/app/rbac.bicep",
+    "templates/hosted-skill/infra/app/session-pool-rbac.bicep",
+    "templates/hosted-skill/infra/app/session-pool.bicep",
+    "templates/hosted-skill/infra/main.bicep",
+    "templates/hosted-skill/infra/main.parameters.json",
+    "templates/hosted-skill/src/.funcignore",
+    "templates/hosted-skill/src/agents.config.yaml",
+    "templates/hosted-skill/src/daily-repo-digest-http.agent.md",
+    "templates/hosted-skill/src/daily-repo-digest.agent.md",
+    "templates/hosted-skill/src/function_app.py",
+    "templates/hosted-skill/src/host.json",
+    "templates/hosted-skill/src/requirements.txt"
+  ],
+  "status": "publication-controlled-by-external-approval",
+  "runtime": {
+    "node": ">=22",
+    "sdk": "@github/copilot-sdk/extension",
+    "azureCli": ">=2.61"
+  },
+  "build": {
+    "esbuild": "0.25.12",
+    "lockSha256": "1377c09a0463dd178375727890ac06fd3e66b40813168a6eb543353bdcdd994c",
+    "inputSha256": "62821b5d85428f2c93722fe68163aed76ac123ab75f0d4f51349b7d493b1be56"
+  },
+  "dependencies": [
+    {
+      "name": "@cloud-foundation/function-app-core",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@cloud-foundation/studio-runtime",
+      "version": "0.1.0",
+      "license": null
+    }
+  ],
+  "modules": [
+    {
+      "file": "extension.mjs",
+      "platform": "node"
+    }
+  ],
+  "assets": []
+}
