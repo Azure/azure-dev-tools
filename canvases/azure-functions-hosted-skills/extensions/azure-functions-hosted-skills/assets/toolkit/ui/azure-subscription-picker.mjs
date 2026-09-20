@@ -3,6 +3,10 @@ import { createSubscriptionPicker } from "./subscription-picker.mjs";
 var lower = (value) => String(value ?? "").toLowerCase();
 var accountKey = (account) => account.key ?? JSON.stringify([account.cloud, lower(account.tenantId), lower(account.id), lower(account.accountName)]);
 var sameSubscription = (left, right) => lower(left.id) === lower(right.id) && lower(left.tenantId) === lower(right.tenantId) && left.cloud === right.cloud;
+var needsAzureLoginHelp = (error) => {
+  if (!error || typeof error === "string") return false;
+  return ["signed-out", "login-required", "authentication-required", "no-accounts"].includes(lower(error.code));
+};
 function pickerAccounts(accounts) {
   const identities = /* @__PURE__ */ new Map();
   const identityKey = (account) => JSON.stringify([account.cloud, lower(account.tenantId), lower(account.id)]);
@@ -107,7 +111,7 @@ function createAzureSubscriptionPicker({
     }
     const message = typeof state.error === "string" ? state.error : state.error?.message;
     const command = state.scope?.tenantId ? `az login --tenant ${state.scope.tenantId}` : "az login";
-    const help = message ? `${message} Sign in with Azure CLI using ${command}, then use Refresh subscriptions.` : !state.accounts.length ? "No Azure subscriptions are available. Run az login in a terminal, then use Refresh subscriptions." : "";
+    const help = message ? needsAzureLoginHelp(state.error) ? `${message} Sign in with Azure CLI using ${command}, then use Refresh subscriptions.` : message : !state.accounts.length ? "No Azure subscriptions are available. Run az login in a terminal, then use Refresh subscriptions." : "";
     status.textContent = help;
     status.hidden = !help;
     picker.setState({

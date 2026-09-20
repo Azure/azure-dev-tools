@@ -4302,7 +4302,24 @@ function reconcileToolkitSubscriptionState(state, subscriptions, pickerSnapshot)
     state.subscriptionUnavailable = !available;
     return { selected: committed, changed: false, unavailable: !available };
   }
-  const changed = Boolean(state.subscription);
+  const defaults = (pickerSnapshot?.accounts || []).filter((account) => {
+    if (!account?.isDefault || String(account.state).toLowerCase() !== "enabled" || !account.key) return false;
+    return subscriptions.some((subscription) => subscription.isDefault && subscription.id.toLowerCase() === account.id.toLowerCase() && subscription.tenantId.toLowerCase() === account.tenantId.toLowerCase());
+  });
+  const defaultAccount = defaults.length === 1 ? defaults[0] : null;
+  const matchingPrincipals = defaultAccount ? new Set(
+    (pickerSnapshot?.accounts || []).filter((account) => String(account.state).toLowerCase() === "enabled" && account.id.toLowerCase() === defaultAccount.id.toLowerCase() && account.tenantId.toLowerCase() === defaultAccount.tenantId.toLowerCase() && account.cloud === defaultAccount.cloud).map((account) => String(account.accountName).toLowerCase())
+  ) : /* @__PURE__ */ new Set();
+  if (defaultAccount && matchingPrincipals.size === 1) {
+    const scope = subscriptionScopeFromAccount(defaultAccount);
+    const changed2 = state.subscription !== defaultAccount.id || !state.subscriptionScope;
+    state.subscription = defaultAccount.id;
+    state.tenantId = defaultAccount.tenantId;
+    state.subscriptionScope = scope;
+    state.subscriptionUnavailable = false;
+    return { selected: defaultAccount.id, changed: changed2, unavailable: false };
+  }
+  const changed = Boolean(state.subscription || state.subscriptionScope);
   state.subscription = "";
   state.tenantId = "";
   state.subscriptionScope = null;
@@ -6195,6 +6212,43 @@ function createLocalPortReservationPool({ isListening }) {
       throw new Error(`No free TCP port found starting at ${start}`);
     }
   };
+}
+async function waitForLocalHostReady({
+  port,
+  isListening,
+  fetchStatus,
+  ensureCurrent = () => {
+  },
+  timeoutMs = 3e4,
+  pollMs = 250,
+  now = Date.now,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
+}) {
+  const deadline = now() + timeoutMs;
+  let detail = "TCP listener not ready";
+  while (now() < deadline) {
+    ensureCurrent();
+    if (await isListening(port)) {
+      try {
+        const response = await fetchStatus();
+        const state = String(response?.body?.state || "");
+        if (response?.ok && state.toLowerCase() === "running") {
+          return {
+            state,
+            detail: typeof response.body.version === "string" ? `Functions host ${response.body.version}` : "Functions host ready"
+          };
+        }
+        detail = `HTTP ${response?.status ?? "unknown"}${state ? ` (${state})` : ""}`;
+      } catch (error) {
+        detail = error instanceof Error ? error.message : String(error);
+      }
+    }
+    const remaining = deadline - now();
+    if (remaining > 0) await sleep(Math.min(pollMs, remaining));
+  }
+  throw new Error(
+    `Functions host on 127.0.0.1:${port} did not report Running within ${Math.round(timeoutMs / 1e3)} seconds: ${detail}`
+  );
 }
 function appendBoundedDeploymentOutput(deployment, event, { maxLines = 800, maxChars = 12e4 } = {}) {
   deployment.output ||= [];
@@ -12222,50 +12276,33 @@ ${stderrText}`);
     broadcast(entry, "state", snapshot(entry));
     throw new Error(entry.local.error);
   }
-  let reachable = false;
-  for (let i = 0; i < 20; i++) {
-    if (await portListening(port)) {
-      reachable = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!reachable) {
-    cmdEnd(entry, c, { ok: false, note: "port never accepted connections" });
-    entry.local.status = "error";
-    entry.local.error = `func start printed its function list but 127.0.0.1:${port} never accepted a connection.`;
-    broadcast(entry, "state", snapshot(entry));
-    throw new Error(entry.local.error);
-  }
   const healthCommand = cmdStart(entry, {
     kind: "http",
     title: "Functions host readiness",
     cmd: `GET http://127.0.0.1:${port}/admin/host/status`,
     purpose: "Confirm the Functions host reports Running before enabling invocation"
   });
-  let hostState = "";
-  let hostDetail = "";
-  const healthDeadline = Date.now() + 2e4;
-  while (Date.now() < healthDeadline) {
-    ensureCurrent();
-    if (child.exitCode !== null) break;
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/admin/host/status`, {
-        signal: AbortSignal.timeout(1e3)
-      });
-      const body = await response.json().catch(() => ({}));
-      hostState = String(body?.state || "");
-      hostDetail = response.ok ? hostState || `HTTP ${response.status}` : `HTTP ${response.status}`;
-      if (response.ok && hostState.toLowerCase() === "running") break;
-    } catch (error) {
-      hostDetail = shortError(error);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  if (hostState.toLowerCase() !== "running") {
-    const error = new Error(
-      `Functions host did not report Running at /admin/host/status within 20s${hostDetail ? ` (${hostDetail})` : ""}.`
-    );
+  let readiness;
+  try {
+    readiness = await waitForLocalHostReady({
+      port,
+      isListening: portListening,
+      fetchStatus: async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/admin/host/status`, {
+          signal: AbortSignal.timeout(1e3)
+        });
+        return {
+          ok: response.ok,
+          status: response.status,
+          body: await response.json().catch(() => ({}))
+        };
+      },
+      ensureCurrent: () => {
+        ensureCurrent();
+        if (child.exitCode !== null) throw new Error("Functions host exited before it became ready.");
+      }
+    });
+  } catch (error) {
     cmdEnd(entry, healthCommand, { ok: false, note: error.message });
     cmdEnd(entry, c, { ok: false, note: "admin host status did not reach Running" });
     entry.local.status = "error";
@@ -12274,7 +12311,7 @@ ${stderrText}`);
     throw error;
   }
   cmdEnd(entry, healthCommand, { ok: true, note: "Running" });
-  cmdEnd(entry, c, { ok: true, note: `listening on 127.0.0.1:${port}` });
+  cmdEnd(entry, c, { ok: true, note: readiness.detail });
   releasePort();
   entry.local.status = "running";
   entry.local.error = "";
@@ -12761,7 +12798,9 @@ function ensureAzureSubscriptions(entry, { force = false, loadApps = true } = {}
       const modelSelection = reconcile(entry.modelBinding);
       if (azureSelection.changed || azureSelection.unavailable) resetAzureFunctionSelection(entry);
       if (modelSelection.changed || modelSelection.unavailable) resetModelDiscovery(entry);
-      if (subscriptionProviderMode === "legacy") await persistSubscriptionScopes(entry);
+      if (subscriptionProviderMode === "legacy" || azureSelection.changed || modelSelection.changed) {
+        await persistSubscriptionScopes(entry);
+      }
       if (!entry.azure.subscriptions.length) {
         entry.azure.subscriptionsError = "No enabled Azure subscriptions found.";
         broadcast(entry, "state", snapshot(entry));
