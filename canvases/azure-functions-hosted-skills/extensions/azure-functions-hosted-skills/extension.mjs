@@ -1218,7 +1218,7 @@ function retainedHostedSkillsClient() {
   function render(next) {
     state = next;
     const doctor = next.doctor;
-    $('doctor-tag').textContent = next.doctorRunning ? 'checking…' : doctor ? (doctor.ready ? 'ready' : 'action needed') : 'not checked';
+    $('doctor-tag').textContent = next.doctorRunning ? 'Checking…' : doctor ? (doctor.ready ? 'Ready' : 'Action needed') : 'Not checked';
     $('doctor-list').innerHTML = doctor ? doctor.checks.map((check) => '<div class="doctor-row ' + (check.status === 'ready' ? 'ok' : 'err') + '"><strong>' + esc(check.label) + '</strong><div class="doctor-detail">' + esc(check.detail) + '</div></div>').join('') : '';
     const source = next.sourceWorkspace || {};
     const attached = source.sourceMode === 'attached';
@@ -1790,8 +1790,10 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
   .deployment-actions { display: flex; align-items: center; gap: .55rem; margin-bottom: .55rem; }
   .deployment-terminal { margin: 0; min-height: 100px; max-height: 300px; overflow: auto; border-radius: 8px; padding: .65rem;
     background: #0b1120; color: #dbe5f7; font: .72rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .subscription-picker-field { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+  .subscription-picker-field { display: flex; flex: 1 1 180px; flex-direction: column; gap: 3px; min-width: 0; }
   .subscription-picker-field > span { font-size: .72rem; color: var(--muted); }
+  .subscription-picker-field .canvas-subscription-picker-trigger { width: 100%; justify-content: flex-start; }
+  .subscription-picker-field .canvas-subscription-picker-pill { flex: 1 1 auto; border: 0; background: transparent; padding-left: 6px; }
 ` : ""}</style>
 </head>
 <body>
@@ -1814,7 +1816,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
     <div class="doctor-panel" id="doctor-panel" hidden>
       <div class="doctor-head">
         <button class="btn ghost" id="doctor-run">Check readiness</button>
-        <span class="tag" id="doctor-tag">not checked</span>
+        <span class="tag" id="doctor-tag">Not checked</span>
       </div>
       <p class="doctor-note">Read-only checks for uv, Python ${MIN_PYTHON_LABEL2}+, Core Tools, Node.js, Azurite, and the Azure CLI (including sign-in). Never installs anything, never opens a login prompt, never touches Azure resources.</p>
       <div class="doctor-list" id="doctor-list"></div>
@@ -2462,16 +2464,16 @@ ${commandClientScript()}
     doctorRunBtn.disabled = running;
     doctorRunBtn.textContent = running ? 'Checking\u2026' : 'Check readiness';
     if (running) {
-      doctorTag.textContent = 'checking\u2026';
+      doctorTag.textContent = 'Checking\u2026';
       doctorTag.className = 'tag';
     } else if (!doctor) {
-      doctorTag.textContent = 'not checked';
+      doctorTag.textContent = 'Not checked';
       doctorTag.className = 'tag';
     } else {
-      doctorTag.textContent = doctor.ready ? 'ready' : 'action needed';
+      doctorTag.textContent = doctor.ready ? 'Ready' : 'Action needed';
       doctorTag.className = 'tag' + (doctor.ready ? ' ok' : ' err');
     }
-    doctorToggleLabel.textContent = !doctor ? 'Doctor' : doctor.ready ? 'Doctor: ready' : 'Doctor: action needed';
+    doctorToggleLabel.textContent = !doctor ? 'Doctor' : doctor.ready ? 'Doctor: Ready' : 'Doctor: Action needed';
     if (doctor && !doctor.ready && doctorPanel.hidden) {
       doctorPanel.hidden = false;
       doctorToggleBtn.setAttribute('aria-expanded', 'true');
@@ -9719,7 +9721,7 @@ async def compact_github_results(context: FunctionInvocationContext, call_next):
                 item.text = _compact_text(tool_name, item.text, cutoff)
 `;
 }
-async function writeGithubMcpConfig(sourceDir, mode) {
+async function writeGithubMcpConfig(sourceDir, mode, { githubRequired = true } = {}) {
   const mcpPath = path11.join(sourceDir, "mcp.json");
   let mcpConfig = { servers: {} };
   try {
@@ -9731,6 +9733,11 @@ async function writeGithubMcpConfig(sourceDir, mode) {
   delete mcpConfig.servers["aigw-github"];
   delete mcpConfig.servers.github;
   delete mcpConfig.servers[M365_INBOX_CONNECTOR.connectorName];
+  if (!githubRequired) {
+    await writeTextIfChanged(mcpPath, `${JSON.stringify(mcpConfig, null, 2)}
+`);
+    return;
+  }
   if (mode === "gateway") {
     mcpConfig.servers["aigw-github"] = {
       type: "streamable-http",
@@ -9783,7 +9790,9 @@ async function ensureGatewayProviderFilesUnlocked(entry, mcpMode) {
   const agentsConfigPath = path11.join(sourceDir, "agents.config.yaml");
   await writeTextIfChanged(helperPath, gatewayClientManagerSource());
   await writeTextIfChanged(middlewarePath, githubMcpMiddlewareSource());
-  await writeGithubMcpConfig(sourceDir, mcpMode);
+  await writeGithubMcpConfig(sourceDir, mcpMode, {
+    githubRequired: Boolean(githubRequirement(entry))
+  });
   await migrateGithubToolInstructions(sourceDir, mcpMode);
   const agentsConfig = await readFile9(agentsConfigPath, "utf8");
   if (agentsConfig.includes("model: $FOUNDRY_MODEL")) {
@@ -14923,6 +14932,7 @@ var functionStudioTestHooks = Object.freeze({
   parametersFromHttpRequest,
   githubRequirement,
   initializeDeclaredIntegrations,
+  writeGithubMcpConfig,
   validateGithubRepositoryAccess,
   ensureEntry,
   snapshot,
