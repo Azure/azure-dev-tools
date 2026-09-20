@@ -1,0 +1,6 @@
+name: serverless-repo-digest-agent
+services:
+  api:
+    project: ./src
+    language: python
+    host: function
