@@ -74,12 +74,13 @@ registration:
 3. Retry once using the selection rules above, only if that ID is available.
 
 If recovery still fails, report the real error and give the canonical
-reinstallation commands, then stop:
+reinstallation steps, then stop:
 
-```bash
-copilot plugin marketplace add coreai-microsoft/canvases-cloud-foundation
-copilot plugin install azure-functions-hosted-skills@canvases-cloud-foundation
-```
+1. Copy
+   `https://github.com/Azure/azure-dev-tools/tree/main/canvases/azure-functions-hosted-skills`.
+2. In GitHub Copilot, choose **Install extension from URL…** and paste the
+   staging URL.
+3. Open **Azure Functions Hosted Skills Preview** in a fresh project chat.
 
 Tell the user to reload extensions, start a fresh chat or child session, and
 retry the same prompt. Do not silently fall back to Azure onboarding, a script,

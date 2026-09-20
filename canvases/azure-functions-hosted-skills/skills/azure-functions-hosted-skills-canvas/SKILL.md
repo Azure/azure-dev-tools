@@ -87,14 +87,15 @@ and retry once using the selection rules above. Do not retry an ID that is
 still unavailable.
 
 If recovery fails, report the actual error and give the canonical reinstall
-commands, then stop:
+steps, then stop:
 
-```bash
-copilot plugin marketplace add coreai-microsoft/canvases-cloud-foundation
-copilot plugin install azure-functions-hosted-skills@canvases-cloud-foundation
-```
+1. Copy
+   `https://github.com/Azure/azure-dev-tools/tree/main/canvases/azure-functions-hosted-skills`.
+2. In GitHub Copilot, choose **Install extension from URL…** and paste the
+   staging URL.
+3. Open **Azure Functions Hosted Skills Preview** in a fresh project chat.
 
 Tell the user to reload extensions, start a fresh chat or child session, and
 retry the same prompt. Do not silently fall back to hand-written implementation.
-Only the canonical install command above is supported; old folder URLs and the
+Only the canonical install flow above is supported; old folder URLs and the
 retired marketplace entry are no longer supported. Preserve legacy state and apps.

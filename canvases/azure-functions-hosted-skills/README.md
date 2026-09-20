@@ -9,7 +9,7 @@ GitHub Copilot host.
 > later.
 
 1. Copy
-   `https://github.com/coreai-microsoft/canvases-cloud-foundation/tree/paulyuk-microsoft-fix-hosted-skill-authoring/canvases/azure-functions-hosted-skills`.
+   `https://github.com/Azure/azure-dev-tools/tree/main/canvases/azure-functions-hosted-skills`.
 2. In GitHub Copilot, choose **Install extension from URL…** and paste the
    staging URL.
 3. Open **Azure Functions Hosted Skills Preview** in a project chat.

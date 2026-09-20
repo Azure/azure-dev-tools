@@ -4,7 +4,7 @@
   "version": "0.4.0",
   "author": {
     "name": "Cloud Foundation",
-    "url": "https://github.com/coreai-microsoft/canvases-cloud-foundation"
+    "url": "https://github.com/Azure/azure-dev-tools"
   },
   "extensions": ".",
   "skills": [
