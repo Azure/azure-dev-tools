@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "format": "plugin",
+  "name": "azure-sre-agent",
+  "version": "0.1.0",
+  "plugin": {
+    "manifest": ".github/plugin/plugin.json",
+    "extension": {
+      "name": "azure-sre-agent",
+      "canvasId": "azure-sre-agent",
+      "directory": "extensions/azure-sre-agent",
+      "entry": "extensions/azure-sre-agent/extension.mjs"
+    },
+    "skills": [
+      {
+        "name": "azure-sre-agent-canvas",
+        "directory": "skills/azure-sre-agent-canvas",
+        "files": [
+          "SKILL.md"
+        ]
+      }
+    ]
+  },
+  "runtimeIdentity": "extensions/azure-sre-agent/studio-package.json",
+  "files": [
+    ".github/plugin/plugin.json",
+    "README.md",
+    "THIRD_PARTY_NOTICES.txt",
+    "extensions/azure-sre-agent/extension.mjs",
+    "extensions/azure-sre-agent/studio-package.json",
+    "package.json",
+    "skills/azure-sre-agent-canvas/SKILL.md"
+  ],
+  "status": "publication-controlled-by-external-approval",
+  "runtime": {
+    "node": ">=22",
+    "sdk": "@github/copilot-sdk/extension",
+    "azureCli": ">=2.61"
+  },
+  "build": {
+    "esbuild": "0.25.12",
+    "lockSha256": "78f777e2912e4f0c5de5320d01f34e97df4c06c7b31d9bfa6936f729a97f7a64",
+    "inputSha256": "58b8a65e8825bf6ab8004460fa8a0fc4082f47d3077da8bd00823f465b037009"
+  },
+  "dependencies": [
+    {
+      "name": "@cloud-foundation/sre-agent-core",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@cloud-foundation/studio-runtime",
+      "version": "0.1.0",
+      "license": null
+    }
+  ],
+  "modules": [
+    {
+      "file": "extensions/azure-sre-agent/extension.mjs",
+      "platform": "node"
+    }
+  ],
+  "assets": []
+}
