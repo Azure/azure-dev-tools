@@ -1251,7 +1251,7 @@ function retainedHostedSkillsClient() {
     $('model-create-alternatives').textContent = (create.alternatives || []).join(' ');
     $('model-create-confirm').disabled = Boolean(create.running);
     $('model-create-status').textContent = create.running ? 'Creating Foundry models...' : (create.message || '');
-    $('local-log-tag').textContent = next.local.status + (next.local.port ? ' · :' + next.local.port : '');
+    $('local-log-tag').textContent = next.local.status + (next.local.phase ? ' · ' + next.local.phase : '') + (next.local.port ? ' · :' + next.local.port : '');
     $('local-log').textContent = (next.local.logTail || []).join('\n');
     $('skill-name').textContent = next.hero?.title || 'Skill';
     const skills = (next.hostedSkills || []).filter((skill) => skill.trigger === next.trigger);
@@ -2714,7 +2714,9 @@ ${commandClientScript()}
     const localControl = localRuntimeControlState(state);
     localToggleBtn.textContent = localControl.label;
     localToggleBtn.disabled = localControl.disabled;
-    localLogTag.textContent = state.local.status + (running && state.local.port ? (' \xB7 :' + state.local.port) : '');
+    const bootstrap = state.bootstrap || {};
+    const localProgress = state.local.phase || (bootstrap.phase !== 'idle' && bootstrap.phase !== 'ready' ? bootstrap.status : '');
+    localLogTag.textContent = state.local.status + (localProgress ? (' \xB7 ' + localProgress) : '') + (running && state.local.port ? (' \xB7 :' + state.local.port) : '');
     localLogEl.textContent = (state.local.logTail || []).join('\\n');
     localLogEl.scrollTop = localLogEl.scrollHeight;
   }
@@ -8881,6 +8883,7 @@ function snapshot(entry) {
     },
     local: {
       status: entry.local.status,
+      phase: entry.local.phase,
       port: entry.local.port,
       error: entry.local.error,
       funcVersion: entry.local.funcVersion,
@@ -8892,6 +8895,11 @@ function snapshot(entry) {
       azuriteNote: entry.local.azuriteNote,
       functions: entry.local.functions,
       logTail: entry.local.logTail.slice(-50)
+    },
+    bootstrap: {
+      phase: entry.bootstrap.phase,
+      status: entry.bootstrap.status,
+      error: entry.bootstrap.error
     },
     azure: {
       subscriptions: entry.azure.subscriptions,
@@ -9063,6 +9071,7 @@ function ensureEntry(instanceId) {
     },
     local: {
       status: "stopped",
+      phase: "",
       port: null,
       error: "",
       funcVersion: "",
@@ -9077,6 +9086,7 @@ function ensureEntry(instanceId) {
       azuriteProc: null,
       startPromise: null,
       startGeneration: 0,
+      autoStartSuppressed: false,
       githubCredentialFingerprint: "",
       githubRepository: "",
       sourceFingerprint: "",
@@ -9087,6 +9097,13 @@ function ensureEntry(instanceId) {
       logSequence: 0,
       logEvents: [],
       executions: /* @__PURE__ */ new Map()
+    },
+    bootstrap: {
+      promise: null,
+      generation: 0,
+      phase: "idle",
+      status: "",
+      error: ""
     },
     azure: {
       subscriptions: [],
@@ -10453,6 +10470,19 @@ async function initializeModelBindings(entry) {
       entry.modelBinding.activeResourceId = configuredResource.id;
       entry.modelBinding.activeLabel = `${configuredModel?.label || configured.model} via ${configured.source === "foundry" ? "Microsoft Foundry" : "AI Gateway"}`;
     }
+    const managedConfiguredBindingIsStale = Boolean(
+      configured && !configuredResource && entry.sourceWorkspace.sourceMode === "managed"
+    );
+    if (managedConfiguredBindingIsStale) {
+      entry.modelBinding.configured = false;
+      entry.modelBinding.activeLabel = "";
+      entry.modelBinding.activeSource = "";
+      entry.modelBinding.activeResourceId = "";
+      entry.modelBinding.activeModelId = "";
+      entry.modelBinding.status = "The saved model endpoint is unavailable. Binding the first available Microsoft Foundry model...";
+    } else if (configured && !configuredResource) {
+      entry.modelBinding.error = "The existing app's configured model endpoint was not found in this subscription. Azure Functions Hosted Skills will not rewrite developer-owned settings.";
+    }
     if (!entry.modelBinding.configured) {
       entry.modelBinding.source = entry.modelBinding.foundry.some((item) => item.models.length) || entry.modelBinding.gatewayCapability.status !== "available" ? "foundry" : "gateway";
       selectDefaultModelBinding(entry);
@@ -10472,6 +10502,59 @@ async function initializeModelBindings(entry) {
     entry.modelBinding.initializePromise = null;
   });
   return entry.modelBinding.initializePromise;
+}
+function updateBootstrap(entry, phase, status, error = "") {
+  entry.bootstrap.phase = phase;
+  entry.bootstrap.status = status;
+  entry.bootstrap.error = error;
+  broadcast(entry, "state", snapshot(entry));
+}
+function startLocalBootstrap(entry, { userInitiated = false } = {}) {
+  if (entry.target !== "local") return Promise.resolve();
+  if (userInitiated) entry.local.autoStartSuppressed = false;
+  if (entry.local.autoStartSuppressed) {
+    return Promise.reject(
+      new Error("Local automatic startup is paused after Stop. Select Start local function to resume.")
+    );
+  }
+  if (entry.bootstrap.promise) return entry.bootstrap.promise;
+  if (entry.local.status === "running" && entry.modelBinding.configured) {
+    updateBootstrap(entry, "ready", "Model endpoint bound and local function host ready.");
+    return Promise.resolve();
+  }
+  const generation = ++entry.bootstrap.generation;
+  const ensureCurrent = () => {
+    if (generation !== entry.bootstrap.generation || entry.local.autoStartSuppressed) {
+      throw new Error("Local startup cancelled.");
+    }
+  };
+  const promise = (async () => {
+    updateBootstrap(entry, "integrations", "Checking declared integrations...");
+    await initializeDeclaredIntegrations(entry);
+    ensureCurrent();
+    updateBootstrap(entry, "model", "Discovering and binding a model endpoint...");
+    await initializeModelBindings(entry);
+    ensureCurrent();
+    if (!entry.modelBinding.configured) {
+      throw new Error(entry.modelBinding.error || "No usable model endpoint is configured.");
+    }
+    updateBootstrap(entry, "host", "Preparing the local function host...");
+    await startLocalEnvironment(entry);
+    ensureCurrent();
+    updateBootstrap(entry, "ready", "Model endpoint bound and local function host ready.");
+  })().catch((error) => {
+    if (generation !== entry.bootstrap.generation || entry.local.autoStartSuppressed) {
+      updateBootstrap(entry, "paused", "Automatic startup paused after Stop.");
+    } else {
+      const message = shortError(error) || String(error?.message || error);
+      updateBootstrap(entry, "failed", `Startup failed: ${message}`, message);
+    }
+    throw error;
+  }).finally(() => {
+    if (entry.bootstrap.promise === promise) entry.bootstrap.promise = null;
+  });
+  entry.bootstrap.promise = promise;
+  return promise;
 }
 async function loadTimerSchedule(entry) {
   const expression = String(entry.selectedHostedSkill?.triggerArgs?.schedule || "");
@@ -11074,9 +11157,11 @@ async function ensureSourceMaterialized(entry, options = {}) {
 }
 async function startGeneratedWorkspace(entry, options = {}) {
   await ensureSourceMaterialized(entry, options);
-  await initializeDeclaredIntegrations(entry);
-  await initializeModelBindings(entry);
-  if (entry.target === "local") await startLocalEnvironment(entry);
+  if (entry.target === "local") await startLocalBootstrap(entry);
+  else {
+    await initializeDeclaredIntegrations(entry);
+    await initializeModelBindings(entry);
+  }
   return entry.hero;
 }
 function resetGeneratedWorkspaceState(entry, { preserveManaged = false } = {}) {
@@ -11095,6 +11180,12 @@ function resetGeneratedWorkspaceState(entry, { preserveManaged = false } = {}) {
   entry.modelBinding.activeSource = "";
   entry.modelBinding.activeResourceId = "";
   entry.modelBinding.activeModelId = "";
+  entry.bootstrap.generation += 1;
+  entry.bootstrap.promise = null;
+  entry.bootstrap.phase = "idle";
+  entry.bootstrap.status = "";
+  entry.bootstrap.error = "";
+  entry.local.autoStartSuppressed = false;
   entry.sourceWorkspace.reentered = false;
   if (!preserveManaged) {
     entry.sourceWorkspace.materialized = false;
@@ -12332,10 +12423,17 @@ function startLocalEnvironment(entry) {
   if (entry.local.status === "running") return Promise.resolve();
   if (entry.local.startPromise) return entry.local.startPromise;
   if (process.env.FUNCTION_STUDIO_TEST_MODE === "1" && fixtureLocalEnvironmentStarter) {
-    entry.local.startPromise = Promise.resolve().then(() => fixtureLocalEnvironmentStarter(entry)).then(() => {
+    entry.local.startPromise = Promise.resolve().then(() => {
+      entry.local.status = "starting";
+      entry.local.phase = "Starting Functions and waiting for readiness";
+      broadcast(entry, "state", snapshot(entry));
+      return fixtureLocalEnvironmentStarter(entry);
+    }).then(() => {
       if (entry.local.status === "running") {
+        entry.local.phase = "Ready";
         entry.local.githubCredentialFingerprint = entry.githubCredential.fingerprint;
         entry.local.githubRepository = entry.githubContext.repository;
+        broadcast(entry, "state", snapshot(entry));
       }
     }).finally(() => {
       entry.local.startPromise = null;
@@ -12359,11 +12457,14 @@ function startLocalEnvironment(entry) {
   };
   entry.local.startPromise = (async () => {
     entry.local.status = "starting";
+    entry.local.phase = "Preparing app";
     entry.local.error = "";
     broadcast(entry, "state", snapshot(entry));
     try {
       await ensureTemplate(entry);
       ensureCurrent();
+      entry.local.phase = "Claiming local runtime";
+      broadcast(entry, "state", snapshot(entry));
       await acquireLocalAppRuntimeOwnership(entry);
       if (entry.sourceWorkspace.sourceMode === "managed") {
         await ensureGatewayProviderFiles(
@@ -12380,10 +12481,16 @@ function startLocalEnvironment(entry) {
       }
       await assertLocalQueueStorageSafe(entry);
       ensureCurrent();
+      entry.local.phase = "Checking prerequisites";
+      broadcast(entry, "state", snapshot(entry));
       await checkLocalPrereqs(entry);
       ensureCurrent();
+      entry.local.phase = "Starting Azurite";
+      broadcast(entry, "state", snapshot(entry));
       await ensureAzurite(entry, ensureCurrent);
       ensureCurrent();
+      entry.local.phase = "Preparing Python";
+      broadcast(entry, "state", snapshot(entry));
       if (entry.sourceWorkspace.sourceMode === "managed") {
         await ensureVenv(entry);
       } else {
@@ -12396,7 +12503,10 @@ function startLocalEnvironment(entry) {
         entry.local.pythonVersion = probe.text;
       }
       ensureCurrent();
+      entry.local.phase = "Starting Functions and waiting for readiness";
+      broadcast(entry, "state", snapshot(entry));
       await withSourceWorkspaceMutation(entry, "Starting the local function", () => startFuncHost(entry, ensureCurrent));
+      entry.local.phase = "Ready";
       startFoundryTokenRefresh(entry);
     } catch (error) {
       const cancelled = generation !== entry.local.startGeneration;
@@ -12445,6 +12555,7 @@ function stopLocal(entry) {
     entry.local.azuriteProc = null;
   }
   entry.local.status = "stopped";
+  entry.local.phase = "";
   entry.local.port = null;
   entry.local.functions = [];
   entry.local.sourceFingerprint = "";
@@ -12454,6 +12565,14 @@ function stopLocal(entry) {
     entry.local.runtimeReleasePromise = Promise.resolve(release());
   }
   broadcast(entry, "state", snapshot(entry));
+}
+function stopLocalByUser(entry) {
+  entry.local.autoStartSuppressed = true;
+  entry.bootstrap.generation += 1;
+  entry.bootstrap.phase = "paused";
+  entry.bootstrap.status = "Automatic startup paused after Stop.";
+  entry.bootstrap.error = "";
+  stopLocal(entry);
 }
 async function stopLocalAndRelease(entry) {
   const children = [entry.local.funcProc, entry.local.azuriteProc].filter(Boolean);
@@ -12707,6 +12826,7 @@ async function prepareInvocation(entry, httpRequestDraft) {
   if (entry.target !== "local") return;
   await refreshWorkspaceFromDisk(entry, { restartIfRunning: true });
   if (!entry.selectedHostedSkill) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
+  await startLocalBootstrap(entry);
   const github = githubRequirement(entry);
   if (github) {
     await initializeDeclaredIntegrations(entry, {
@@ -13773,7 +13893,7 @@ data: ${JSON.stringify(snapshot(entry))}
           await ensureAzureSubscriptions(entry);
         } else if (entry.sourceWorkspace.materialized) {
           if (!["timer", "http"].includes(entry.trigger)) entry.trigger = "timer";
-          await startLocalEnvironment(entry);
+          await startLocalBootstrap(entry, { userInitiated: true });
         }
         responseJson(res, { ok: true, target: entry.target });
       }).catch((error) => {
@@ -13842,11 +13962,11 @@ data: ${JSON.stringify(snapshot(entry))}
         });
         return;
       }
-      startLocalEnvironment(entry).then(() => responseJson(res, { ok: true, port: entry.local.port })).catch((error) => responseJson(res, { ok: false, message: shortError(error) || String(error?.message || error) }));
+      startLocalBootstrap(entry, { userInitiated: true }).then(() => responseJson(res, { ok: true, port: entry.local.port })).catch((error) => responseJson(res, { ok: false, message: shortError(error) || String(error?.message || error) }));
       return;
     }
     if (req.method === "POST" && req.url === "/local/stop") {
-      stopLocal(entry);
+      stopLocalByUser(entry);
       responseJson(res, { ok: true });
       return;
     }
@@ -14457,7 +14577,7 @@ var canvas = createCanvas({
         } else {
           if (!["timer", "http"].includes(entry.trigger)) entry.trigger = "timer";
           try {
-            await startLocalEnvironment(entry);
+            await startLocalBootstrap(entry, { userInitiated: true });
           } catch (error) {
             return { ok: false, target: entry.target, message: shortError(error) };
           }
@@ -14503,7 +14623,7 @@ var canvas = createCanvas({
         const entry = ensureEntry(instanceId);
         if (entry.target !== "local") return { ok: false, message: "Select Local Function App first." };
         try {
-          await startLocalEnvironment(entry);
+          await startLocalBootstrap(entry, { userInitiated: true });
           return { ok: true, port: entry.local.port };
         } catch (error) {
           return { ok: false, message: shortError(error) || String(error?.message || error) };
@@ -14827,7 +14947,15 @@ var canvas = createCanvas({
       initialize.catch(() => {
       });
     } else if (entry.target === "local" && entry.sourceWorkspace.materialized) {
-      initializeDeclaredIntegrations(entry).then(() => initializeModelBindings(entry)).then(() => startLocalEnvironment(entry)).catch(() => {
+      startLocalBootstrap(entry).catch((error) => {
+        if (!entry.bootstrap.error && !entry.local.autoStartSuppressed) {
+          updateBootstrap(
+            entry,
+            "failed",
+            `Startup failed: ${shortError(error) || String(error?.message || error)}`,
+            shortError(error) || String(error?.message || error)
+          );
+        }
       });
     }
     const installs = await installationStatus({ projectRoot: entry.sourceWorkspace.workingDirectory });
@@ -14936,6 +15064,11 @@ var functionStudioTestHooks = Object.freeze({
   parametersFromHttpRequest,
   githubRequirement,
   initializeDeclaredIntegrations,
+  initializeModelBindings,
+  startLocalBootstrap,
+  startLocalEnvironment,
+  stopLocalByUser,
+  prepareInvocation,
   writeGithubMcpConfig,
   validateGithubRepositoryAccess,
   ensureEntry,
