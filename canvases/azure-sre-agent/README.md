@@ -6,16 +6,9 @@ an investigation, and continue working from the active thread.
 
 ## Install
 
-Open the stable package and documentation location:
-
-<https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/>
-
-1. Open **Customize** in GitHub Copilot.
-2. Select the **Canvases** tab.
-3. Select **Install from gist/URL**.
-4. Paste the stable package URL above and install it.
-5. Fully quit or close the GitHub Copilot app.
-6. Reopen GitHub Copilot.
+In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL**,
+paste the [stable Azure SRE Agent URL](https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/),
+and install. Then fully quit and reopen GitHub Copilot.
 
 Then ask:
 
