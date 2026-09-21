@@ -2928,7 +2928,13 @@ ${commandClientScript()}
     cmdlogSub.textContent = running ? (running + ' running\u2026') : (cmds.length + ' call' + (cmds.length === 1 ? '' : 's'));
     cmdlogList.innerHTML = cmds.map((c) => {
       const badge = c.kind === 'az' ? 'az' : c.kind === 'rest' ? 'REST' : c.kind === 'shell' ? 'shell' : c.kind === 'app' ? 'App' : 'http';
-      const st = c.status === 'run' ? '<span class="cst run">running</span>' : c.status === 'err' ? '<span class="cst err">error</span>' : '<span class="cst ok">ok</span>';
+      const st = c.status === 'run'
+        ? '<span class="cst run">running</span>'
+        : c.status === 'err'
+          ? '<span class="cst err">error</span>'
+          : c.status === 'recovered'
+            ? '<span class="cst ok">recovered</span>'
+            : '<span class="cst ok">ok</span>';
       const time = c.ts ? '<span class="ctime">' + esc(new Date(c.ts).toLocaleTimeString()) + '</span>' : '';
       const ms = c.ms != null ? '<span class="cms">' + c.ms + 'ms</span>' : '';
       const note = c.note ? '<span class="cnote">' + esc(c.note) + '</span>' : '';
@@ -6223,7 +6229,7 @@ async function waitForLocalHostReady({
   fetchStatus,
   ensureCurrent = () => {
   },
-  timeoutMs = 3e4,
+  timeoutMs = 6e4,
   pollMs = 250,
   now = Date.now,
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
@@ -6252,6 +6258,83 @@ async function waitForLocalHostReady({
   }
   throw new Error(
     `Functions host on 127.0.0.1:${port} did not report Running within ${Math.round(timeoutMs / 1e3)} seconds: ${detail}`
+  );
+}
+async function waitForFunctionDiscovery({
+  hasRequiredFunction,
+  isChildAlive,
+  ensureCurrent = () => {
+  },
+  timeoutMs = 6e4,
+  pollMs = 250,
+  now = Date.now,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    ensureCurrent();
+    if (hasRequiredFunction()) return true;
+    if (!isChildAlive()) return false;
+    const remaining = deadline - now();
+    if (remaining > 0) await sleep(Math.min(pollMs, remaining));
+  }
+  ensureCurrent();
+  return hasRequiredFunction();
+}
+function appendBoundedRuntimeOutput(lines, chunk, { maxLines = 120, maxChars = 16e3, prefix = "" } = {}) {
+  const next = [...lines || []];
+  for (const line of String(chunk).split(/\r?\n/)) {
+    const value = line.trim();
+    if (value) next.push(`${prefix}${value}`);
+  }
+  while (next.length > maxLines || next.join("\n").length > maxChars) next.shift();
+  return next;
+}
+function describeServiceProbes(probes) {
+  return probes.map((probe) => {
+    const network = probe.listening ? "listening" : "not listening";
+    const http = probe.httpStatus == null ? "HTTP unavailable" : `HTTP ${probe.httpStatus}`;
+    const server = probe.server ? `Server ${probe.server}` : "Server unavailable";
+    return `${probe.name} :${probe.port} ${network}, ${http}, ${server}`;
+  }).join("; ");
+}
+async function waitForServiceSetReady({
+  probe,
+  isChildAlive,
+  ensureCurrent = () => {
+  },
+  timeoutMs = 6e4,
+  graceMs = 3e3,
+  pollMs = 250,
+  now = Date.now,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
+}) {
+  const deadline = now() + timeoutMs;
+  let latest = [];
+  let progress = false;
+  const read = async () => {
+    ensureCurrent();
+    latest = await probe();
+    progress ||= latest.some((item) => item.listening || item.httpStatus != null);
+    return latest.length > 0 && latest.every((item) => item.ready);
+  };
+  while (now() < deadline) {
+    if (await read()) return { probes: latest, graceUsed: false };
+    const remaining = deadline - now();
+    if (remaining > 0) await sleep(Math.min(pollMs, remaining));
+  }
+  if (await read()) return { probes: latest, graceUsed: false };
+  if (progress && isChildAlive() && graceMs > 0) {
+    const graceDeadline = now() + graceMs;
+    while (now() < graceDeadline) {
+      const remaining = graceDeadline - now();
+      if (remaining > 0) await sleep(Math.min(pollMs, remaining));
+      if (await read()) return { probes: latest, graceUsed: true };
+    }
+    if (await read()) return { probes: latest, graceUsed: true };
+  }
+  throw new Error(
+    `Services did not become ready within ${Math.round(timeoutMs / 1e3)} seconds: ${describeServiceProbes(latest)}`
   );
 }
 function appendBoundedDeploymentOutput(deployment, event, { maxLines = 800, maxChars = 12e4 } = {}) {
@@ -7994,6 +8077,10 @@ function portListening(port) {
   });
 }
 var localPortReservations = createLocalPortReservationPool({ isListening: portListening });
+var AZURITE_READY_TIMEOUT_MS = 6e4;
+var AZURITE_READY_GRACE_MS = 3e3;
+var FUNCTIONS_DISCOVERY_TIMEOUT_MS = 6e4;
+var FUNCTIONS_READY_TIMEOUT_MS = 6e4;
 function stripFrontmatter(text) {
   const match = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
   return (match ? text.slice(match[0].length) : text).trim();
@@ -8282,6 +8369,32 @@ async function loadedInstructionContents() {
 }
 function terminateChild(child, signal = "SIGTERM") {
   terminateChildProcess(child, signal);
+}
+function childIsAlive(child) {
+  return Boolean(child && child.exitCode === null && child.signalCode == null);
+}
+async function terminateChildAndWait(child, { gracefulMs = 1500, finalMs = 2e3 } = {}) {
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  terminateChild(child);
+  const graceful = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), gracefulMs))
+  ]);
+  if (graceful || child.exitCode !== null) return;
+  terminateChild(child, "SIGKILL");
+  await Promise.race([
+    exited,
+    new Promise((resolve) => setTimeout(resolve, finalMs))
+  ]);
+}
+function markStartupCommandsRecovered(entry, note = "Superseded by the current healthy local runtime.") {
+  for (const command of entry.commands || []) {
+    if (command.status === "err" && ["azurite (start)", "func start", "Functions host readiness"].includes(command.title)) {
+      command.status = "recovered";
+      command.note = `${command.note ? `${command.note} ` : ""}${note}`.trim();
+    }
+  }
 }
 function stopExtensionChildren() {
   azureAuth.dispose();
@@ -8893,6 +9006,8 @@ function snapshot(entry) {
       packageIndexHost: entry.local.packageIndexHost,
       packageIndexSource: entry.local.packageIndexSource,
       azuriteNote: entry.local.azuriteNote,
+      azuriteDiagnostics: entry.local.azuriteDiagnostics,
+      azuriteLogTail: entry.local.azuriteLogTail,
       functions: entry.local.functions,
       logTail: entry.local.logTail.slice(-50)
     },
@@ -9082,6 +9197,8 @@ function ensureEntry(instanceId) {
       packageIndexHost: "",
       packageIndexSource: "",
       azuriteNote: "",
+      azuriteDiagnostics: "",
+      azuriteLogTail: [],
       funcProc: null,
       azuriteProc: null,
       startPromise: null,
@@ -10518,10 +10635,6 @@ function startLocalBootstrap(entry, { userInitiated = false } = {}) {
     );
   }
   if (entry.bootstrap.promise) return entry.bootstrap.promise;
-  if (entry.local.status === "running" && entry.modelBinding.configured) {
-    updateBootstrap(entry, "ready", "Model endpoint bound and local function host ready.");
-    return Promise.resolve();
-  }
   const generation = ++entry.bootstrap.generation;
   const ensureCurrent = () => {
     if (generation !== entry.bootstrap.generation || entry.local.autoStartSuppressed) {
@@ -10529,6 +10642,20 @@ function startLocalBootstrap(entry, { userInitiated = false } = {}) {
     }
   };
   const promise = (async () => {
+    updateBootstrap(entry, "reconciling", "Checking the owned local runtime...");
+    if (await reconcileOwnedLocalRuntime(entry)) {
+      updateBootstrap(entry, "ready", "Model endpoint bound and local function host ready.");
+      return;
+    }
+    if (childIsAlive(entry.local.funcProc) || childIsAlive(entry.local.azuriteProc)) {
+      await stopLocalAndRelease(entry);
+    } else if (entry.local.status === "running") {
+      entry.local.status = "stopped";
+      entry.local.phase = "";
+      entry.local.port = null;
+      entry.local.functions = [];
+    }
+    ensureCurrent();
     updateBootstrap(entry, "integrations", "Checking declared integrations...");
     await initializeDeclaredIntegrations(entry);
     ensureCurrent();
@@ -11853,20 +11980,37 @@ async function ensureAzurite(entry, ensureCurrent = () => {
     options
   );
 }
-async function probeAzuriteServices(ports = [1e4, 10001, 10002]) {
+async function probeAzuriteServiceDetails(ports = [1e4, 10001, 10002]) {
   const probes = [
-    `http://127.0.0.1:${ports[0]}/devstoreaccount1?comp=list`,
-    `http://127.0.0.1:${ports[1]}/devstoreaccount1?comp=list`,
-    `http://127.0.0.1:${ports[2]}/devstoreaccount1/Tables`
+    { name: "Blob", port: ports[0], path: "/devstoreaccount1?comp=list", server: /^Azurite-Blob/i },
+    { name: "Queue", port: ports[1], path: "/devstoreaccount1?comp=list", server: /^Azurite-Queue/i },
+    { name: "Table", port: ports[2], path: "/devstoreaccount1/Tables", server: /^Azurite-Table/i }
   ];
-  return Promise.all(probes.map(async (url) => {
+  return Promise.all(probes.map(async (probe) => {
+    const listening = await portListening(probe.port);
+    if (!listening) {
+      return { name: probe.name, port: probe.port, listening: false, httpStatus: null, server: "", ready: false };
+    }
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(1e3) });
-      return /^Azurite-/i.test(response.headers.get("server") || "");
+      const response = await fetch(`http://127.0.0.1:${probe.port}${probe.path}`, {
+        signal: AbortSignal.timeout(1e3)
+      });
+      const server = String(response.headers.get("server") || "").replace(/[^\w./ ()-]/g, "").slice(0, 100);
+      return {
+        name: probe.name,
+        port: probe.port,
+        listening: true,
+        httpStatus: response.status,
+        server,
+        ready: probe.server.test(server)
+      };
     } catch {
-      return false;
+      return { name: probe.name, port: probe.port, listening: true, httpStatus: null, server: "", ready: false };
     }
   }));
+}
+async function probeAzuriteServices(ports = [1e4, 10001, 10002]) {
+  return (await probeAzuriteServiceDetails(ports)).map((probe) => probe.ready);
 }
 async function ensureAzuriteCommand(args, entry) {
   const artifactBin = path11.join(EXTENSION_ROOT, "node_modules", ".bin");
@@ -11923,11 +12067,14 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
   const ports = [1e4, 10001, 10002];
   const busy = await Promise.all(ports.map(portListening));
   if (busy.every(Boolean)) {
-    const services = await probeAzuriteServices(ports);
-    if (!services.every(Boolean)) {
-      throw new Error("Ports 10000-10002 are occupied, but they do not expose compatible Azurite Blob, Queue, and Table services.");
+    const services = await probeAzuriteServiceDetails(ports);
+    entry.local.azuriteDiagnostics = describeServiceProbes(services);
+    if (!services.every((service) => service.ready)) {
+      throw new Error(
+        `Ports 10000-10002 are occupied, but compatible Azurite services were not found: ${entry.local.azuriteDiagnostics}`
+      );
     }
-    entry.local.azuriteNote = "Reusing Azurite services already listening on 10000-10002";
+    entry.local.azuriteNote = childIsAlive(entry.local.azuriteProc) ? "Reusing the owned Azurite process on 10000-10002" : "Reusing compatible Azurite services already listening on 10000-10002";
     return;
   }
   if (busy.some(Boolean)) {
@@ -11949,9 +12096,9 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
       entry
     );
     cmdEnd(entry, c1, { ok: true, note: azuriteCommand.located.path });
-  } catch (error2) {
-    cmdEnd(entry, c1, { ok: false, note: shortError(error2) });
-    throw error2;
+  } catch (error) {
+    cmdEnd(entry, c1, { ok: false, note: shortError(error) });
+    throw error;
   }
   await mkdir5(dataDir, { recursive: true });
   const cmdText = `azurite --silent --location ${dataDir} --skipApiVersionCheck`;
@@ -11969,13 +12116,32 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
     windowsVerbatimArguments: azuriteCommand.windowsVerbatimArguments
   });
   entry.local.azuriteProc = child;
+  entry.local.azuriteLogTail = [];
+  const appendAzuriteOutput = (chunk, stream) => {
+    const sanitized = redactDeploymentOutput(String(chunk));
+    entry.local.azuriteLogTail = appendBoundedRuntimeOutput(
+      entry.local.azuriteLogTail,
+      sanitized,
+      { prefix: `[Azurite ${stream}] ` }
+    );
+    entry.local.logTail = appendBoundedRuntimeOutput(
+      entry.local.logTail,
+      sanitized,
+      { maxLines: 150, maxChars: 24e3, prefix: `[Azurite ${stream}] ` }
+    );
+    broadcast(entry, "state", snapshot(entry));
+  };
+  child.stdout.on("data", (chunk) => appendAzuriteOutput(chunk, "stdout"));
+  child.stderr.on("data", (chunk) => appendAzuriteOutput(chunk, "stderr"));
   child.once("exit", (code, signal) => {
     if (entry.local.azuriteProc !== child) return;
     entry.local.azuriteProc = null;
     if (entry.local.status === "starting" || entry.local.status === "running") {
       if (entry.local.funcProc) {
-        terminateChild(entry.local.funcProc);
-        entry.local.funcProc = null;
+        const funcChild = entry.local.funcProc;
+        entry.local.runtimeReleasePromise = terminateChildAndWait(funcChild).finally(() => {
+          if (entry.local.funcProc === funcChild) entry.local.funcProc = null;
+        });
       }
       entry.local.status = "error";
       entry.local.error = `Azurite exited${code == null ? "" : ` with code ${code}`}${signal ? ` (${signal})` : ""}.`;
@@ -11985,30 +12151,46 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
     }
   });
   let launchError = null;
-  child.once("error", (error2) => {
-    launchError = error2;
+  child.once("error", (error) => {
+    launchError = error;
   });
-  const deadline = Date.now() + 2e4;
-  while (Date.now() < deadline) {
-    ensureCurrent();
-    if (launchError) {
-      cmdEnd(entry, c2, { ok: false, note: shortError(launchError) });
-      throw launchError;
-    }
-    if (child.exitCode !== null) {
-      const error2 = new Error(`Azurite exited before startup completed with code ${child.exitCode}.`);
-      cmdEnd(entry, c2, { ok: false, note: error2.message });
-      throw error2;
-    }
-    if ((await probeAzuriteServices(ports)).every(Boolean)) {
-      cmdEnd(entry, c2, { ok: true, note: "Blob, Queue, and Table services ready on 10000-10002" });
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  try {
+    const readiness = await waitForServiceSetReady({
+      timeoutMs: AZURITE_READY_TIMEOUT_MS,
+      graceMs: AZURITE_READY_GRACE_MS,
+      pollMs: 250,
+      ensureCurrent,
+      isChildAlive: () => {
+        if (launchError) throw launchError;
+        if (!childIsAlive(child)) {
+          throw new Error(`Azurite exited before startup completed with code ${child.exitCode}.`);
+        }
+        return true;
+      },
+      probe: async () => {
+        if (launchError) throw launchError;
+        if (!childIsAlive(child)) {
+          throw new Error(`Azurite exited before startup completed with code ${child.exitCode}.`);
+        }
+        const services = await probeAzuriteServiceDetails(ports);
+        entry.local.azuriteDiagnostics = describeServiceProbes(services);
+        return services;
+      }
+    });
+    entry.local.azuriteDiagnostics = describeServiceProbes(readiness.probes);
+    entry.local.azuriteNote = readiness.graceUsed ? "Owned Azurite became ready during the bounded startup grace period" : "Owned Azurite services are ready on 10000-10002";
+    cmdEnd(entry, c2, {
+      ok: true,
+      note: `${entry.local.azuriteDiagnostics}${readiness.graceUsed ? " (grace period)" : ""}`
+    });
+  } catch (error) {
+    await terminateChildAndWait(child);
+    if (entry.local.azuriteProc === child) entry.local.azuriteProc = null;
+    const output = entry.local.azuriteLogTail.slice(-8).join(" | ");
+    const note = [shortError(error), entry.local.azuriteDiagnostics, output].filter(Boolean).join(" \u2014 ");
+    cmdEnd(entry, c2, { ok: false, note });
+    throw new Error(note);
   }
-  const error = new Error("Timed out waiting for Azurite Blob, Queue, and Table services.");
-  cmdEnd(entry, c2, { ok: false, note: error.message });
-  throw error;
 }
 async function ensureRuntimeRequirement(entry, options = {}) {
   return withSourceWorkspaceMutation(
@@ -12263,6 +12445,46 @@ function parseFuncFunctionLines(logText) {
   }
   return functions;
 }
+async function probeFunctionsHostStatus(port) {
+  const listening = Number.isInteger(port) && port > 0 ? await portListening(port) : false;
+  if (!listening) return { listening: false, httpStatus: null, state: "", version: "", ready: false };
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/admin/host/status`, {
+      signal: AbortSignal.timeout(1e3)
+    });
+    const body = await response.json().catch(() => ({}));
+    const state = String(body?.state || "");
+    return {
+      listening: true,
+      httpStatus: response.status,
+      state,
+      version: typeof body?.version === "string" ? body.version : "",
+      ready: response.ok && state.toLowerCase() === "running"
+    };
+  } catch {
+    return { listening: true, httpStatus: null, state: "", version: "", ready: false };
+  }
+}
+async function reconcileOwnedLocalRuntime(entry, {
+  probeAzurite = () => probeAzuriteServiceDetails([1e4, 10001, 10002]),
+  probeFunctions = () => probeFunctionsHostStatus(entry.local.port)
+} = {}) {
+  const azuriteOwned = childIsAlive(entry.local.azuriteProc);
+  const functionsOwned = childIsAlive(entry.local.funcProc);
+  if (!azuriteOwned && entry.local.azuriteProc) entry.local.azuriteProc = null;
+  if (!functionsOwned && entry.local.funcProc) entry.local.funcProc = null;
+  if (!azuriteOwned || !functionsOwned) return false;
+  const [azurite, functions] = await Promise.all([probeAzurite(), probeFunctions()]);
+  entry.local.azuriteDiagnostics = describeServiceProbes(azurite);
+  if (!azurite.every((service) => service.ready) || !functions.ready) return false;
+  entry.local.status = "running";
+  entry.local.phase = "Ready";
+  entry.local.error = "";
+  entry.local.azuriteNote = "Reusing the owned healthy Azurite process";
+  markStartupCommandsRecovered(entry, "Recovered after confirming the owned processes and endpoints are healthy.");
+  broadcast(entry, "state", snapshot(entry));
+  return true;
+}
 async function startFuncHost(entry, ensureCurrent = () => {
 }) {
   const venv = pythonVirtualEnvironment(entry.agentDir);
@@ -12302,7 +12524,7 @@ async function startFuncHost(entry, ensureCurrent = () => {
   });
   entry.local.funcProc = child;
   entry.local.port = port;
-  entry.local.logTail = [];
+  entry.local.logTail = entry.local.azuriteLogTail.slice(-20);
   entry.local.logSequence = 0;
   entry.local.logEvents = [];
   finalizeRunningInvocations(entry, "Local function host restarted before this execution completed.");
@@ -12312,8 +12534,8 @@ async function startFuncHost(entry, ensureCurrent = () => {
   let stderrText = "";
   const lineBuffers = { stdout: "", stderr: "" };
   const appendLog = (buf, stream) => {
-    if (stream === "stdout") stdoutText += buf.toString();
-    else stderrText += buf.toString();
+    if (stream === "stdout") stdoutText = `${stdoutText}${buf.toString()}`.slice(-2e5);
+    else stderrText = `${stderrText}${buf.toString()}`.slice(-2e5);
     const lines = `${lineBuffers[stream]}${buf.toString()}`.split(/\r?\n/);
     lineBuffers[stream] = lines.pop() || "";
     for (const line of lines) {
@@ -12333,45 +12555,33 @@ ${stderrText}`);
   child.stderr.on("data", (buf) => appendLog(buf, "stderr"));
   child.once("exit", releasePort);
   child.once("error", releasePort);
-  const ready = await new Promise((resolve) => {
-    let settled = false;
-    const check = () => {
-      if (!settled && entry.local.functions.some((fn) => fn.kind === entry.trigger)) {
-        settled = true;
-        resolve(true);
+  child.once("exit", (code) => {
+    entry.local.exitCode = code;
+    if (entry.local.funcProc === child) {
+      entry.local.funcProc = null;
+      finalizeRunningInvocations(entry, `Local function host exited with code ${code} before this execution completed.`);
+      if (entry.local.status === "running") {
+        entry.local.status = "error";
+        entry.local.error = `Local function host exited with code ${code}.`;
+        entry.local.port = null;
+        entry.local.functions = [];
+        broadcast(entry, "state", snapshot(entry));
       }
-    };
-    child.stdout.on("data", check);
-    child.stderr.on("data", check);
-    child.once("exit", (code) => {
-      entry.local.exitCode = code;
-      if (entry.local.funcProc === child) {
-        entry.local.funcProc = null;
-        finalizeRunningInvocations(entry, `Local function host exited with code ${code} before this execution completed.`);
-        if (entry.local.status === "running") {
-          entry.local.status = "error";
-          entry.local.error = `Local function host exited with code ${code}.`;
-          entry.local.port = null;
-          entry.local.functions = [];
-          broadcast(entry, "state", snapshot(entry));
-        }
-      }
-      if (!settled) {
-        settled = true;
-        resolve(false);
-      }
-    });
-    setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve(entry.local.functions.some((fn) => fn.kind === entry.trigger));
-      }
-    }, 25e3);
+    }
+  });
+  const ready = await waitForFunctionDiscovery({
+    timeoutMs: FUNCTIONS_DISCOVERY_TIMEOUT_MS,
+    ensureCurrent,
+    hasRequiredFunction: () => entry.local.functions.some((fn) => fn.kind === entry.trigger),
+    isChildAlive: () => childIsAlive(child)
   });
   if (!ready) {
-    cmdEnd(entry, c, { ok: false, note: "func start did not report ready in time" });
+    await terminateChildAndWait(child);
+    if (entry.local.funcProc === child) entry.local.funcProc = null;
+    releasePort();
+    cmdEnd(entry, c, { ok: false, note: "func start did not report the required function within 60 seconds" });
     entry.local.status = "error";
-    entry.local.error = "func start did not become ready within 25s. Check the local host log below.";
+    entry.local.error = "func start did not report the required function within 60 seconds. Check the local host log below.";
     broadcast(entry, "state", snapshot(entry));
     throw new Error(entry.local.error);
   }
@@ -12385,6 +12595,7 @@ ${stderrText}`);
   try {
     readiness = await waitForLocalHostReady({
       port,
+      timeoutMs: FUNCTIONS_READY_TIMEOUT_MS,
       isListening: portListening,
       fetchStatus: async () => {
         const response = await fetch(`http://127.0.0.1:${port}/admin/host/status`, {
@@ -12402,6 +12613,9 @@ ${stderrText}`);
       }
     });
   } catch (error) {
+    await terminateChildAndWait(child);
+    if (entry.local.funcProc === child) entry.local.funcProc = null;
+    releasePort();
     cmdEnd(entry, healthCommand, { ok: false, note: error.message });
     cmdEnd(entry, c, { ok: false, note: "admin host status did not reach Running" });
     entry.local.status = "error";
@@ -12413,10 +12627,12 @@ ${stderrText}`);
   cmdEnd(entry, c, { ok: true, note: readiness.detail });
   releasePort();
   entry.local.status = "running";
+  entry.local.phase = "Ready";
   entry.local.error = "";
   entry.local.githubCredentialFingerprint = entry.githubCredential.fingerprint;
   entry.local.githubRepository = entry.githubContext.repository;
   entry.local.sourceFingerprint = await runtimeSourceFingerprint(entry);
+  markStartupCommandsRecovered(entry);
   broadcast(entry, "state", snapshot(entry));
 }
 function startLocalEnvironment(entry) {
@@ -12510,7 +12726,7 @@ function startLocalEnvironment(entry) {
       startFoundryTokenRefresh(entry);
     } catch (error) {
       const cancelled = generation !== entry.local.startGeneration;
-      stopLocal(entry);
+      await stopLocalAndRelease(entry);
       if (cancelled) throw error;
       entry.local.status = "error";
       entry.local.error = shortError(error) || String(error?.message || error);
@@ -12529,7 +12745,7 @@ async function restartLocalEnvironment(entry) {
     } catch {
     }
   }
-  stopLocal(entry);
+  await stopLocalAndRelease(entry);
   return startLocalEnvironment(entry);
 }
 function stopLocal(entry) {
@@ -12566,23 +12782,20 @@ function stopLocal(entry) {
   }
   broadcast(entry, "state", snapshot(entry));
 }
-function stopLocalByUser(entry) {
+async function stopLocalByUser(entry) {
   entry.local.autoStartSuppressed = true;
   entry.bootstrap.generation += 1;
   entry.bootstrap.phase = "paused";
   entry.bootstrap.status = "Automatic startup paused after Stop.";
   entry.bootstrap.error = "";
-  stopLocal(entry);
+  await stopLocalAndRelease(entry);
 }
 async function stopLocalAndRelease(entry) {
   const children = [entry.local.funcProc, entry.local.azuriteProc].filter(Boolean);
   const release = entry.local.releaseAppRuntimeOwner;
   entry.local.releaseAppRuntimeOwner = null;
   stopLocal(entry);
-  await Promise.all(children.map((child) => child.exitCode !== null ? Promise.resolve() : Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, 1800))
-  ])));
+  await Promise.all(children.map((child) => terminateChildAndWait(child)));
   if (release) await release();
   await entry.local.runtimeReleasePromise;
   entry.local.runtimeReleasePromise = null;
@@ -13966,8 +14179,7 @@ data: ${JSON.stringify(snapshot(entry))}
       return;
     }
     if (req.method === "POST" && req.url === "/local/stop") {
-      stopLocalByUser(entry);
-      responseJson(res, { ok: true });
+      stopLocalByUser(entry).then(() => responseJson(res, { ok: true })).catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
       return;
     }
     if (req.method === "POST" && req.url === "/doctor/run") {
@@ -15068,6 +15280,7 @@ var functionStudioTestHooks = Object.freeze({
   startLocalBootstrap,
   startLocalEnvironment,
   stopLocalByUser,
+  stopLocalAndRelease,
   prepareInvocation,
   writeGithubMcpConfig,
   validateGithubRepositoryAccess,
@@ -15077,6 +15290,8 @@ var functionStudioTestHooks = Object.freeze({
   startServer,
   invokeLocal,
   probeAzuriteServices,
+  probeAzuriteServiceDetails,
+  reconcileOwnedLocalRuntime,
   ensureAzureSubscriptions,
   checkAzureLogin,
   discoverModelBindings,
