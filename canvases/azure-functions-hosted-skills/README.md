@@ -17,7 +17,7 @@ for this quickstart and safety guidance.
 Then ask:
 
 ```text
-Open Azure Functions Hosted Skills Preview
+Open Azure Functions Hosted Skills canvas
 ```
 
 ## Prerequisites
@@ -79,7 +79,7 @@ activity and Application Insights views to confirm the result.
 ## Example prompts
 
 ```text
-Open Azure Functions Hosted Skills Preview
+Open Azure Functions Hosted Skills canvas
 ```
 
 ```text
