@@ -8,7 +8,7 @@ through GitHub Copilot.
 | Canvas | Package location | Status |
 | --- | --- | --- |
 | **Azure Functions Hosted Skills** | [`canvases/azure-functions-hosted-skills/`](canvases/azure-functions-hosted-skills/) | Candidate |
-| **Azure SRE Agent** | [`canvases/azure-sre-agent/`](canvases/azure-sre-agent/) | Planned |
+| **Azure SRE Agent** | [`canvases/azure-sre-agent/`](canvases/azure-sre-agent/) | Candidate |
 
 Candidate packages are staged for public review and validation; staging does
 not constitute a production release. Follow the package README for its

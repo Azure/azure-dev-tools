@@ -1,0 +1,9 @@
+{
+  "name": "azure-sre-agent",
+  "version": "0.1.0",
+  "description": "SRE Agent Studio for diagnosing failing Azure apps, correlating ICM/S360 tickets, and operating Azure SRE Agent resources.",
+  "extensions": "./extensions",
+  "skills": [
+    "./skills/azure-sre-agent-canvas/"
+  ]
+}
