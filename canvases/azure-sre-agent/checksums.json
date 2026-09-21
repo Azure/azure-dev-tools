@@ -3,7 +3,7 @@
   "extensions/azure-sre-agent/extension.mjs": "4f3347b41416a31887043552cff001c358ca2097bcdf7a0cb5ba1af070e7a151",
   "extensions/azure-sre-agent/studio-package.json": "1304e6ca513727fefea732bf4881bca77effd6ed42bedcb3d13ad12ce1b55236",
   "package.json": "c163fd0aa860471e92fabe9c9d4476df2b15c48513036aa2d21c71062781b745",
-  "README.md": "79b63e87e85658fb64b689ae840f1a24dbea82e7f6c3a44e3245e61dd1c731db",
+  "README.md": "54f3061c80ee8a4d903184436386b8a04e2e193713ea0b631cfb2657942dc165",
   "release.json": "31e61002e0475b84bde213a7d4dc264408c91d6c4386fc95fbbd5645647bdda9",
   "skills/azure-sre-agent-canvas/SKILL.md": "bc85370edc00f80841f619c4949305ea5edfae45f116008efd09b553b7b6cdeb",
   "THIRD_PARTY_NOTICES.txt": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
