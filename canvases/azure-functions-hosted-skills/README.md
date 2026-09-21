@@ -5,9 +5,12 @@ existing Azure Function App and invoke a supported deployed function.
 
 ## Install
 
-In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL**,
-paste the [Azure Functions Hosted Skills extension URL](https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills),
-and install. Then fully quit and reopen GitHub Copilot. See the
+In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL** and
+paste:
+
+`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
+
+Install the extension, then fully quit and reopen GitHub Copilot. See the
 [Azure Functions Hosted Skills README](https://github.com/Azure/azure-dev-tools/blob/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/README.md)
 for this quickstart and safety guidance.
 
