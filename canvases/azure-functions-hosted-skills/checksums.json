@@ -1,5 +1,7 @@
 {
   ".github/plugin/plugin.json": "35aba43f1c3acad2bd979ad5453f4bd60993dc07dcb5839fe4ad75f903d07f5b",
+  "README.md": "c81036879eefe4f83018df653d56b925fc715088b5f8a07a7334048178cc0aac",
+  "THIRD_PARTY_NOTICES.txt": "363c021bc17477e3d37da3b1875d81d1bdf61137f005957de2be8b137d892e57",
   "extensions/azure-functions-hosted-skills/assets/toolkit/icons/Subscription.svg": "df78239a16fa8b0d2934b317100e337cac2e49f1ea8d83e55ad1abdf8fa6f136",
   "extensions/azure-functions-hosted-skills/assets/toolkit/ui.mjs": "607d5df863a84c9102d6329f8e79a6f9da884657a41292c89b6a1a4f03dbb139",
   "extensions/azure-functions-hosted-skills/assets/toolkit/ui/azure-subscription-picker.mjs": "77368c3c8194e2bca50cddeb48f024cdcba56783df01122e6c9e8e664f6303b5",
@@ -30,11 +32,9 @@
   "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/host.json": "72e7cced040dfe2f556abc05834550497afb1ca62d06cc744d17a58350ad1ef9",
   "extensions/azure-functions-hosted-skills/templates/hosted-skill/src/requirements.txt": "fd54776c7924fb24d7e79ebe237521168c505773b6c75ca897c71ceefc09dc95",
   "package.json": "7c70e8b903a582080eca14128409af42f3e7d25daaa840f3f6d5b12236d15bc9",
-  "README.md": "d1e02b7cdcd8bbefad096649df548d6a8aeff63cdc730e240302a2fbaa89b76b",
-  "release.json": "81b3ea5a2155795bc641808f12e166e4910b21217bf87d4a195bbc0f2624567c",
-  "skills/azure-functions-hosted-skills-canvas/resolve-canvas-launch.mjs": "f3318768a1e41d0539000562a5ef78197f61a2cb8d55d2cff52ce9576c11b0a3",
   "skills/azure-functions-hosted-skills-canvas/SKILL.md": "4891aeff965ce366f27e2e9074954f5196c02e820480438b046e3bc0bcf20ab1",
-  "skills/azure-functions-hosted-skills-github-daily-digest/resolve-canvas-launch.mjs": "f3318768a1e41d0539000562a5ef78197f61a2cb8d55d2cff52ce9576c11b0a3",
+  "skills/azure-functions-hosted-skills-canvas/resolve-canvas-launch.mjs": "f3318768a1e41d0539000562a5ef78197f61a2cb8d55d2cff52ce9576c11b0a3",
   "skills/azure-functions-hosted-skills-github-daily-digest/SKILL.md": "a59a133f1f5ae87d31a9913b0167731be14c9fb1850360fa9aaccaad926cb5e8",
-  "THIRD_PARTY_NOTICES.txt": "363c021bc17477e3d37da3b1875d81d1bdf61137f005957de2be8b137d892e57"
+  "skills/azure-functions-hosted-skills-github-daily-digest/resolve-canvas-launch.mjs": "f3318768a1e41d0539000562a5ef78197f61a2cb8d55d2cff52ce9576c11b0a3",
+  "release.json": "81b3ea5a2155795bc641808f12e166e4910b21217bf87d4a195bbc0f2624567c"
 }
