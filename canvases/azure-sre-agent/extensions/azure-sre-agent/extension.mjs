@@ -418,12 +418,29 @@ function canExecuteCommand(file, osName = os.platform()) {
     return false;
   }
 }
-function quoteWindowsCommandArgument(value) {
+var WINDOWS_COMMAND_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+function escapeWindowsCommandMetaCharacters(value) {
+  return value.replace(WINDOWS_COMMAND_META_CHARACTERS, "^$1");
+}
+function assertWindowsCommandValue(value) {
   const text = String(value);
-  if (/[%\r\n]/.test(text)) {
+  if (/[\r\n]/.test(text)) {
     throw new Error("Command arguments contain unsupported Windows command characters.");
   }
-  return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+function escapeWindowsCommand(value) {
+  return escapeWindowsCommandMetaCharacters(assertWindowsCommandValue(value));
+}
+function quoteWindowsCommandArgument(value) {
+  let text = assertWindowsCommandValue(value);
+  text = text.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  text = text.replace(/(?=(\\+?)?)\1$/, "$1$1");
+  return escapeWindowsCommandMetaCharacters(`"${text}"`);
+}
+function windowsCommandShellLine(command, args = []) {
+  const shellCommand = [escapeWindowsCommand(command), ...args.map(quoteWindowsCommandArgument)].join(" ");
+  return `"${shellCommand}"`;
 }
 function spawnSpecForLocated(located, args, env, osName) {
   if (osName === "win32" && /\.(?:cmd|bat)$/i.test(located.path)) {
@@ -434,7 +451,7 @@ function spawnSpecForLocated(located, args, env, osName) {
         "/d",
         "/s",
         "/c",
-        `call ${[located.path, ...args].map(quoteWindowsCommandArgument).join(" ")}`
+        windowsCommandShellLine(located.path, args)
       ],
       env,
       located,
@@ -737,7 +754,7 @@ function truncateTranscriptText(value, limit) {
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}
 
-[Truncated in Studio. Open the full transcript in Portal.]`;
+[Truncated in Azure SRE Agent. Open the full transcript in Portal.]`;
 }
 function transcriptRenderKey(thread) {
   if (!thread) return "none";
@@ -1521,7 +1538,7 @@ async function createDelegatedKustoMcp(agent, { clusterUrl, database, gatewayNam
   const signInUrl = consent?.value?.[0]?.link || consent?.value?.[0]?.consentLink || consent?.link || consent?.consentLink || "";
   if (!signInUrl) throw new Error("Connector Namespace did not return a Kusto sign-in URL.");
   entry.pendingKustoConsent = pending;
-  entry.status = "Complete the Azure Data Explorer sign-in. Studio will continue MCP creation automatically when consent returns.";
+  entry.status = "Complete the Azure Data Explorer sign-in. Azure SRE Agent will continue MCP creation automatically when consent returns.";
   return { signInRequired: true, signInUrl };
 }
 async function confirmDelegatedKustoConsent(agent, code, subscription, entry) {
@@ -2342,10 +2359,10 @@ async function startServer(entry) {
 }
 function azureDiscoveryFailure(error) {
   if (error?.code === "AZURE_CLI_NOT_FOUND") {
-    return "Azure CLI executable was not found. Install Azure CLI or set AZURE_CLI_PATH to its absolute path, then reopen SRE Agent Studio.";
+    return "Azure CLI executable was not found. Install Azure CLI or set AZURE_CLI_PATH to its absolute path, then reopen Azure SRE Agent.";
   }
   if (isAzureCliLoginRequiredError(error)) {
-    return "Azure CLI is not signed in. Run `az login` in a terminal, then reopen SRE Agent Studio.";
+    return "Azure CLI is not signed in. Run `az login` in a terminal, then reopen Azure SRE Agent.";
   }
   return `Azure discovery failed: ${shortError(error)} Check the reported RBAC, network, or Azure API error; do not sign in again unless Azure CLI reports that authentication is required.`;
 }
@@ -2364,7 +2381,7 @@ async function handleRequest(entry, req, res) {
       "Referrer-Policy": "no-referrer"
     });
     if (!code || !entry.agent || !entry.pendingKustoConsent) {
-      res.end('<!doctype html><meta charset="utf-8"><title>Azure Data Explorer sign-in</title><p>Sign-in returned without a pending Studio operation. Close this window and select Sign in &amp; create MCP again.</p>');
+      res.end('<!doctype html><meta charset="utf-8"><title>Azure Data Explorer sign-in</title><p>Sign-in returned without a pending Azure SRE Agent operation. Close this window and select Sign in &amp; create MCP again.</p>');
       return;
     }
     try {
@@ -2373,7 +2390,7 @@ async function handleRequest(entry, req, res) {
     } catch (err) {
       entry.error = shortError(err);
       broadcast(entry, "state", snapshot(entry));
-      res.end('<!doctype html><meta charset="utf-8"><title>Azure Data Explorer sign-in</title><p>Sign-in completed, but MCP attachment failed. Return to SRE Agent Studio for the exact error.</p>');
+      res.end('<!doctype html><meta charset="utf-8"><title>Azure Data Explorer sign-in</title><p>Sign-in completed, but MCP attachment failed. Return to Azure SRE Agent for the exact error.</p>');
     }
     return;
   }
@@ -2698,7 +2715,7 @@ async function correlateTicket(entry, { ticket, threadId: threadId2 }) {
 }
 var canvas = createCanvas({
   id: "azure-sre-agent",
-  displayName: "SRE Agent Studio",
+  displayName: "Azure SRE Agent",
   description: "Discover Azure SRE Agents, investigate failing apps, correlate ICM/S360 tickets, and manage incidents, scheduled tasks, connectors, memories, and workflows on your SRE Agents. When a thread is focused, route operational follow-ups through ask_agent and use unfocus_thread to leave focus mode.",
   actions: [
     {
@@ -2717,7 +2734,7 @@ var canvas = createCanvas({
     },
     {
       name: "select_agent",
-      description: "Connect the Studio to a specific SRE Agent by name, loading its connectors, threads, and active incidents.",
+      description: "Connect the canvas to a specific SRE Agent by name, loading its connectors, threads, and active incidents.",
       inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
       async handler({ input, instanceId }) {
         const entry = ensureEntry(instanceId);
@@ -3029,7 +3046,7 @@ var canvas = createCanvas({
       });
       await startServer(entry);
     }
-    return { url: entry.url, title: "SRE Agent Studio", status: "ready" };
+    return { url: entry.url, title: "Azure SRE Agent", status: "ready" };
   },
   async onClose({ instanceId }) {
     const entry = instances.get(instanceId);
@@ -3058,7 +3075,7 @@ function renderHtml() {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SRE Agent Studio</title>
+<title>Azure SRE Agent</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -3219,7 +3236,7 @@ function renderHtml() {
 </style>
 </head>
 <body>
-  <h1>SRE Agent Studio <a class="doc" href="${DOC_URL}" target="_blank" rel="noreferrer">docs &#8599;</a></h1>
+  <h1>Azure SRE Agent <a class="doc" href="${DOC_URL}" target="_blank" rel="noreferrer">docs &#8599;</a></h1>
   <p class="sub">Discover Azure SRE Agents, investigate failing apps, correlate ICM/S360 tickets, and manage incidents, scheduled tasks, connectors, and memories.</p>
   <p class="hint"><strong>${WRITES_ENABLED ? "Write mode enabled." : "Read-only mode."}</strong> ${WRITES_ENABLED ? "Mutating operations require an explicit user action." : "Mutating actions are not registered and panel write requests are rejected unless ALLOW_WRITES=true."}</p>
   <div id="status" class="status"></div>
@@ -3300,7 +3317,7 @@ function renderHtml() {
         </div>
         <div class="panel">
           <h2>Connect Azure Data Explorer</h2>
-          <p class="hint">Choose the Kusto cluster and database you can already access. Select <strong>Configure Kusto DB &amp; attach</strong>; general Connector Namespace v2 stores your delegated sign-in, wraps the Kusto query as an authenticated MCP, and registers that endpoint with SRE Agent as a normal remote MCP. If the subscription has no Connector Namespace, Studio creates one in the SRE Agent resource group.</p>
+          <p class="hint">Choose the Kusto cluster and database you can already access. Select <strong>Configure Kusto DB &amp; attach</strong>; general Connector Namespace v2 stores your delegated sign-in, wraps the Kusto query as an authenticated MCP, and registers that endpoint with SRE Agent as a normal remote MCP. If the subscription has no Connector Namespace, the canvas creates one in the SRE Agent resource group.</p>
           <label class="field-label" for="connector-sub-select">Discovery subscription</label>
           <select id="connector-sub-select"></select>
           <button class="btn ghost" id="discover-kusto">Discover Data Explorer resources</button>
@@ -3340,7 +3357,7 @@ function renderHtml() {
     <summary>Command activity (az CLI / REST calls)</summary>
     <div class="cmd-list" id="cmd-list"></div>
   </details>
-  <div class="build-stamp">SRE Agent Studio v${STUDIO_VERSION} &middot; rev ${STUDIO_REVISION}</div>
+  <div class="build-stamp">Azure SRE Agent v${STUDIO_VERSION} &middot; rev ${STUDIO_REVISION}</div>
 
 <script>
 (function () {
@@ -4213,7 +4230,7 @@ function renderHtml() {
       var result = r && r.result;
       if (result && result.signInRequired) {
         if (result.signInUrl) window.open(result.signInUrl, 'connector-namespace-consent', 'popup,width=720,height=760');
-        setStatus('Complete the Azure Data Explorer sign-in. Studio will continue automatically.');
+        setStatus('Complete the Azure Data Explorer sign-in. Azure SRE Agent will continue automatically.');
       }
     });
   });

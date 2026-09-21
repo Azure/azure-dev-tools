@@ -7,5 +7,5 @@
   "engines": {
     "node": ">=22"
   },
-  "description": "SRE Agent Studio for diagnosing failing Azure apps, correlating ICM/S360 tickets, and operating Azure SRE Agent resources."
+  "description": "Azure SRE Agent canvas for diagnosing failing Azure apps, correlating ICM/S360 tickets, and operating Azure SRE Agent resources."
 }

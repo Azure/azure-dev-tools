@@ -1,4 +1,4 @@
-# SRE Agent Studio
+# Azure SRE Agent
 
 Diagnose failing Azure applications with an existing Azure SRE Agent. Select an
 App Service, Function App, Container App, or another supported resource, start
@@ -17,7 +17,7 @@ prompted.
 Then ask:
 
 ```text
-Open SRE Agent Studio
+Open SRE Agent Canvas
 ```
 
 ## Prerequisites
@@ -35,11 +35,11 @@ Open SRE Agent Studio
 - Access to an Azure subscription containing an existing Azure SRE Agent.
 - Permission to view and use that SRE Agent.
 
-SRE Agent Studio does not create the Azure SRE Agent resource.
+Azure SRE Agent does not create the Azure SRE Agent resource.
 
 ## Quickstart
 
-1. Open **SRE Agent Studio**.
+1. Open **Azure SRE Agent**.
 2. Expand **Azure Configuration**, choose the Azure subscription, and select an
    SRE Agent.
 3. Open **Apps**.
@@ -49,17 +49,25 @@ SRE Agent Studio does not create the Azure SRE Agent resource.
    - Optionally add symptoms, error messages, or recent changes.
 5. Select **Diagnose with SRE Agent**.
 
-The Studio opens the resulting investigation under **Threads** and displays it
+The canvas opens the resulting investigation under **Threads** and displays it
 in **Active thread**. Use the transcript to inspect the agent's responses,
 evidence, status, and tool activity.
 
-### Example investigation
+### Example prompts
+
+```text
+Investigate this failure
+```
+
+```text
+Investigate issues in <yourappname>
+```
 
 ```text
 Investigate why the Function App checkout-api started returning 503 responses after today's deployment.
 ```
 
-Keep the symptom and resource name specific. The Studio adds the selected
+Keep the symptom and resource name specific. The canvas adds the selected
 resource and available Azure context when it starts the investigation.
 
 ## Continue an investigation
@@ -77,7 +85,7 @@ To use the same investigation from the main Copilot conversation:
 
 Focus mode makes the focused thread the default destination for operational
 follow-ups. It does not redirect every chat message: questions that can be
-answered from already-loaded Studio data may still be answered locally.
+answered from already-loaded canvas data may still be answered locally.
 
 ## Safety
 
@@ -95,6 +103,6 @@ answered from already-loaded Studio data may still be answered locally.
 
 ## Learn more
 
-- [Using SRE Agent Studio](https://github.com/coreai-microsoft/canvases-cloud-foundation/blob/main/docs/azure-sre-agent-usage.md)
+- [Using Azure SRE Agent](https://github.com/coreai-microsoft/canvases-cloud-foundation/blob/main/docs/azure-sre-agent-usage.md)
 - [Execution authorization safety contract](https://github.com/coreai-microsoft/canvases-cloud-foundation/blob/main/docs/sre-execution-action-contract.md)
 - [Delegated connector safety and limitations](https://github.com/coreai-microsoft/canvases-cloud-foundation/blob/main/docs/sre-agent-private-connectors.md)
