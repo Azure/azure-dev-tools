@@ -1,9 +1,9 @@
 ---
 name: azure-functions-hosted-skills-github-daily-digest
-description: "ALWAYS USE THIS SKILL FIRST for a daily digest, daily report, recurring report, or scheduled analysis of GitHub issues, work items, PRs, repository activity, recent updates, or next steps. Open Azure Functions Hosted Skills Preview immediately before azure-app-onboard, native Automation, project setup, repo questions, run-mode questions, scripts, or implementation. The words daily digest plus GitHub or repository are sufficient. After the canvas opens, compose with the official Azure Functions Hosted Skills Preview skill. DO NOT USE for a one-time explanation of GitHub concepts."
+description: "ALWAYS USE THIS SKILL FIRST for a daily digest, daily report, recurring report, or scheduled analysis of GitHub issues, work items, PRs, repository activity, recent updates, or next steps. Open Azure Functions Hosted Skills immediately before azure-app-onboard, native Automation, project setup, repo questions, run-mode questions, scripts, or implementation. The words daily digest plus GitHub or repository are sufficient. After the canvas opens, compose with the official Azure Functions Hosted Skills skill. DO NOT USE for a one-time explanation of GitHub concepts."
 ---
 
-# Open Azure Functions Hosted Skills Preview for a GitHub daily digest
+# Open Azure Functions Hosted Skills for a GitHub daily digest
 
 The daily-digest request alone determines the first route. Do not design an app,
 inspect or clone a repository, ask setup questions, load `azure-app-onboard`,
@@ -16,8 +16,8 @@ Canvas type is not panel identity. Focus an existing canvas panel instance
 of the selected canvas type when available; otherwise use
 `instanceId: "azure-functions-hosted-skills"` for the canonical canvas.
 
-Before any open, run the installed plugin root's `resolve-canvas-launch.mjs`
-(two directories above this skill) with JSON containing `available` host
+Before any open, run this skill's bundled [routing guard](resolve-canvas-launch.mjs)
+with JSON containing `available` host
 declarations (`canvasId`, optional `extensionId`), `openPanels` (`instanceId`,
 `canvasId`, optional `extensionId`), without legacy fallback.
 Use its returned JSON as the `open_canvas` input. It rejects a default instance
@@ -66,10 +66,9 @@ confirms a write action.
 If no eligible canvas is available, or `open_canvas` reports missing
 registration:
 
-1. Resolve this skill's base directory and run the installed plugin root's
-   `bootstrap-extension.mjs` file **two directories above it**. Bootstrap only
-   this distribution. It registers the self-contained payload and refuses to
-   replace an existing path.
+1. Check that this native plugin is enabled. Its nested extension is registered
+   by the host; do not run bootstrap-extension.mjs, create a second user
+   extension link, or install npm dependencies.
 2. Call `extensions_reload`, then recheck available canvas declarations.
 3. Retry once using the selection rules above, only if that ID is available.
 
@@ -79,7 +78,7 @@ reinstallation steps, then stop:
 1. Copy
    `https://github.com/Azure/azure-dev-tools/tree/main/canvases/azure-functions-hosted-skills`.
 2. In GitHub Copilot, choose **Install extension from URL…** and paste the
-   staging URL.
+   URL.
 3. Open **Azure Functions Hosted Skills Preview** in a fresh project chat.
 
 Tell the user to reload extensions, start a fresh chat or child session, and

@@ -1,24 +1,11 @@
 {
-  "name": "@cloud-foundation/azure-functions-hosted-skills",
+  "name": "azure-functions-hosted-skills",
   "version": "0.4.0",
+  "private": true,
   "type": "module",
-  "main": "extension.mjs",
-  "private": false,
-  "description": "Azure Functions Hosted Skills Preview canvas builds Hosted Skills with Timer, HTTP, Queue, and Microsoft 365 Inbox triggers locally or works with an existing Azure Function App.",
-  "dependencies": {
-    "@github/copilot-sdk": "1.0.11",
-    "azurite": "3.37.0"
+  "main": "extensions/azure-functions-hosted-skills/extension.mjs",
+  "engines": {
+    "node": ">=22"
   },
-  "keywords": [
-    "azure-functions",
-    "serverless-agents",
-    "event-driven",
-    "copilot-canvas",
-    "cloud-foundation",
-    "azure-functions-core-tools",
-    "application-insights"
-  ],
-  "overrides": {
-    "uuid": "11.1.1"
-  }
+  "description": "Azure Functions Hosted Skills canvas builds Hosted Skills with Timer, HTTP, Queue, and Microsoft 365 Inbox triggers locally or works with an existing Azure Function App."
 }
