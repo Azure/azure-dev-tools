@@ -6,13 +6,15 @@ an investigation, and continue working from the active thread.
 
 ## Install
 
-Open the stable extension location:
+Open the stable package and documentation location:
 
-<https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent>
+<https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/>
 
-Use the standard GitHub Copilot canvas/extension installation flow to install
-the extension from that location. Reload extensions or start a fresh chat if
-prompted.
+1. Open **Customize** in GitHub Copilot.
+2. Select the **Canvases** tab.
+3. Select **Install from gist/URL**.
+4. Paste the stable package URL above and install it.
+5. Reload extensions or start a fresh chat if prompted.
 
 Then ask:
 
