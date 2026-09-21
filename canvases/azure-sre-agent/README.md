@@ -14,7 +14,8 @@ Open the stable package and documentation location:
 2. Select the **Canvases** tab.
 3. Select **Install from gist/URL**.
 4. Paste the stable package URL above and install it.
-5. Reload extensions or start a fresh chat if prompted.
+5. Fully quit or close the GitHub Copilot app.
+6. Reopen GitHub Copilot.
 
 Then ask:
 
