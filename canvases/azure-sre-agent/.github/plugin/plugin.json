@@ -1,6 +1,6 @@
 {
   "name": "azure-sre-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Azure SRE Agent canvas for diagnosing failing Azure apps, correlating ICM/S360 tickets, and operating Azure SRE Agent resources.",
   "extensions": "./extensions",
   "skills": [
