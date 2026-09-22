@@ -1,0 +1,11 @@
+{
+  "name": "azure-sre-agent",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "extensions/azure-sre-agent/extension.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "Azure SRE Agent canvas for diagnosing failing Azure apps, correlating ICM/S360 tickets, and operating Azure SRE Agent resources."
+}

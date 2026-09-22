@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "format": "plugin",
+  "name": "azure-sre-agent",
+  "version": "0.2.0",
+  "plugin": {
+    "manifest": ".github/plugin/plugin.json",
+    "extension": {
+      "name": "azure-sre-agent",
+      "canvasId": "azure-sre-agent",
+      "directory": "extensions/azure-sre-agent",
+      "entry": "extensions/azure-sre-agent/extension.mjs"
+    },
+    "skills": [
+      {
+        "name": "azure-sre-agent-canvas",
+        "directory": "skills/azure-sre-agent-canvas",
+        "files": [
+          "SKILL.md"
+        ]
+      }
+    ]
+  },
+  "runtimeIdentity": "extensions/azure-sre-agent/studio-package.json",
+  "files": [
+    ".github/plugin/plugin.json",
+    "README.md",
+    "THIRD_PARTY_NOTICES.txt",
+    "extensions/azure-sre-agent/assets/azure-sre-agent-color.svg",
+    "extensions/azure-sre-agent/assets/toolkit/icons/Subscription.svg",
+    "extensions/azure-sre-agent/assets/toolkit/ui.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/azure-subscription-picker.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.css",
+    "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/icons.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/locations.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/profiles/coreai-azure.css",
+    "extensions/azure-sre-agent/assets/toolkit/ui/styles.css",
+    "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.css",
+    "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
+    "extensions/azure-sre-agent/extension.mjs",
+    "extensions/azure-sre-agent/studio-package.json",
+    "package.json",
+    "skills/azure-sre-agent-canvas/SKILL.md"
+  ],
+  "status": "publication-controlled-by-external-approval",
+  "runtime": {
+    "node": ">=22",
+    "sdk": "@github/copilot-sdk/extension",
+    "azureCli": ">=2.61"
+  },
+  "build": {
+    "esbuild": "0.25.12",
+    "lockSha256": "6c16c2e0e1abd4e5f8f5e03011d73740fdb4533ee3340bca4fa1dd4af2987daf",
+    "inputSha256": "1ac194e45a340b950945e6345048e3be38797307b840a0dd9d26c28b5213f87d"
+  },
+  "dependencies": [
+    {
+      "name": "@cloud-foundation/sre-agent-core",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@cloud-foundation/studio-runtime",
+      "version": "0.1.0",
+      "license": null
+    },
+    {
+      "name": "@microsoft/canvas-toolkit",
+      "version": "0.1.0",
+      "license": null
+    }
+  ],
+  "modules": [
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui.mjs",
+      "platform": "node"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/azure-subscription-picker.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/icons.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/locations.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/extension.mjs",
+      "platform": "node"
+    }
+  ],
+  "assets": [
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/icons/Subscription.svg",
+      "route": "icons/Subscription.svg",
+      "mime": "image/svg+xml"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/azure-subscription-picker.mjs",
+      "route": "canvas-ui/azure-subscription-picker.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.css",
+      "route": "canvas-ui/commands-log.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.mjs",
+      "route": "canvas-ui/commands-log.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/icons.mjs",
+      "route": "canvas-ui/icons.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/locations.mjs",
+      "route": "canvas-ui/locations.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/profiles/coreai-azure.css",
+      "route": "canvas-ui/profiles/coreai-azure.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/styles.css",
+      "route": "canvas-ui/styles.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.css",
+      "route": "canvas-ui/subscription-picker.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
+      "route": "canvas-ui/subscription-picker.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    }
+  ]
+}
