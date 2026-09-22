@@ -1,14 +1,14 @@
 import { createRequire as __canvasCreateRequire } from "node:module";
 const require = __canvasCreateRequire(import.meta.url);
 
-// canvases/azure-functions-hosted-skills/canvas-identity.mjs
+// canvases/azure-functions-hosted-skills/src/canvas-identity.mjs
 var COMPONENT_ID = "azure-functions-hosted-skills";
 var LEGACY_PREVIEW_PLUGIN_IDS = Object.freeze([
   "azure-functions-hosted-skills-preview",
   "azure-functions-hosted-skills-preview-12"
 ]);
 
-// canvases/azure-functions-hosted-skills/launch-route.mjs
+// canvases/azure-functions-hosted-skills/src/launch-route.mjs
 function resolveStudioLaunch({ available, openPanels = [], instanceId, extensionId }) {
   if (!Array.isArray(available) || !Array.isArray(openPanels)) throw new Error("Supply the host's available canvas declarations and open-panel context.");
   const canvasId = COMPONENT_ID;
@@ -26,7 +26,7 @@ function resolveStudioLaunch({ available, openPanels = [], instanceId, extension
   return { canvasId, instanceId: selectedInstance, ...provider.extensionId ? { extensionId: provider.extensionId } : {} };
 }
 
-// canvases/azure-functions-hosted-skills/resolve-canvas-launch.mjs
+// canvases/azure-functions-hosted-skills/src/resolve-canvas-launch.mjs
 var input = process.argv[2];
 if (!input) throw new Error("Pass JSON containing available canvases, openPanels, and legacyOnly when appropriate.");
 console.log(JSON.stringify(resolveStudioLaunch(JSON.parse(input))));

@@ -1,18 +1,28 @@
 import { createRequire as __canvasCreateRequire } from "node:module";
 const require = __canvasCreateRequire(import.meta.url);
 
-// canvases/azure-functions-hosted-skills/extension.mjs
+// canvases/azure-functions-hosted-skills/src/extension.mjs
 import { createServer } from "node:http";
 import { spawn as spawn2 } from "node:child_process";
 import { chmod, cp as cp3, mkdir as mkdir5, readdir as readdir6, readFile as readFile9, rename as rename6, rm as rm6, writeFile as writeFile4 } from "node:fs/promises";
 import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
 import net from "node:net";
 import path11 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { canvasUiAssets } from "./assets/toolkit/ui.mjs";
 
-// canvases/azure-functions-hosted-skills/canvas-identity.mjs
+// packages/canvas-toolkit/src/ui/visual-profiles.mjs
+var COREAI_AZURE_VISUAL_PROFILE = Object.freeze({
+  id: "coreai-azure",
+  className: "canvas-profile-coreai-azure",
+  stylesheet: "canvas-ui/profiles/coreai-azure.css"
+});
+var canvasVisualProfiles = Object.freeze({
+  [COREAI_AZURE_VISUAL_PROFILE.id]: COREAI_AZURE_VISUAL_PROFILE
+});
+
+// canvases/azure-functions-hosted-skills/src/canvas-identity.mjs
 var PRODUCT_ID = "azure-functions-hosted-skills";
 var COMPONENT_ID = "azure-functions-hosted-skills";
 var PLUGIN_ID = "azure-functions-hosted-skills";
@@ -31,8 +41,24 @@ import { accessSync, constants, readFileSync } from "node:fs";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 var RUNTIME_MODE = { LOCAL: "local", CLOUD: "cloud" };
 var AZD_DOCS_URL = "https://learn.microsoft.com/azure/developer/azure-developer-cli/";
+function resolveStudioRoot(moduleUrl) {
+  const directory = path.dirname(fileURLToPath(moduleUrl));
+  const candidates = path.basename(directory) === "src" ? [directory, path.dirname(directory)] : [directory];
+  for (const candidate of candidates) {
+    for (const metadata of ["studio-package.json", "package.json"]) {
+      try {
+        accessSync(path.join(candidate, metadata));
+        return candidate;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  throw new Error(`Missing canvas package metadata for ${moduleUrl}`);
+}
 function resolveStudioBuildInfo(moduleUrl, fallbackVersion = "unknown") {
   let version = fallbackVersion;
   let revision = "unknown";
@@ -42,7 +68,7 @@ function resolveStudioBuildInfo(moduleUrl, fallbackVersion = "unknown") {
       manifest = readFileSync(new URL("./studio-package.json", moduleUrl), "utf8");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      manifest = readFileSync(new URL("./package.json", moduleUrl), "utf8");
+      manifest = readFileSync(path.join(resolveStudioRoot(moduleUrl), "package.json"), "utf8");
     }
     version = JSON.parse(manifest).version || fallbackVersion;
   } catch {
@@ -289,12 +315,29 @@ function commandChildEnv(source, located, osName) {
   }
   return env;
 }
-function quoteWindowsCommandArgument(value) {
+var WINDOWS_COMMAND_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+function escapeWindowsCommandMetaCharacters(value) {
+  return value.replace(WINDOWS_COMMAND_META_CHARACTERS, "^$1");
+}
+function assertWindowsCommandValue(value) {
   const text = String(value);
-  if (/[%\r\n]/.test(text)) {
+  if (/[\r\n]/.test(text)) {
     throw new Error("Command arguments contain unsupported Windows command characters.");
   }
-  return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+function escapeWindowsCommand(value) {
+  return escapeWindowsCommandMetaCharacters(assertWindowsCommandValue(value));
+}
+function quoteWindowsCommandArgument(value) {
+  let text = assertWindowsCommandValue(value);
+  text = text.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  text = text.replace(/(?=(\\+?)?)\1$/, "$1$1");
+  return escapeWindowsCommandMetaCharacters(`"${text}"`);
+}
+function windowsCommandShellLine(command, args = []) {
+  const shellCommand = [escapeWindowsCommand(command), ...args.map(quoteWindowsCommandArgument)].join(" ");
+  return `"${shellCommand}"`;
 }
 function spawnSpecForLocated(located, args, env, osName) {
   if (osName === "win32" && /\.(?:cmd|bat)$/i.test(located.path)) {
@@ -305,7 +348,7 @@ function spawnSpecForLocated(located, args, env, osName) {
         "/d",
         "/s",
         "/c",
-        `call ${[located.path, ...args].map(quoteWindowsCommandArgument).join(" ")}`
+        windowsCommandShellLine(located.path, args)
       ],
       env,
       located,
@@ -1162,7 +1205,7 @@ async function deployToAzure(dir, {
   });
 }
 
-// canvases/azure-functions-hosted-skills/canonical-renderer.mjs
+// canvases/azure-functions-hosted-skills/src/canonical-renderer.mjs
 var HOSTED_SKILLS_RENDERER_FEATURES = Object.freeze([
   "doctor",
   "sourceWorkspace",
@@ -1204,6 +1247,7 @@ var PUBLIC_HOSTED_SKILLS_FEATURE_PROFILE = Object.freeze({
   connectorTrigger: false,
   deploymentPreflight: true
 });
+var HOSTED_SKILLS_VISUAL_PROFILES = Object.freeze(["default", "coreai-azure"]);
 function retainedHostedSkillsClient() {
   return String.raw`(() => {
   const $ = (id) => document.getElementById(id);
@@ -1365,17 +1409,22 @@ function retainedHostedSkillsClient() {
   events.onerror = () => { $('status').textContent = 'Waiting for runtime state…'; };
 })();`;
 }
+var HOSTED_SKILLS_DOCUMENTATION_URL = "https://aka.ms/canvas-hostedskills-docs";
 function createHostedSkillsRendererProfile({
-  documentationUrl,
+  documentationUrl = HOSTED_SKILLS_DOCUMENTATION_URL,
   minPythonLabel,
   rendererVersion,
   rendererRevision,
   pluginId,
   subscriptionProvider = "toolkit",
+  visualProfile = "default",
   features = FULL_HOSTED_SKILLS_FEATURE_PROFILE
 }) {
   if (!["toolkit", "legacy"].includes(subscriptionProvider)) {
     throw new TypeError("Renderer subscription provider must be toolkit or legacy.");
+  }
+  if (!HOSTED_SKILLS_VISUAL_PROFILES.includes(visualProfile)) {
+    throw new TypeError(`Unknown renderer visual profile: ${visualProfile}.`);
   }
   for (const feature of HOSTED_SKILLS_RENDERER_FEATURES) {
     if (typeof features[feature] !== "boolean") {
@@ -1389,6 +1438,7 @@ function createHostedSkillsRendererProfile({
     rendererRevision,
     pluginId,
     subscriptionProvider,
+    visualProfile,
     features: Object.freeze(Object.fromEntries(HOSTED_SKILLS_RENDERER_FEATURES.map((feature) => [feature, features[feature]])))
   });
 }
@@ -1408,6 +1458,7 @@ function renderHostedSkillsHtml(profile) {
   const withDeployment = enabled("deployment");
   const withTelemetry = enabled("applicationInsights") && enabled("liveTelemetry");
   const withToolkitSubscriptions = profile.subscriptionProvider === "toolkit";
+  const withCoreAiAzureProfile = profile.visualProfile === "coreai-azure";
   const withLoadTest = false;
   const withDeploymentPreflight = enabled("deploymentPreflight");
   const withFullClient = HOSTED_SKILLS_RENDERER_FEATURES.every(enabled);
@@ -1443,6 +1494,10 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   }
   .wrap { max-width: 840px; margin: 0 auto; }
   .topline { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .9rem; }
+  .product-heading { display: flex; align-items: center; gap: .65rem; }
+  .azure-service-icon {
+    display: inline-block; flex: 0 0 auto; width: 28px; height: 28px;
+  }
   .badge {
     display: inline-block; font-size: 11px; letter-spacing: .6px; text-transform: uppercase;
     color: var(--accent2); border: 1px solid rgba(139,92,246,.35); border-radius: 999px; padding: 3px 10px;
@@ -1470,6 +1525,7 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .inline-note.warn { color: var(--warn, #d9a441); }
   .inline-note code { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
   .btn.warn-outline { border: 1px solid var(--warn, #d9a441); }
+  .scope-note { margin: .45rem 0 .8rem; max-width: 760px; }
 
   .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .3rem 0 .8rem; }
   .trig { font-size: .76rem; font-weight: 600; border-radius: 999px; padding: 5px 12px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
@@ -1507,6 +1563,15 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .row .meta .s { font-size: .85rem; overflow-wrap: anywhere; }
   .row .meta .t { font-size: .7rem; color: var(--muted); margin-top: 2px; }
   .empty { padding: 1.2rem 1rem; color: var(--muted); font-size: .84rem; font-style: italic; text-align: center; }
+  .invoke-result {
+    display: none; margin: .7rem 0 1rem; border: 1px solid var(--line); border-left-width: 5px;
+    border-radius: 10px; padding: .75rem .9rem; background: var(--panel); font-size: .84rem; line-height: 1.45;
+  }
+  .invoke-result.show { display: block; }
+  .invoke-result.run { border-left-color: var(--accent); }
+  .invoke-result.ok { border-left-color: var(--ok); }
+  .invoke-result.bad { border-left-color: var(--bad); }
+  .invoke-result strong { display: block; margin-bottom: .15rem; }
 
   .cmdlog {
     margin: 0 0 1rem; border: 1px solid var(--line); border-radius: 12px;
@@ -1773,6 +1838,9 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
 
   .loglines { background: #0b1120; color: #cdd6f4; font-family: ui-monospace, monospace; font-size: .72rem; line-height: 1.5;
     max-height: 200px; overflow-y: auto; padding: .6rem .7rem; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  @media (forced-colors: active) {
+    .azure-service-icon { forced-color-adjust: none; }
+  }
 ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: .7rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #202a3b; background: #0b1120; }
   .load-terminal-head { display: flex; align-items: center; gap: .45rem; padding: .48rem .65rem; color: #a9b5ca;
     background: #111a2b; border-bottom: 1px solid #202a3b; font: 600 .7rem ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -1795,8 +1863,9 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
   .subscription-picker-field .canvas-subscription-picker-trigger { width: 100%; justify-content: flex-start; }
   .subscription-picker-field .canvas-subscription-picker-pill { flex: 1 1 auto; border: 0; background: transparent; padding-left: 6px; }
 ` : ""}</style>
+${withCoreAiAzureProfile ? '<link rel="stylesheet" href="./canvas-ui/profiles/coreai-azure.css" />' : ""}
 </head>
-<body>
+<body${withCoreAiAzureProfile ? ' class="canvas-profile-coreai-azure"' : ""}>
   <div class="wrap">
     <div class="topline">
       <span class="badge">Initial Concept</span>
@@ -1807,7 +1876,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
         <span id="doctor-toggle-label">Doctor</span>
       </button>
     </div>
-    <h1>${displayName}</h1>
+    <h1 class="product-heading"><img class="azure-service-icon" src="./assets/Function-Apps.svg" alt="" aria-hidden="true"><span>${displayName}</span></h1>
     <p class="sub">
       Build and run <strong>Hosted Skills</strong> in a local Function App${withAzureExistingApp ? ", or select an existing Azure Function App to invoke remotely." : "."}
       <a href="${DOC_URL2}" target="_blank" rel="noreferrer">Docs</a>
@@ -1824,10 +1893,11 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
 
     <h2 class="sec">BUILD NEW OR SELECT EXISTING</h2>
     <div class="controls">
-      <div class="seg" role="tablist">
-        <button id="target-local">Local Function App</button>${withAzureExistingApp ? '\n        <button id="target-azure">Azure Function App</button>' : ""}
+      <div class="seg canvas-nav-tabs" role="tablist" aria-label="Function App target">
+        <button type="button" role="tab" id="target-local" aria-selected="true" aria-controls="source-workspace-panel" tabindex="0">Local Function App</button>${withAzureExistingApp ? '\n        <button type="button" role="tab" id="target-azure" aria-selected="false" aria-controls="azure-function-app-panel" tabindex="-1">Azure Function App</button>' : ""}
       </div>
     </div>
+    <p class="inline-note scope-note" id="target-scope-note"></p>
     <div class="local-path" id="source-workspace-panel">
       <div class="local-path-head">
         <span class="local-path-label">Local function path</span>
@@ -1835,7 +1905,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
       </div>
       <code class="local-path-value" id="source-path-display">Preparing\u2026</code>
       <div class="source-management-actions" aria-label="Local Function App source">
-        <button class="path-action" id="source-customize">Change</button>
+        <button class="path-action" id="source-customize">Move generated app\u2026</button>
         <button class="path-action" id="open-existing-app">Open existing app\u2026</button>
         <button class="path-action" id="return-generated-app" hidden>Return to generated app</button>
       </div>
@@ -1852,7 +1922,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
       <p class="inline-note" id="source-workspace-note"></p>
     </div>
     <h2 class="sec" id="model-endpoint-label">MODEL ENDPOINT</h2>
-    <details class="panel model-binding" id="model-binding-panel">
+    <details class="panel model-binding canvas-accordion-plain" id="model-binding-panel">
       <summary>
         <span class="model-summary"><strong>Existing</strong><span class="model-summary-detail" id="model-summary-detail">Discovering available models...</span></span>
         <span class="tag" id="model-binding-tag">discovering</span>
@@ -1883,7 +1953,8 @@ ${withToolkitSubscriptions ? `            <div class="subscription-picker-field"
           </div>
         </div>
 ${withModelCreation ? `        <div id="model-create-view" hidden>
-          <p class="inline-note">${withAiGateway ? "Create only the Foundry project and two model deployments used by the AI Gateway template. No Function App or hosting resources are deployed." : "Create the two supported model deployments in the selected Microsoft Foundry account. No Function App or hosting resources are deployed."}</p>
+          <p class="inline-note">${withAiGateway ? "Opinionated setup: create the Foundry project and two preconfigured model deployments used by the AI Gateway template with safe defaults. This is not a full portal customization experience." : "Opinionated setup: create two preconfigured model deployments with safe defaults in the selected Microsoft Foundry account. This is not a full portal customization experience."}</p>
+          <p class="inline-note">Only the explicit <strong>Create Models</strong> button starts creation. The operation may create a resource group, Foundry account and project, two model deployments, and the role assignments required by the generated app. No Function App or hosting resources are deployed.</p>
           <ul class="model-create-resources" id="model-create-resources"></ul>
           <div class="model-actions">
             <button class="btn" id="model-create-confirm">Create Models</button>
@@ -1893,7 +1964,7 @@ ${withModelCreation ? `        <div id="model-create-view" hidden>
         </div>` : ""}
       </div>
     </details>
-${withAzureExistingApp ? `    <details class="panel model-binding" id="azure-function-app-panel" hidden>
+${withAzureExistingApp ? `    <details class="panel model-binding canvas-accordion-plain" id="azure-function-app-panel" hidden>
       <summary>
         <span class="model-summary"><strong>Azure Function App</strong><span class="model-summary-detail" id="azure-function-app-summary">Select a Function App</span></span>
         <span class="tag" id="azure-function-app-tag">select app</span>
@@ -1922,20 +1993,20 @@ ${withGitHubSession ? `      <button class="btn ghost" id="register-app-project"
 ` : ""}      <button class="btn ghost" id="local-toggle">Start local function</button>${withDeployment ? `
       <button class="btn ghost" id="deploy-azure">${ICONS.azure}<span class="label">Deploy to Azure</span></button>` : ""}${withDeploymentPreflight && !withDeployment ? '\n      <button class="btn ghost" id="deployment-preflight">Check deployment readiness</button>' : ""}
     </div>
-    <dialog id="existing-app-dialog">
-      <form method="dialog">
+${withGitHubSession ? '    <p class="inline-note" id="registration-note" hidden></p>\n' : ""}    <dialog id="existing-app-dialog">
+      <div>
         <h3>Open existing Hosted Skills app</h3>
         <p class="inline-note">Enter an absolute folder path, or a folder under the current worktree. The folder must contain <code>host.json</code> and at least one valid <code>.agent.md</code>.</p>
         <label>App or repository folder
           <input id="existing-app-path" autocomplete="off" spellcheck="false">
         </label>
         <div class="local-path-actions">
-          <button class="btn" value="attach" id="existing-app-confirm">Open app</button>
-          <button class="btn ghost" value="cancel">Cancel</button>
+          <button class="btn" type="button" id="existing-app-confirm">Open app</button>
+          <button class="btn ghost" type="button" id="existing-app-cancel">Cancel</button>
         </div>
-      </form>
+      </div>
     </dialog>
-${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment-output" hidden>
+${withDeployment ? `    <details class="cmdlog deployment-output canvas-accordion-plain" id="deployment-output" hidden>
       <summary><span class="ttl">Deployment output</span><span class="cmdlog-sub" id="deployment-summary"></span></summary>
       <div class="body">
         <div class="deployment-phases" id="deployment-phases"></div>
@@ -1955,7 +2026,7 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
       </label>
       <p class="inline-note" id="trigger-input-guidance"></p>
     </div>
-    <details class="panel model-binding parameter-panel" id="parameters-panel" hidden>
+    <details class="panel model-binding parameter-panel canvas-accordion-plain" id="parameters-panel" hidden>
       <summary><span class="model-summary"><strong>Parameters</strong></span></summary>
       <div class="body">
         <div class="http-request-editor" id="http-request-editor">
@@ -2002,7 +2073,7 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
     </div>
     <div class="inline-note" id="trigger-guidance"></div>
 
-    <details class="instr" id="instr" open>
+    <details class="instr canvas-accordion-plain" id="instr" open>
       <summary>
         <span>SKILL INSTRUCTIONS</span>
         <span class="skill-picker" id="hosted-skill-picker-wrap"><select id="hosted-skill-picker" aria-label="Hosted skill"></select></span>
@@ -2023,10 +2094,11 @@ ${withDeployment ? `    <details class="cmdlog deployment-output" id="deployment
 ${withLoadTest ? '      <button class="btn ghost" id="load-test-toggle" title="Sends real throttled HTTP bursts to measure latency/throughput. Read-only against Azure (looks up URL/key/instances); never creates or changes resources.">Load test</button>\n' : ""}      <button class="btn ghost" id="clear-invocations" title="Clear the trigger activity feed below">Clear</button>${withTelemetry ? '\n      <button class="btn ghost" id="open-app-insights">Open in Application Insights</button>' : ""}
     </div>
     <div class="inline-note" id="invoke-gate" hidden></div>
-    <div class="status" id="status"></div>
+    <div class="invoke-result" id="invoke-result" role="status" aria-live="assertive" aria-atomic="true"></div>
+    <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true"></div>
 
     <div class="section-label" id="observe-label">OBSERVE</div>
-${withTelemetry ? `    <details class="instr" id="telemetry-panel" style="display:none;margin-bottom:1rem;">
+${withTelemetry ? `    <details class="instr canvas-accordion-plain" id="telemetry-panel" style="display:none;margin-bottom:1rem;">
       <summary><span>Live Application Insights telemetry</span><span class="tag" id="telemetry-tag">off</span></summary>
       <div class="ibody">
         <div class="inline-note">Polled every 15s. Application Insights ingestion lags ~1-5 minutes, so this is near-real-time.</div>
@@ -2041,7 +2113,7 @@ ${withTelemetry ? `    <details class="instr" id="telemetry-panel" style="displa
         </div>
       </div>
     </details>
-` : ""}    <details class="instr" id="local-log-wrap" tabindex="-1" style="margin-bottom:1rem;">
+` : ""}    <details class="instr canvas-accordion-plain" id="local-log-wrap" tabindex="-1" style="margin-bottom:1rem;">
       <summary><span>Local function host log</span><span class="tag" id="local-log-tag">stopped</span></summary>
       <div class="ibody"><div class="loglines" id="local-log"></div></div>
     </details>
@@ -2050,7 +2122,7 @@ ${withTelemetry ? `    <details class="instr" id="telemetry-panel" style="displa
       <div class="digest-body" id="digest-body"></div>
     </div>
 
-    <details class="cmdlog" id="cmdlog" style="display:none" open>
+    <details class="cmdlog canvas-accordion-plain" id="cmdlog" style="display:none" open>
       <summary><span class="ttl">Commands</span><span class="cmdlog-sub" id="cmdlog-sub"></span></summary>
       <div class="cmdlog-list" id="cmdlog-list"></div>
     </details>
@@ -2173,6 +2245,8 @@ ${commandClientScript()}
       .then((r) => r.json());
   }
   const statusEl = document.getElementById('status');
+  const invokeResult = document.getElementById('invoke-result');
+  const targetScopeNote = document.getElementById('target-scope-note');
   function setStatus(message, url) {
     statusEl.textContent = message || '';
     if (url) {
@@ -2243,6 +2317,7 @@ ${commandClientScript()}
   const modelCreateStatus = document.getElementById('model-create-status');
   const localBuildActions = document.getElementById('local-build-actions');
   const registerAppProject = document.getElementById('register-app-project');
+  const registrationNote = document.getElementById('registration-note');
   const deployAzureBtn = document.getElementById('deploy-azure');
   const deploymentOutput = document.getElementById('deployment-output');
   const deploymentSummaryEl = document.getElementById('deployment-summary');
@@ -2271,6 +2346,7 @@ ${commandClientScript()}
   const existingAppDialog = document.getElementById('existing-app-dialog');
   const existingAppPath = document.getElementById('existing-app-path');
   const existingAppConfirm = document.getElementById('existing-app-confirm');
+  const existingAppCancel = document.getElementById('existing-app-cancel');
   const hostedSkillPickerWrap = document.getElementById('hosted-skill-picker-wrap');
   const hostedSkillPicker = document.getElementById('hosted-skill-picker');
   const invokeBtn = document.getElementById('invoke');
@@ -2292,6 +2368,19 @@ ${commandClientScript()}
   const cmdlog = document.getElementById('cmdlog');
   const cmdlogList = document.getElementById('cmdlog-list');
   const cmdlogSub = document.getElementById('cmdlog-sub');
+  cmdlogList.addEventListener('click', async (event) => {
+    const button = event.target.closest('.canvas-code-block-copy');
+    if (!button) return;
+    const text = button.closest('.canvas-code-block')?.querySelector('pre')?.textContent || '';
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = 'Copied';
+      setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+    } catch {
+      button.textContent = 'Copy unavailable';
+      setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+    }
+  });
   const invList = document.getElementById('inv-list');
   const invTotal = document.getElementById('inv-total');
   const digestPanel = document.getElementById('digest-panel');
@@ -2575,7 +2664,17 @@ ${commandClientScript()}
     modelCreateConfirm.disabled = true;
     modelCreateStatus.textContent = 'Starting model deployment...';
     modelCreateStatus.className = 'model-status';
-    await postJson('/models/create', { confirm: true });
+    const result = await postJson('/models/create', { confirm: true });
+    if (!result.ok) {
+      modelCreateConfirm.disabled = false;
+      modelCreateStatus.textContent = result.message || 'Model creation could not start.';
+      modelCreateStatus.className = 'model-status err';
+      setStatus(modelCreateStatus.textContent);
+    } else {
+      modelCreateStatus.textContent = result.message || 'Model creation started. Progress and errors appear in Commands.';
+      modelCreateStatus.className = 'model-status';
+      setStatus(modelCreateStatus.textContent);
+    }
   });
   function renderSourceWorkspace(state) {
     const source = state.sourceWorkspace || {};
@@ -2590,6 +2689,8 @@ ${commandClientScript()}
     sourcePathDisplay.title = source.resolvedPath || source.destination || '';
     sourceCustomize.hidden = attached || !current || busy;
     sourceCustomize.disabled = busy;
+    sourceCustomize.textContent = 'Move generated app\u2026';
+    openExistingAppBtn.textContent = attached ? 'Switch existing app\u2026' : 'Open existing app\u2026';
     sourcePathEditor.hidden = !showEditor;
     if (document.activeElement !== sourceRelativePath) sourceRelativePath.value = source.relativePath || 'functions/daily-repo-digest';
     sourceRelativePath.disabled = busy;
@@ -2637,11 +2738,18 @@ ${commandClientScript()}
     renderSourceWorkspace(state);
     renderModelBinding(state);
     targetLocalBtn.classList.toggle('on', state.target === 'local');
-    targetAzureBtn.classList.toggle('on', state.target === 'azure');
+    targetLocalBtn.setAttribute('aria-selected', String(state.target === 'local'));
+    targetLocalBtn.tabIndex = state.target === 'local' ? 0 : -1;
+    targetAzureBtn?.classList.toggle('on', state.target === 'azure');
+    targetAzureBtn?.setAttribute('aria-selected', String(state.target === 'azure'));
+    if (targetAzureBtn) targetAzureBtn.tabIndex = state.target === 'azure' ? 0 : -1;
     targetBadge.textContent = 'Target: ' + (state.target === 'azure' ? ('Azure' + (state.azure.app ? ' \xB7 ' + state.azure.app.name : '')) : 'Local');
     const showAzure = state.target === 'azure';
+    targetScopeNote.textContent = showAzure
+      ? 'Azure mode discovers deployed functions because Azure exposes no reliable Hosted Skill marker. Only supported HTTP, Timer, and safely resolved Storage Queue functions can be tested; unsupported trigger types stay disabled and are never guessed.'
+      : 'Local mode authors and tests Hosted Skills projects. Open an existing local Function App only when it contains host.json and at least one valid .agent.md Hosted Skill; switching apps preserves developer-owned files and follows the selected workspace.';
     const attached = state.sourceWorkspace?.sourceMode === 'attached';
-    openExistingAppBtn.hidden = showAzure || attached;
+    openExistingAppBtn.hidden = showAzure;
     returnGeneratedAppBtn.hidden = showAzure || !attached;
     if (modelSubscription) modelSubscription.disabled = attached || Boolean(state.modelBinding?.loading);
     const modelSubscriptionTrigger = document.getElementById('model-subscription-trigger');
@@ -2706,6 +2814,15 @@ ${commandClientScript()}
       : reg.ok === true
         ? 'Session Ready'
         : state.sourceWorkspace.mode === 'current' ? 'Move to isolated GitHub Session' : 'Create isolated GitHub Session';
+    if (registrationNote) {
+      registrationNote.hidden = !(reg.pending || reg.ok !== null);
+      registrationNote.textContent = reg.pending
+        ? 'Creating and verifying the new project session. Canvas registration completes when that session starts.'
+        : reg.ok === true
+          ? 'Project session verified. Open the new session and ask to open Azure Functions Hosted Skills. The extension cannot force the host to open a panel or restart GitHub Copilot; if the canvas is not listed, reload extensions or start a fresh project chat.'
+          : 'Session creation failed: ' + (reg.message || 'See Commands for the exact error.');
+      registrationNote.className = 'inline-note' + (reg.ok === false ? ' err' : '');
+    }
     if (state.openStatus) setStatus(state.openStatus);
   }
 
@@ -2939,7 +3056,7 @@ ${commandClientScript()}
       const ms = c.ms != null ? '<span class="cms">' + c.ms + 'ms</span>' : '';
       const note = c.note ? '<span class="cnote">' + esc(c.note) + '</span>' : '';
       const purpose = c.purpose ? '<div class="cpurpose">' + esc(c.purpose) + '</div>' : '';
-      return '<div class="cmd ' + c.status + '"><div class="chead"><span class="ckind ' + c.kind + '">' + badge + '</span><span class="ctitle">' + esc(c.title || '') + '</span>' + st + time + ms + note + '</div>' + purpose + '<pre class="ccmd">' + esc(c.cmd || '') + '</pre></div>';
+      return '<div class="cmd ' + c.status + '"><div class="chead"><span class="ckind ' + c.kind + '">' + badge + '</span><span class="ctitle">' + esc(c.title || '') + '</span>' + st + time + ms + note + '</div>' + purpose + '<div class="canvas-code-block"><button type="button" class="canvas-code-block-copy" aria-label="Copy command" aria-live="polite">Copy</button><pre class="ccmd">' + esc(c.cmd || '') + '</pre></div></div>';
     }).join('');
   }
 
@@ -2948,7 +3065,12 @@ ${commandClientScript()}
     const running = items.filter((item) => item.phase === 'running').length;
     invTotal.textContent = running ? (running + ' running \xB7 ' + items.length + ' event' + (items.length === 1 ? '' : 's')) : (items.length + ' event' + (items.length === 1 ? '' : 's'));
     clearInvocationsBtn.disabled = !items.length;
-    if (!items.length) { invList.innerHTML = '<div class="empty">Waiting for local or Azure trigger activity.</div>'; return; }
+    if (!items.length) {
+      invList.innerHTML = '<div class="empty">Waiting for local or Azure trigger activity.</div>';
+      invokeResult.className = 'invoke-result';
+      invokeResult.textContent = '';
+      return;
+    }
     invList.innerHTML = items.map((e) => {
       const cls = e.phase === 'running' ? 'run' : e.ok ? 'ok' : 'bad';
       const phase = e.phase === 'running' ? 'Running' : e.ok ? 'Completed' : 'Failed';
@@ -2962,6 +3084,12 @@ ${commandClientScript()}
         '<span class="inv-time">#' + e.id + ' \xB7 ' + esc(e.time) + '</span></div>' +
         '<div class="inv-note">' + esc(e.note || (e.phase === 'running' ? 'Trigger is running.' : e.ok ? 'Trigger completed.' : 'Trigger failed.')) + '</div></div>';
     }).join('');
+    const newest = items[0];
+    const phase = newest.phase === 'running' ? 'running' : newest.ok ? 'completed' : 'failed';
+    const title = newest.phase === 'running' ? 'Invocation in progress' : newest.ok ? 'Invocation succeeded' : 'Invocation failed';
+    invokeResult.className = 'invoke-result show ' + (newest.phase === 'running' ? 'run' : newest.ok ? 'ok' : 'bad');
+    invokeResult.innerHTML = '<strong>' + title + '</strong><span>' +
+      esc((newest.trigger || 'Trigger') + ' \xB7 ' + (newest.note || ('Invocation ' + phase + '.'))) + '</span>';
   }
 
   function renderDigest(state) {
@@ -3027,8 +3155,10 @@ ${commandClientScript()}
       setStatus(error.message);
       return;
     }
-    if (btn.dataset.function) await postJson('/az/select-function', { functionName: btn.dataset.function });
-    else await postJson('/select-trigger', { trigger: btn.dataset.id });
+    const result = btn.dataset.function
+      ? await postJson('/az/select-function', { functionName: btn.dataset.function })
+      : await postJson('/select-trigger', { trigger: btn.dataset.id });
+    if (!result.ok) setStatus(result.message || 'The selected trigger is not available.');
   }
   triggersEl.addEventListener('click', selectTriggerOrFunction);
   azureFunctionPicker.addEventListener('click', selectTriggerOrFunction);
@@ -3093,8 +3223,25 @@ ${commandClientScript()}
     setStatus(result.message || (result.ok ? 'Generated app removed.' : 'Nothing was removed.'));
   });
 
-  targetLocalBtn.addEventListener('click', async () => { if (await flushInstructionEdits()) await postJson('/select-target', { target: 'local' }); });
-  targetAzureBtn.addEventListener('click', async () => { if (await flushInstructionEdits()) await postJson('/select-target', { target: 'azure' }); });
+  async function selectTarget(target) {
+    if (await flushInstructionEdits()) await postJson('/select-target', { target });
+  }
+
+  targetLocalBtn.addEventListener('click', () => selectTarget('local'));
+  targetAzureBtn?.addEventListener('click', () => selectTarget('azure'));
+  document.querySelector('.canvas-nav-tabs')?.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [targetLocalBtn, targetAzureBtn].filter(Boolean);
+    const current = Math.max(0, tabs.indexOf(document.activeElement));
+    const next = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+  });
   modelSubscription?.addEventListener('change', () => postJson('/models/select-subscription', { subscription: modelSubscription.value }));
   modelSource.addEventListener('change', () => postJson('/models/select-source', { source: modelSource.value }));
   modelResource.addEventListener('change', () => {
@@ -3141,11 +3288,13 @@ ${commandClientScript()}
   });
   openExistingAppBtn.addEventListener('click', async () => {
     if (!(await flushInstructionEdits())) return;
-    existingAppPath.value = latest?.sourceWorkspace?.workingDirectory || '';
+    existingAppPath.value = latest?.sourceWorkspace?.attachedRoot || latest?.sourceWorkspace?.workingDirectory || '';
     existingAppDialog.showModal();
     existingAppPath.focus();
     existingAppPath.select();
   });
+  existingAppConfirm.addEventListener('click', () => existingAppDialog.close('attach'));
+  existingAppCancel.addEventListener('click', () => existingAppDialog.close('cancel'));
   existingAppDialog.addEventListener('close', async () => {
     if (existingAppDialog.returnValue !== 'attach') return;
     if (!(await flushInstructionEdits())) return;
@@ -3350,6 +3499,8 @@ ${commandClientScript()}
     }
     if (latest && latest.target === 'azure') telemetryPanel.open = true;
     setStatus('Invoking\u2026');
+    invokeResult.className = 'invoke-result show run';
+    invokeResult.innerHTML = '<strong>Invocation in progress</strong><span>Starting the selected trigger and waiting for evidence.</span>';
     digestPanel.classList.remove('show');
     digestBody.innerHTML = '';
     digestMeta.textContent = '';
@@ -3405,8 +3556,15 @@ ${commandClientScript()}
           ? { input: triggerTestInput.value }
           : queueInput || connectorInput ? { prompt: triggerTestInput.value } : {},
     );
-    if (r.ok) setStatus((r.result.ok ? 'Invoked: ' : 'Invoke failed: ') + (r.result.note || ''));
+    if (r.ok) {
+      const succeeded = r.result.ok !== false;
+      invokeResult.className = 'invoke-result show ' + (succeeded ? 'ok' : 'bad');
+      invokeResult.innerHTML = '<strong>' + (succeeded ? 'Invocation succeeded' : 'Invocation failed') + '</strong><span>' + esc(r.result.note || '') + '</span>';
+      setStatus((succeeded ? 'Invoked: ' : 'Invoke failed: ') + (r.result.note || ''));
+    }
     else {
+      invokeResult.className = 'invoke-result show bad';
+      invokeResult.innerHTML = '<strong>Invocation failed</strong><span>' + esc(r.message || 'The trigger could not be invoked.') + '</span>';
       if (httpInput) {
         parametersPanel.open = true;
         httpRequestNote.textContent = r.message || 'HTTP request failed.';
@@ -3512,17 +3670,17 @@ ${commandClientScript()}
 </html>`;
 }
 
-// canvases/azure-functions-hosted-skills/extension-registration.mjs
+// canvases/azure-functions-hosted-skills/src/extension-registration.mjs
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path2 from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function missingPath(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
 }
 function checkExtensionRegistration({
   copilotHome = process.env.COPILOT_HOME || path2.join(homedir(), ".copilot"),
-  pluginRoot = path2.dirname(fileURLToPath(import.meta.url))
+  pluginRoot = path2.dirname(fileURLToPath2(import.meta.url))
 } = {}) {
   const destination = path2.join(copilotHome, "extensions", PLUGIN_ID);
   let stats;
@@ -3583,7 +3741,7 @@ function checkExtensionRegistration({
   return { registered: true, detail: `${destination} -> ${resolvedDestination} (this session is running from ${resolvedRoot})` };
 }
 
-// canvases/azure-functions-hosted-skills/installation-status.mjs
+// canvases/azure-functions-hosted-skills/src/installation-status.mjs
 import { lstat as lstat2, readdir as readdir2, readFile as readFile2, realpath } from "node:fs/promises";
 import path3 from "node:path";
 import { homedir as homedir2 } from "node:os";
@@ -3654,7 +3812,7 @@ var package_default = {
   }
 };
 
-// canvases/azure-functions-hosted-skills/build-info.mjs
+// canvases/azure-functions-hosted-skills/src/build-info.mjs
 function resolveFunctionStudioBuildInfo({ version, revision }) {
   return Object.freeze({
     productId: PRODUCT_ID,
@@ -3666,14 +3824,14 @@ function resolveFunctionStudioBuildInfo({ version, revision }) {
   });
 }
 
-// canvases/azure-functions-hosted-skills/extension.mjs
+// canvases/azure-functions-hosted-skills/src/extension.mjs
 import {
   createFixtureAzureAuthSession,
   createHostedSkillsAzureProvider,
   resolveHostedSkillsAzureAuthProvider
 } from "./azure-auth.mjs";
 
-// canvases/azure-functions-hosted-skills/agent-output.mjs
+// canvases/azure-functions-hosted-skills/src/agent-output.mjs
 var MAX_AGENT_OUTPUT_CHARS = 1e5;
 var MAX_REMOTE_AGENT_RESPONSE_CHARS = 8e3;
 var MAX_AGENT_ENVELOPE_CHARS = 5e5;
@@ -3940,7 +4098,7 @@ function applyAgentResponseTelemetry(invocations, outputs) {
   return changed;
 }
 
-// canvases/azure-functions-hosted-skills/model-capabilities.mjs
+// canvases/azure-functions-hosted-skills/src/model-capabilities.mjs
 var AI_GATEWAY_PUBLIC_PREVIEW_FIX = "Confirm the Microsoft.ApiManagement provider is registered, the AI Gateway public preview is enabled for this subscription, and your account has read access to the gateway resources.";
 function errorDetail(error) {
   return String(error?.azureMessage || error?.message || "Unknown Azure Resource Manager failure.").trim();
@@ -4020,7 +4178,7 @@ function gatewayRuntimeUrls(endpoint, workspace = "default") {
   };
 }
 
-// canvases/azure-functions-hosted-skills/model-discovery-state.mjs
+// canvases/azure-functions-hosted-skills/src/model-discovery-state.mjs
 function selectionIdentity(binding) {
   return {
     subscription: String(binding.subscription || ""),
@@ -4200,7 +4358,7 @@ async function retrieveRuntimeKey(arm, subscription, gatewayId, keyName = "defau
   return String(key);
 }
 
-// canvases/azure-functions-hosted-skills/azure-subscriptions.mjs
+// canvases/azure-functions-hosted-skills/src/azure-subscriptions.mjs
 import { createHash as createHash3 } from "node:crypto";
 
 // packages/canvas-toolkit/src/subscriptions.mjs
@@ -4227,7 +4385,7 @@ function normalizeSubscriptionScope(scope) {
   return { tenantId: scope.tenantId.toLowerCase(), subscriptionIds: scope.subscriptionIds.map((id) => id.toLowerCase()), cloud: scope.cloud };
 }
 
-// canvases/azure-functions-hosted-skills/azure-subscriptions.mjs
+// canvases/azure-functions-hosted-skills/src/azure-subscriptions.mjs
 var HOSTED_SKILLS_SUBSCRIPTION_PROVIDER_ENV = "FUNCTIONS_HOSTED_SKILLS_SUBSCRIPTION_PROVIDER";
 var DEFAULT_HOSTED_SKILLS_SUBSCRIPTION_PROVIDER = "toolkit";
 function resolveHostedSkillsSubscriptionProvider(value = process.env[HOSTED_SKILLS_SUBSCRIPTION_PROVIDER_ENV]) {
@@ -4410,7 +4568,7 @@ function hydrateAzureSubscriptionInventory(azure, { force = false, loadApps = tr
   return request.promise;
 }
 
-// canvases/azure-functions-hosted-skills/python-environment.mjs
+// canvases/azure-functions-hosted-skills/src/python-environment.mjs
 import path4 from "node:path";
 function pythonVirtualEnvironment(agentDir, platform = process.platform) {
   const pathApi = platform === "win32" ? path4.win32 : path4.posix;
@@ -4569,18 +4727,18 @@ function defaultHttpRequestDraft() {
   return { headersText: "{}", bodyText: "" };
 }
 
-// canvases/azure-functions-hosted-skills/source-workspace.mjs
+// canvases/azure-functions-hosted-skills/src/source-workspace.mjs
 import { createHash as createHash5, randomUUID as randomUUID3 } from "node:crypto";
 import { cp as cp2, link as link2, lstat as lstat5, mkdir as mkdir4, open as open3, readFile as readFile5, readdir as readdir3, readlink, realpath as realpath3, rename as rename4, rm as rm4, stat as stat2 } from "node:fs/promises";
 import path7 from "node:path";
 
-// canvases/azure-functions-hosted-skills/state-migration.mjs
+// canvases/azure-functions-hosted-skills/src/state-migration.mjs
 import { createHash as createHash4, randomUUID as randomUUID2 } from "node:crypto";
 import { link, lstat as lstat4, mkdir as mkdir3, open as open2, readFile as readFile4, realpath as realpath2, rename as rename3, rm as rm3 } from "node:fs/promises";
 import path6 from "node:path";
 import { homedir as homedir3, tmpdir } from "node:os";
 
-// canvases/azure-functions-hosted-skills/state-lock.mjs
+// canvases/azure-functions-hosted-skills/src/state-lock.mjs
 import { randomUUID } from "node:crypto";
 import { lstat as lstat3, mkdir as mkdir2, open, readFile as readFile3, rename as rename2, rm as rm2 } from "node:fs/promises";
 import path5 from "node:path";
@@ -4656,7 +4814,7 @@ async function acquireStateLock(file, { timeoutMs = 12e4, pollMs = 50 } = {}) {
   }
 }
 
-// canvases/azure-functions-hosted-skills/state-migration.mjs
+// canvases/azure-functions-hosted-skills/src/state-migration.mjs
 var STATE_COMPONENT = "azure-functions-hosted-skills";
 var STATE_PRODUCT = "azure-functions-hosted-skills";
 var LEGACY_STATE_COMPONENT = "intelligent-function-app-studio";
@@ -4883,7 +5041,7 @@ async function writeStateRecord({ destination, value, revision, validate }) {
   });
 }
 
-// canvases/azure-functions-hosted-skills/source-workspace.mjs
+// canvases/azure-functions-hosted-skills/src/source-workspace.mjs
 var DEFAULT_CURRENT_SUBDIR = path7.join("functions", "daily-repo-digest");
 var MANIFEST_VERSION = 2;
 var SUPPORTED_MANIFEST_VERSIONS = /* @__PURE__ */ new Set([1, MANIFEST_VERSION]);
@@ -5608,14 +5766,14 @@ async function deleteOwnershipManifest(filePath) {
   await rm4(filePath, { force: true });
 }
 
-// canvases/azure-functions-hosted-skills/studio-state.mjs
+// canvases/azure-functions-hosted-skills/src/studio-state.mjs
 import { lstat as lstat6, readdir as readdir4 } from "node:fs/promises";
 import path8 from "node:path";
 
-// canvases/azure-functions-hosted-skills/trigger-drafts.mjs
+// canvases/azure-functions-hosted-skills/src/trigger-drafts.mjs
 import { readFile as readFile6 } from "node:fs/promises";
 
-// canvases/azure-functions-hosted-skills/connector-trigger.mjs
+// canvases/azure-functions-hosted-skills/src/connector-trigger.mjs
 var M365_INBOX_CONNECTOR = Object.freeze({
   id: "m365-inbox",
   label: "Microsoft 365 Inbox",
@@ -5740,7 +5898,7 @@ function withoutConnectorExtensionBundle(hostConfig) {
   return next;
 }
 
-// canvases/azure-functions-hosted-skills/queue-trigger.mjs
+// canvases/azure-functions-hosted-skills/src/queue-trigger.mjs
 import { createHash as createHash6 } from "node:crypto";
 var DEFAULT_QUEUE_NAME = "agent-input";
 var DEFAULT_QUEUE_MESSAGE = JSON.stringify(
@@ -5834,7 +5992,7 @@ async function enqueueLocalQueueMessage({
   return { queueName, bytes: normalized.bytes };
 }
 
-// canvases/azure-functions-hosted-skills/trigger-drafts.mjs
+// canvases/azure-functions-hosted-skills/src/trigger-drafts.mjs
 function defaultTriggerPayloadDrafts() {
   return {
     queue: DEFAULT_QUEUE_MESSAGE,
@@ -5888,7 +6046,7 @@ async function loadTriggerPayloadDrafts(file, { read } = {}) {
   return drafts;
 }
 
-// canvases/azure-functions-hosted-skills/studio-state.mjs
+// canvases/azure-functions-hosted-skills/src/studio-state.mjs
 function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -6110,7 +6268,7 @@ var StudioState = class {
   }
 };
 
-// canvases/azure-functions-hosted-skills/timer-schedule.mjs
+// canvases/azure-functions-hosted-skills/src/timer-schedule.mjs
 var TIMER_CADENCES = ["daily", "weekly", "hourly"];
 var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 var DEFAULT_SCHEDULE = Object.freeze({
@@ -6197,7 +6355,7 @@ function replaceTimerScheduleExpression(source, expression) {
   return source.replace(pattern, `$1schedule: "${expression}"`);
 }
 
-// canvases/azure-functions-hosted-skills/deployment-ui-state.mjs
+// canvases/azure-functions-hosted-skills/src/deployment-ui-state.mjs
 function createLocalPortReservationPool({ isListening }) {
   const reserved = /* @__PURE__ */ new Set();
   return {
@@ -6350,11 +6508,11 @@ function appendBoundedDeploymentOutput(deployment, event, { maxLines = 800, maxC
   return deployment;
 }
 
-// canvases/azure-functions-hosted-skills/deployment-template-policy.mjs
+// canvases/azure-functions-hosted-skills/src/deployment-template-policy.mjs
 import { readFile as readFile7, writeFile as writeFile2 } from "node:fs/promises";
 import path9 from "node:path";
 
-// canvases/azure-functions-hosted-skills/model-deployment-contract.mjs
+// canvases/azure-functions-hosted-skills/src/model-deployment-contract.mjs
 var CREATE_MODELS_BICEP_MARKER = "// Managed by Azure Functions Hosted Skills Create Models.";
 var CREATE_MODELS_ENTRYPOINT_MARKER = "// Managed by Azure Functions Hosted Skills Create Models entrypoint.";
 var LEGACY_CREATE_MODELS_BICEP_MARKER = "// Managed by Intelligent Function App Studio Create Models.";
@@ -6584,7 +6742,7 @@ function foundryDeploymentLabel(deployment = DEFAULT_FOUNDRY_MODEL_DEPLOYMENT) {
   return `${deployment.deploymentName} -> ${deployment.modelName} ${deployment.modelVersion}, ${FOUNDRY_MODEL_FORMAT}, ${FOUNDRY_MODEL_SKU} capacity ${deployment.capacity}`;
 }
 
-// canvases/azure-functions-hosted-skills/deployment-template-policy.mjs
+// canvases/azure-functions-hosted-skills/src/deployment-template-policy.mjs
 async function readOptionalFile(file) {
   try {
     return await readFile7(file, "utf8");
@@ -7349,7 +7507,7 @@ async function invokeFunction({
   throw new Error(fn.guidance || `Trigger ${fn.triggerType || fn.kind} is not supported.`);
 }
 
-// canvases/azure-functions-hosted-skills/hosted-skill-workspace.mjs
+// canvases/azure-functions-hosted-skills/src/hosted-skill-workspace.mjs
 import { createHash as createHash7 } from "node:crypto";
 import { readdir as readdir5, readFile as readFile8, rename as rename5, rm as rm5, writeFile as writeFile3 } from "node:fs/promises";
 import path10 from "node:path";
@@ -7499,15 +7657,19 @@ async function writeAgentBodyIfRevision(filePath, bodyText, expectedRevision) {
   return writeAgentDocumentIfRevision(filePath, replaceAgentBody(source, bodyText), expectedRevision);
 }
 
-// canvases/azure-functions-hosted-skills/extension.mjs
+// canvases/azure-functions-hosted-skills/src/extension.mjs
 var { version: STUDIO_VERSION, revision: STUDIO_REVISION } = resolveStudioBuildInfo(import.meta.url);
 var buildInfo = resolveFunctionStudioBuildInfo({ version: STUDIO_VERSION, revision: STUDIO_REVISION });
+var hostedSkillsAssets = new Map([
+  ...canvasUiAssets,
+  ["assets/Function-Apps.svg", [new URL("./assets/Function-Apps.svg", import.meta.url), "image/svg+xml"]]
+]);
 var AZD_DEPLOYMENT_ENVIRONMENT = "deployment";
 var AZD_DEPLOYMENT_LOCATION = FOUNDRY_DEPLOYMENT_LOCATION;
 var AZURITE_VERSION = "3.37.0";
-var EXTENSION_ROOT = path11.dirname(fileURLToPath2(import.meta.url));
+var EXTENSION_ROOT = resolveStudioRoot(import.meta.url);
 var azuriteInstallPromises = /* @__PURE__ */ new Map();
-var DOC_URL = "https://learn.microsoft.com/en-us/azure/azure-functions/functions-serverless-agents-runtime";
+var DOC_URL = HOSTED_SKILLS_DOCUMENTATION_URL;
 var CORE_TOOLS_DOCS_URL = "https://learn.microsoft.com/azure/azure-functions/functions-run-local";
 var AIGW_WORKSPACE = AI_GATEWAY_WORKSPACE;
 var GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/";
@@ -7522,6 +7684,7 @@ var CANONICAL_RENDERER_PROFILE = createHostedSkillsRendererProfile({
   rendererRevision: STUDIO_REVISION,
   pluginId: PLUGIN_ID,
   subscriptionProvider: subscriptionProviderMode,
+  visualProfile: COREAI_AZURE_VISUAL_PROFILE.id,
   features: FULL_HOSTED_SKILLS_FEATURE_PROFILE
 });
 var renderHtml = () => renderHostedSkillsHtml(CANONICAL_RENDERER_PROFILE);
@@ -9217,6 +9380,7 @@ function ensureEntry(instanceId) {
     },
     bootstrap: {
       promise: null,
+      promiseGeneration: null,
       generation: 0,
       phase: "idle",
       status: "",
@@ -10634,7 +10798,25 @@ function startLocalBootstrap(entry, { userInitiated = false } = {}) {
       new Error("Local automatic startup is paused after Stop. Select Start local function to resume.")
     );
   }
-  if (entry.bootstrap.promise) return entry.bootstrap.promise;
+  if (entry.bootstrap.promise) {
+    if (entry.bootstrap.promiseGeneration === entry.bootstrap.generation) return entry.bootstrap.promise;
+    const stalePromise = entry.bootstrap.promise;
+    const queuedGeneration = entry.bootstrap.generation;
+    const queuedPromise = stalePromise.catch(() => {
+    }).then(() => {
+      if (entry.bootstrap.promise === queuedPromise) {
+        entry.bootstrap.promise = null;
+        entry.bootstrap.promiseGeneration = null;
+      }
+      if (queuedGeneration !== entry.bootstrap.generation || entry.local.autoStartSuppressed) {
+        throw new Error("Local startup cancelled.");
+      }
+      return startLocalBootstrap(entry);
+    });
+    entry.bootstrap.promise = queuedPromise;
+    entry.bootstrap.promiseGeneration = queuedGeneration;
+    return queuedPromise;
+  }
   const generation = ++entry.bootstrap.generation;
   const ensureCurrent = () => {
     if (generation !== entry.bootstrap.generation || entry.local.autoStartSuppressed) {
@@ -10678,9 +10860,13 @@ function startLocalBootstrap(entry, { userInitiated = false } = {}) {
     }
     throw error;
   }).finally(() => {
-    if (entry.bootstrap.promise === promise) entry.bootstrap.promise = null;
+    if (entry.bootstrap.promise === promise) {
+      entry.bootstrap.promise = null;
+      entry.bootstrap.promiseGeneration = null;
+    }
   });
   entry.bootstrap.promise = promise;
+  entry.bootstrap.promiseGeneration = generation;
   return promise;
 }
 async function loadTimerSchedule(entry) {
@@ -11019,7 +11205,7 @@ async function attachExistingSource(entry, inputPath, { persist = true } = {}) {
     entry.target = "local";
     await loadTemplateDirectory(entry, attached.root);
     entry.modelBinding.initializePromise = null;
-    inspectConfiguredModelBinding(entry).then(() => initializeDeclaredIntegrations(entry)).then(() => initializeModelBindings(entry)).catch((error) => {
+    inspectConfiguredModelBinding(entry).then(() => initializeDeclaredIntegrations(entry)).catch((error) => {
       entry.modelBinding.error = shortError(error);
       broadcast(entry, "state", snapshot(entry));
     });
@@ -11309,6 +11495,7 @@ function resetGeneratedWorkspaceState(entry, { preserveManaged = false } = {}) {
   entry.modelBinding.activeModelId = "";
   entry.bootstrap.generation += 1;
   entry.bootstrap.promise = null;
+  entry.bootstrap.promiseGeneration = null;
   entry.bootstrap.phase = "idle";
   entry.bootstrap.status = "";
   entry.bootstrap.error = "";
@@ -11653,7 +11840,7 @@ async function resolvePythonProvisioning(entry) {
   return { provider: "system", bin: system.bin, detail: `${system.text} (${system.source})` };
 }
 async function checkExtensionRegistration2() {
-  const pluginRoot = path11.dirname(fileURLToPath2(import.meta.url));
+  const pluginRoot = path11.dirname(fileURLToPath3(import.meta.url));
   if (path11.basename(pluginRoot) === PLUGIN_ID && path11.basename(path11.dirname(pluginRoot)) === "extensions") {
     const manifestPath = path11.resolve(pluginRoot, "../../.github/plugin/plugin.json");
     if (await exists(manifestPath)) {
@@ -13882,7 +14069,7 @@ create_session(base_branch=${JSON.stringify(info.branch)}, mode=plan)`,
   entry.appRegistration = { pending: true, ok: null, message: "Waiting for the App agent." };
   entry.openStatus = "Creating a GitHub Copilot App session...";
   broadcast(entry, "state", snapshot(entry));
-  const kickoff = "Continue from the Azure Functions Hosted Skills handoff. Read .github/copilot-instructions.md, inspect the agent and project files, and report the concrete local run steps. Do not deploy or change Azure resources without asking.";
+  const kickoff = "Continue from the Azure Functions Hosted Skills handoff. Read .github/copilot-instructions.md, inspect the agent and project files, and open the canonical Azure Functions Hosted Skills canvas before reporting the concrete local run steps. If the canvas is not registered, explain that the host must reload extensions or start a fresh project chat; do not claim the extension can restart the host. Do not deploy or change Azure resources without asking.";
   const prompt = `Azure Functions Hosted Skills session request for canvas instance ${JSON.stringify(entry.instanceId)}.
 
 The user clicked Create isolated GitHub Session and authorized these local App operations:
@@ -13932,7 +14119,7 @@ async function startServer(entry, {
         return;
       }
     }
-    const asset = req.method === "GET" && canvasUiAssets.get(req.url?.slice(1));
+    const asset = req.method === "GET" && hostedSkillsAssets.get(req.url?.slice(1));
     if (asset) {
       readFile9(asset[0]).then((content) => {
         res.writeHead(200, { "Content-Type": asset[1] });
@@ -14058,16 +14245,22 @@ data: ${JSON.stringify(snapshot(entry))}
         const id = String(body.trigger || "");
         const t = TRIGGER_TYPES.find((x) => x.id === id);
         if (!t || t.nyi) throw new Error(`Trigger ${id || "(missing)"} is not implemented.`);
-        assertWorkspaceMutationAllowed(entry, "Changing triggers");
         const changed = Boolean(t && !t.nyi && entry.trigger !== id);
+        const previousTrigger = entry.trigger;
         const previousPrompt = entry.prompt;
         const previousSkillName = entry.selectedHostedSkill?.name || entry.hero?.title || "Hosted skill";
         entry.trigger = id;
         if (changed && entry.sourceWorkspace.materialized) {
           await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
           if (entry.sourceWorkspace.sourceMode === "managed" && !entry.selectedHostedSkill && (id === "queue" || id === "connector")) {
+            assertWorkspaceMutationAllowed(entry, "Changing triggers");
             await syncGeneratedTriggerFilesImpl(entry, previousPrompt, previousSkillName);
             await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
+          }
+          if (entry.sourceWorkspace.sourceMode === "attached" && !entry.selectedHostedSkill) {
+            entry.trigger = previousTrigger;
+            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
+            throw new Error(`The selected existing app has no ${id} Hosted Skill in its .agent.md files.`);
           }
         }
         broadcast(entry, "state", snapshot(entry));
@@ -14105,7 +14298,14 @@ data: ${JSON.stringify(snapshot(entry))}
           stopLocal(entry);
           await ensureAzureSubscriptions(entry);
         } else if (entry.sourceWorkspace.materialized) {
-          if (!["timer", "http"].includes(entry.trigger)) entry.trigger = "timer";
+          const localTriggerAvailable = entry.hostedSkills.some((skill) => skill.trigger === entry.trigger);
+          if (!localTriggerAvailable) {
+            entry.trigger = entry.hostedSkills.find((skill) => !["connector", "blob", "cosmos"].includes(skill.trigger))?.trigger || "timer";
+            await refreshWorkspaceFromDisk(entry, {
+              restartIfRunning: false,
+              followSelectedFileTrigger: false
+            });
+          }
           await startLocalBootstrap(entry, { userInitiated: true });
         }
         responseJson(res, { ok: true, target: entry.target });
@@ -14756,15 +14956,23 @@ var canvas = createCanvas({
         const entry = ensureEntry(instanceId);
         const trigger = TRIGGER_TYPES.find((item) => item.id === input.trigger);
         if (!trigger || trigger.nyi) return { ok: false, message: `Trigger ${input.trigger} is not implemented.` };
-        try {
-          assertWorkspaceMutationAllowed(entry, "Changing triggers");
-        } catch (error) {
-          return { ok: false, message: shortError(error) };
-        }
         const changed = entry.trigger !== trigger.id;
+        const previousTrigger = entry.trigger;
         entry.trigger = trigger.id;
+        if (changed && entry.sourceWorkspace.materialized) {
+          await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
+          if (entry.sourceWorkspace.sourceMode === "managed" && !entry.selectedHostedSkill) {
+            assertWorkspaceMutationAllowed(entry, "Changing triggers");
+            await syncGeneratedTriggerFiles(entry);
+            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
+          }
+          if (entry.sourceWorkspace.sourceMode === "attached" && !entry.selectedHostedSkill) {
+            entry.trigger = previousTrigger;
+            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
+            return { ok: false, message: `The selected existing app has no ${trigger.id} Hosted Skill in its .agent.md files.` };
+          }
+        }
         broadcast(entry, "state", snapshot(entry));
-        if (changed && entry.sourceWorkspace.materialized) await syncGeneratedTriggerFiles(entry);
         if (changed && entry.target === "local") {
           try {
             await restartLocalEnvironment(entry);
@@ -14787,7 +14995,14 @@ var canvas = createCanvas({
           stopLocal(entry);
           await ensureAzureSubscriptions(entry);
         } else {
-          if (!["timer", "http"].includes(entry.trigger)) entry.trigger = "timer";
+          const localTriggerAvailable = entry.hostedSkills.some((skill) => skill.trigger === entry.trigger);
+          if (!localTriggerAvailable) {
+            entry.trigger = entry.hostedSkills.find((skill) => !["connector", "blob", "cosmos"].includes(skill.trigger))?.trigger || "timer";
+            await refreshWorkspaceFromDisk(entry, {
+              restartIfRunning: false,
+              followSelectedFileTrigger: false
+            });
+          }
           try {
             await startLocalBootstrap(entry, { userInitiated: true });
           } catch (error) {
@@ -15104,7 +15319,7 @@ var canvas = createCanvas({
         const entry = ensureEntry(instanceId);
         const ok = input?.ok === true;
         const message = input?.message || (ok ? "Project and worktree ready." : "Registration failed.");
-        entry.openStatus = ok ? `Session ready: ${input?.worktreePath || input?.projectName || "worktree created"}` : `Session creation failed: ${message}`;
+        entry.openStatus = ok ? `Session ready: ${input?.worktreePath || input?.projectName || "worktree created"}. Open that session and ask to open Azure Functions Hosted Skills; if it is not registered, reload extensions or start a fresh project chat.` : `Session creation failed: ${message}`;
         entry.appRegistration = {
           pending: false,
           ok,
