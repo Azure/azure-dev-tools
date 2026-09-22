@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "format": "plugin",
   "name": "azure-functions-hosted-skills",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "plugin": {
     "manifest": ".github/plugin/plugin.json",
     "extension": {
@@ -35,11 +35,16 @@
     ".github/plugin/plugin.json",
     "README.md",
     "THIRD_PARTY_NOTICES.txt",
+    "extensions/azure-functions-hosted-skills/assets/Function-Apps.provenance.json",
+    "extensions/azure-functions-hosted-skills/assets/Function-Apps.svg",
     "extensions/azure-functions-hosted-skills/assets/toolkit/icons/Subscription.svg",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui.mjs",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/azure-subscription-picker.mjs",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/commands-log.css",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/commands-log.mjs",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/icons.mjs",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/locations.mjs",
+    "extensions/azure-functions-hosted-skills/assets/toolkit/ui/profiles/coreai-azure.css",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/styles.css",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.css",
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/subscription-picker.mjs",
@@ -78,8 +83,8 @@
   },
   "build": {
     "esbuild": "0.25.12",
-    "lockSha256": "d246705ca7c5bc314170ff3da7876479bcca46f4935a2be00327e7406b47ee63",
-    "inputSha256": "b6a3155eb27d3de3d5d7321eb53779ae0423a32b1b329094571849ac7ebd55e6"
+    "lockSha256": "43ecdccf083865b5c1bc700edfa2254af198c910f0b24774687b224c38b049ee",
+    "inputSha256": "77b0c90a98ac9ba0170e8983dc1107260a5d27e6b72f4812c29ef26ed940124d"
   },
   "dependencies": [
     {
@@ -268,6 +273,10 @@
       "platform": "browser"
     },
     {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/commands-log.mjs",
+      "platform": "browser"
+    },
+    {
       "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/icons.mjs",
       "platform": "browser"
     },
@@ -308,6 +317,16 @@
       "mime": "text/javascript; charset=utf-8"
     },
     {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/commands-log.css",
+      "route": "canvas-ui/commands-log.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/commands-log.mjs",
+      "route": "canvas-ui/commands-log.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
       "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/icons.mjs",
       "route": "canvas-ui/icons.mjs",
       "mime": "text/javascript; charset=utf-8"
@@ -316,6 +335,11 @@
       "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/locations.mjs",
       "route": "canvas-ui/locations.mjs",
       "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/profiles/coreai-azure.css",
+      "route": "canvas-ui/profiles/coreai-azure.css",
+      "mime": "text/css; charset=utf-8"
     },
     {
       "file": "extensions/azure-functions-hosted-skills/assets/toolkit/ui/styles.css",

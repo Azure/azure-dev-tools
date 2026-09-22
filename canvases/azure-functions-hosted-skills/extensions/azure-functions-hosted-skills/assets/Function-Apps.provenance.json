@@ -1,0 +1,18 @@
+{
+  "assetName": "Function Apps",
+  "owner": "Microsoft",
+  "sourcePage": "https://learn.microsoft.com/en-us/azure/architecture/icons/",
+  "sourceArchive": "https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip",
+  "sourcePath": "Azure_Public_Service_Icons/Icons/compute/10029-icon-service-Function-Apps.svg",
+  "sourceArchiveSha256": "921594ccd1bf3d9c0a1bd7b6d924e050551a59342f2b353bb74bdcf761c35141",
+  "sha256": "1a6c9c108d5f63f7b78bc6fbc464059acd2eaa8c1d111e9bcd28a8b2cdf470b9",
+  "retrievedUtc": "2026-09-22T00:22:00Z",
+  "modifications": "None. The official SVG bytes are preserved exactly.",
+  "approval": {
+    "approvedUtc": "2026-09-22T00:28:00Z",
+    "approvedBy": "Paul Yuk",
+    "role": "Microsoft product owner and repository owner",
+    "scope": "Microsoft product UI use and redistribution in this public repository and the packaged Azure Functions Hosted Skills extension",
+    "basis": "Microsoft-owned artwork selected for this product by a Microsoft designer"
+  }
+}
