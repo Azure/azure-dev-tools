@@ -1,2 +1,3 @@
 # Preserve the canonical distribution bytes covered by its checksums.
 canvases/azure-resources-query/** -text
+docs/azure-resources-query/SHA256SUMS -text
