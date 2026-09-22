@@ -3416,8 +3416,8 @@ function renderHtml() {
           <div id="thread-log" class="chat-log" aria-live="polite">No thread selected.</div>
           <textarea id="reply-msg" aria-label="Thread message" placeholder="Ask the SRE Agent for a diagnosis or reply to the selected thread..."></textarea>
           <div class="row-actions">
-            <button class="btn ghost" id="focus-thread" hidden>Focus this thread</button>
-            <button class="btn ghost" id="send-reply"${WRITES_ENABLED ? "" : " disabled"}>Send</button>
+            <button type="button" class="btn" id="send-reply"${WRITES_ENABLED ? "" : " disabled"}>Send</button>
+            <button type="button" class="btn ghost" id="focus-thread" hidden>Focus this thread</button>
             <button class="btn ghost" id="open-in-portal">Open in Portal &#8599;</button>
           </div>
         </section>
@@ -3714,7 +3714,9 @@ function renderHtml() {
     var displayedThreads = draftThread ? [draftThread].concat(sortThreads(s.threads || [])) : sortThreads(s.threads || []);
     var activeThread = displayedActiveThread(s, draftThread);
     renderRowList(document.getElementById('thread-list'), displayedThreads, function (t) {
-      return '<span>' + escapeHtml(threadLabel(t)) + '</span><span class="tag">' + escapeHtml(threadStatusLabel(t)) + '</span>';
+      var status = threadStatusLabel(t);
+      return '<span>' + escapeHtml(threadLabel(t)) + '</span>' +
+        (status ? '<span class="tag">' + escapeHtml(status) + '</span>' : '');
     }, function (t) { openThread(t.id || t.threadId); }, activeThread && (activeThread.id || activeThread.threadId));
 
     var log = document.getElementById('thread-log');
@@ -4449,6 +4451,12 @@ function renderHtml() {
     setStatus('New draft thread ready. Edit the template, then click Send.');
   });
   document.getElementById('send-reply').addEventListener('click', function () {
+    sendComposerMessage(false);
+  });
+  document.getElementById('reply-msg').addEventListener('keydown', function (event) {
+    var activeThread = displayedActiveThread(state, draftThread);
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !threadId(activeThread) || activeThread.draft) return;
+    event.preventDefault();
     sendComposerMessage(false);
   });
   document.getElementById('focus-thread').addEventListener('click', function () {

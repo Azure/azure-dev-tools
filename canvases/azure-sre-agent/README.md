@@ -6,9 +6,21 @@ an investigation, and continue working from the active thread.
 
 ## Install
 
-In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL**,
-paste the [stable Azure SRE Agent extension URL](https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent),
-and install. Then fully quit and reopen GitHub Copilot. See the
+In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL** and
+paste this URL:
+
+`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent`
+
+The `latest` tag is intentionally movable and currently resolves to version
+0.2.1. To pin the installation to the exact reviewed bytes instead, use:
+
+`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-v0-2-1-8aa2a9bc/canvases/azure-sre-agent/extensions/azure-sre-agent`
+
+Versioned tags are immutable. Use `latest` for internal evaluation when you
+want approved staging updates; use the versioned URL when a test or report must
+remain reproducible.
+
+Install, then fully quit and reopen GitHub Copilot. See the
 [Azure SRE Agent README](https://github.com/Azure/azure-dev-tools/blob/azure-sre-agent-latest/canvases/azure-sre-agent/README.md)
 for this quickstart and safety guidance.
 
@@ -117,5 +129,6 @@ answered from already-loaded canvas data may still be answered locally.
 
 ## Learn more
 
-- [Azure SRE Agent documentation](https://learn.microsoft.com/azure/sre-agent/)
-- [Access your SRE Agent from any IDE, terminal, or AI assistant](https://techcommunity.microsoft.com/blog/appsonazureblog/access-your-sre-agent-from-any-ide-terminal-or-ai-assistant/4523434)
+- [Using Azure SRE Agent](../../docs/azure-sre-agent-usage.md)
+- [Execution authorization safety contract](../../docs/sre-execution-action-contract.md)
+- [Delegated connector safety and limitations](../../docs/sre-agent-private-connectors.md)
