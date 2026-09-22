@@ -1,0 +1,2 @@
+# Preserve the canonical distribution bytes covered by its checksums.
+canvases/azure-resources-query/** -text

@@ -1,0 +1,250 @@
+/* Command activity — an Azure Portal "Activity log"-style surface. A bordered
+   container with a toolbar header over a tinted well of individual command
+   cards. Scoped under .canvas-commands-log; consumes ui/styles.css tokens. */
+
+.canvas-commands-log {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--canvas-bg);
+    border: 1px solid var(--canvas-border);
+    border-radius: var(--canvas-radius);
+    overflow: clip;
+    color: var(--canvas-fg);
+    font-size: var(--canvas-ui);
+    line-height: var(--canvas-line);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--canvas-fg) 6%, transparent),
+                0 2px 8px color-mix(in srgb, var(--canvas-fg) 4%, transparent);
+}
+
+/* --- Toolbar header ---------------------------------------------------- */
+.canvas-commands-log-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 14px;
+    flex-shrink: 0;
+    background: var(--canvas-tint);
+    border-bottom: 1px solid var(--canvas-divider);
+}
+
+.canvas-commands-log-heading-label {
+    font-weight: var(--font-weight-semibold, 600);
+    color: var(--canvas-fg);
+    font-size: var(--canvas-ui);
+}
+
+.canvas-commands-log-count:not(:empty) {
+    min-width: 20px;
+    height: 18px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    background: var(--canvas-selected);
+    color: var(--canvas-muted);
+    font-size: 11px;
+    font-weight: var(--font-weight-semibold, 600);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+/* --- Empty state ------------------------------------------------------- */
+.canvas-commands-log-empty {
+    color: var(--canvas-muted);
+    padding: 20px 14px;
+    text-align: center;
+    font-size: var(--canvas-ui);
+}
+
+.canvas-commands-log-empty[hidden] {
+    display: none;
+}
+
+/* --- Cards ------------------------------------------------------------- */
+.canvas-commands-log-list {
+    list-style: none;
+    margin: 0;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    background: var(--canvas-tint);
+}
+
+.canvas-commands-log-row {
+    position: relative;
+    padding: 10px 12px 11px;
+    background: var(--canvas-bg);
+    border: 1px solid var(--canvas-border);
+    border-radius: var(--canvas-radius);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--canvas-fg) 5%, transparent);
+    transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.canvas-commands-log-row:hover {
+    border-color: color-mix(in srgb, var(--canvas-border) 40%, var(--canvas-fg));
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--canvas-fg) 8%, transparent),
+                0 2px 6px color-mix(in srgb, var(--canvas-fg) 6%, transparent);
+}
+
+/* A restrained inset accent rail on the failed / running cards. */
+.canvas-commands-log-row[data-status="err"] {
+    box-shadow: inset 3px 0 0 var(--canvas-danger),
+                0 1px 2px color-mix(in srgb, var(--canvas-fg) 5%, transparent);
+}
+
+.canvas-commands-log-row[data-status="run"] {
+    box-shadow: inset 3px 0 0 var(--canvas-accent),
+                0 1px 2px color-mix(in srgb, var(--canvas-fg) 5%, transparent);
+}
+
+/* --- Primary line ------------------------------------------------------ */
+.canvas-commands-log-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.canvas-commands-log-spacer {
+    flex: 1 1 auto;
+    min-width: 8px;
+}
+
+/* Status: a small dot + neutral-weight label in the status color. No pill. */
+.canvas-commands-log-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    min-width: 92px;
+    font-size: var(--canvas-small);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.canvas-commands-log-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+    background: currentColor;
+}
+
+.canvas-commands-log-status-ok {
+    color: light-dark(#1a7f37, #3fb950);
+}
+
+.canvas-commands-log-status-err {
+    color: var(--canvas-danger);
+}
+
+.canvas-commands-log-status-run {
+    color: var(--canvas-accent);
+}
+
+.canvas-commands-log-status-run .canvas-commands-log-dot {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--canvas-accent) 50%, transparent);
+    animation: canvas-commands-log-pulse 1.5s ease-out infinite;
+}
+
+@keyframes canvas-commands-log-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--canvas-accent) 45%, transparent); }
+    70% { box-shadow: 0 0 0 6px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .canvas-commands-log-status-run .canvas-commands-log-dot { animation: none; box-shadow: none; }
+}
+
+/* Kind: a subtle uppercase tag, not a colored badge. */
+.canvas-commands-log-kind {
+    flex: none;
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold, 600);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--canvas-muted);
+    border: 1px solid var(--canvas-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    line-height: 1.5;
+}
+
+.canvas-commands-log-title {
+    min-width: 0;
+    font-weight: var(--font-weight-medium, 500);
+    color: var(--canvas-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.canvas-commands-log-time,
+.canvas-commands-log-ms {
+    flex: none;
+    font-size: var(--canvas-small);
+    color: var(--canvas-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.canvas-commands-log-ms {
+    min-width: 52px;
+    text-align: right;
+}
+
+/* --- Command line: a monospace detail, framed in a subtle inset ------- */
+.canvas-commands-log-cmd {
+    margin: 7px 0 0;
+    margin-left: 102px; /* align under the operation column */
+    padding: 6px 10px;
+    background: var(--canvas-tint);
+    border: 1px solid var(--canvas-divider);
+    border-radius: 6px;
+}
+
+.canvas-commands-log-cmd-text {
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Code", monospace;
+    font-size: var(--canvas-small);
+    line-height: 1.55;
+    color: var(--canvas-fg);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.canvas-commands-log-purpose {
+    margin: 5px 0 0;
+    padding-left: 102px;
+    color: var(--canvas-fg);
+    font-size: var(--canvas-small);
+    overflow-wrap: anywhere;
+}
+
+.canvas-commands-log-note {
+    margin: 6px 0 0;
+    padding-left: 102px;
+    color: var(--canvas-muted);
+    font-size: var(--canvas-small);
+    overflow-wrap: anywhere;
+}
+
+.canvas-commands-log-row[data-status="err"] .canvas-commands-log-note {
+    color: var(--canvas-danger);
+    font-weight: var(--font-weight-medium, 500);
+}
+
+/* Narrow canvases: drop the column indent so long text stays readable. */
+@container (max-width: 380px) {
+    .canvas-commands-log-cmd {
+        margin-left: 0;
+    }
+    .canvas-commands-log-purpose,
+    .canvas-commands-log-note {
+        padding-left: 0;
+    }
+}
