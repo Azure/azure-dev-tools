@@ -1,0 +1,22 @@
+{
+  ".github/plugin/plugin.json": "e0f6c7e616f83c592e03b42e3734e283a3b7a7ca5db6506dd8675a4f2a7cc2c4",
+  "extensions/azure-sre-agent/assets/azure-sre-agent-color.svg": "2b59369cf304fea0810488558af67e9e58ba00b02da034c1bef213ee06968405",
+  "extensions/azure-sre-agent/assets/toolkit/icons/Subscription.svg": "df78239a16fa8b0d2934b317100e337cac2e49f1ea8d83e55ad1abdf8fa6f136",
+  "extensions/azure-sre-agent/assets/toolkit/ui.mjs": "4f55149dcd4d985a170209d21f73e4d5e7c38e5ffef8fb5d744112c43ad75176",
+  "extensions/azure-sre-agent/assets/toolkit/ui/azure-subscription-picker.mjs": "77368c3c8194e2bca50cddeb48f024cdcba56783df01122e6c9e8e664f6303b5",
+  "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.css": "2fded7ab2749e45ca4f943ad424659d15228a8351d8004737cb613f2cdac80d5",
+  "extensions/azure-sre-agent/assets/toolkit/ui/commands-log.mjs": "95a3e628b11e767544ebfdce3f72faaa7132ab00494b86901302f39c53b9c139",
+  "extensions/azure-sre-agent/assets/toolkit/ui/icons.mjs": "022d8dab381e6ba3f52dab3c1d474baf9dbec6d0255a67712a0ad45414c5ec16",
+  "extensions/azure-sre-agent/assets/toolkit/ui/locations.mjs": "7dbfd0514a38046fd510ac48b1939e5b33ea82b725479b2c6c76571606d6dd99",
+  "extensions/azure-sre-agent/assets/toolkit/ui/profiles/coreai-azure.css": "8a06742222fd4dcaa564118f84da9f30a511cd3e5544517e8c69f018fd049252",
+  "extensions/azure-sre-agent/assets/toolkit/ui/styles.css": "61946a4db80bed18d5e9c3ec1177babce6ada8fd91200723a73969afc398d266",
+  "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.css": "4e77be59c416efb283bcd11b26616ff9cedd1275f282e53a8e41d2b534852e5b",
+  "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs": "67898fbb202ffc8d757fe4c9d573c4219eb278c5f96e1b5395453de85dafa3bd",
+  "extensions/azure-sre-agent/extension.mjs": "405c7ba27ec75a640b6b76910ee2f2c48469f3215cedc8e70a46a3ced7c39e6d",
+  "extensions/azure-sre-agent/studio-package.json": "1304e6ca513727fefea732bf4881bca77effd6ed42bedcb3d13ad12ce1b55236",
+  "package.json": "0968aebdb187d5a1c99d273ed39256fefaa26e88834ea1801724749865d90645",
+  "README.md": "d87993e0739941d94bce6aafa2ea06b9fac0ae93ba36ab0f609864ef9096967e",
+  "release.json": "25b9d0e4f3546995dbe28a2c4cbabc5faa584adee63930b985c1020bf62b5067",
+  "skills/azure-sre-agent-canvas/SKILL.md": "5f3036c40e05cd8161f1e98c686af364bf541da978905a471e06878c066dc621",
+  "THIRD_PARTY_NOTICES.txt": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+}
