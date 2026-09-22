@@ -1589,7 +1589,7 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .cmdlog-list { padding: 0 .65rem .65rem; display: grid; gap: .55rem; max-height: 360px; overflow-y: auto; }
   .cmd {
     border: 1px solid var(--line); border-radius: 10px; padding: .6rem .7rem;
-    background: #fff; box-shadow: 0 6px 18px rgba(32,24,64,.04);
+    background: var(--bg); box-shadow: 0 6px 18px rgba(32,24,64,.04);
   }
   .cmd.run { border-color: rgba(107,63,214,.45); box-shadow: 0 0 0 1px rgba(107,63,214,.08); }
   .cmd.err { border-color: rgba(220,38,38,.35); }
@@ -1612,7 +1612,7 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .cmd .cpurpose { font-size: .74rem; color: var(--muted); margin: .4rem 0 0; line-height: 1.45; }
   .cmd .ccmd {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem;
-    color: var(--ink); background: #f1eff8; border: 1px solid #e9e4f7; border-radius: 8px;
+    color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
     padding: .55rem .65rem; margin-top: .45rem; white-space: pre-wrap; word-break: break-word; line-height: 1.5;
   }
 
@@ -1623,7 +1623,7 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   }
   .inv-title span:last-child { color: var(--muted); font-size: .74rem; font-weight: 500; }
   .inv-list { padding: .65rem; display: grid; gap: .55rem; max-height: 320px; overflow-y: auto; }
-  .invocation { border: 1px solid var(--line); border-radius: 10px; padding: .65rem .7rem; background: #fff; }
+  .invocation { border: 1px solid var(--line); border-radius: 10px; padding: .65rem .7rem; background: var(--bg); }
   .invocation.ok { border-left: 3px solid var(--ok); }
   .invocation.bad { border-left: 3px solid var(--bad); }
   .invocation.run { border-left: 3px solid var(--accent); background: rgba(107,63,214,.035); }
@@ -1675,12 +1675,12 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .instr .ibody { background: var(--panel); border: 1px solid var(--line); border-top: none; border-radius: 0 0 12px 12px; padding: .8rem 1rem; }
   .instr pre {
     white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; line-height: 1.55; color: var(--ink);
-    max-height: 180px; overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
+    max-height: 180px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
   }
   .instr textarea {
     width: 100%; min-height: 220px; resize: vertical; white-space: pre-wrap;
     overflow-wrap: anywhere; font: .78rem/1.55 ui-monospace, "SFMono-Regular", Menlo, monospace;
-    color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
+    color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
   }
   .instr .row2 { display: flex; gap: .5rem; margin-top: .6rem; align-items: center; }
 
@@ -1702,7 +1702,7 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .bar { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0 .45rem; align-items: center; }
   .skill-picker { min-width: 180px; max-width: 360px; flex: 1 1 240px; }
   .skill-picker select {
-    width: 100%; background: #fff; color: var(--ink); border: 1px solid var(--line);
+    width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
     border-radius: 8px; padding: 5px 8px; font: inherit; font-size: .74rem;
   }
   .status { min-height: 1.1rem; color: var(--muted); font-size: .78rem; margin: 0 0 1rem; }
@@ -1717,14 +1717,14 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
   .fields { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .5rem 0; }
   .fields label { font-size: .74rem; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
   .fields input[type=number], .fields input[type=text], .fields select {
-    background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: .8rem; width: 90px;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: .8rem; width: 90px;
   }
   .fields input[type=text] { width: 260px; }
   .trigger-test-input { margin: .65rem 0 1rem; }
   .trigger-test-input label { display: block; color: var(--muted); font-size: .74rem; font-weight: 600; }
   .trigger-test-input textarea {
     width: 100%; min-height: 64px; margin-top: .35rem; resize: vertical;
-    background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
     padding: 8px 10px; font: .78rem/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace;
   }
   .trigger-test-input textarea.queue-editor { min-height: 180px; }
@@ -1735,7 +1735,7 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
   .http-request-editor label { color: var(--muted); font-size: .74rem; font-weight: 600; }
   .http-request-editor textarea {
     width: 100%; min-height: 180px; margin-top: .35rem; resize: vertical;
-    background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
     padding: 8px 10px; font: .78rem/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace;
   }
   .http-request-note { grid-column: 1 / -1; margin: 0; }
@@ -1766,7 +1766,7 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
   .model-binding .model-create-resources li { margin-bottom: .25rem; }
   .model-binding .model-create-alt { white-space: normal; overflow-wrap: anywhere; margin-top: .45rem; }
 
-  .doctor-panel { border: 1px solid var(--line); border-radius: 10px; padding: .75rem .9rem; margin: .65rem 0 1rem; background: #fff; }
+  .doctor-panel { border: 1px solid var(--line); border-radius: 10px; padding: .75rem .9rem; margin: .65rem 0 1rem; background: var(--bg); }
   .doctor-panel[hidden] { display: none; }
   .doctor-head { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
   .doctor-head .tag.ok { color: var(--ok); border-color: rgba(15,157,110,.35); }
@@ -1811,7 +1811,7 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
   .local-path-editor { margin-top: .65rem; padding-top: .65rem; border-top: 1px solid var(--line); }
   .local-path-editor label { display: block; color: var(--muted); font-size: .72rem; }
   .local-path-editor input {
-    width: 100%; margin-top: .3rem; background: #fff; color: var(--ink); border: 1px solid var(--line);
+    width: 100%; margin-top: .3rem; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 9px; font: .78rem ui-monospace, "SFMono-Regular", Menlo, monospace;
   }
   .local-path-actions { display: flex; align-items: center; gap: .3rem; margin-top: .5rem; flex-wrap: wrap; }
@@ -1827,11 +1827,11 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
   dialog h3 { margin: 0 0 .45rem; font-size: .95rem; }
   dialog label { display: block; margin-top: .75rem; color: var(--muted); font-size: .75rem; }
   dialog input {
-    width: 100%; margin-top: .3rem; background: #fff; color: var(--ink); border: 1px solid var(--line);
+    width: 100%; margin-top: .3rem; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
     border-radius: 8px; padding: 8px 9px; font: .78rem ui-monospace, "SFMono-Regular", Menlo, monospace;
   }
 
-  .chart { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: .6rem .7rem; }
+  .chart { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: .6rem .7rem; }
   .chart svg { display: block; width: 100%; height: 90px; }
   .stat-row { display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; margin-top: .5rem; font-size: .78rem; color: var(--muted); }
   .stat-row b { color: var(--ink); font-variant-numeric: tabular-nums; }

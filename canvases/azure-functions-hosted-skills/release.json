@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "format": "plugin",
   "name": "azure-functions-hosted-skills",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "plugin": {
     "manifest": ".github/plugin/plugin.json",
     "extension": {
@@ -83,8 +83,8 @@
   },
   "build": {
     "esbuild": "0.25.12",
-    "lockSha256": "43ecdccf083865b5c1bc700edfa2254af198c910f0b24774687b224c38b049ee",
-    "inputSha256": "77b0c90a98ac9ba0170e8983dc1107260a5d27e6b72f4812c29ef26ed940124d"
+    "lockSha256": "82a0693d36cb99239279a86930f3d861bf3c4e2621d6fb23ebe1935c289f7866",
+    "inputSha256": "3ee138d469bf09bdfc50e9efd0098b4c0431e8feebfb5afd55bdcdf5755f1c02"
   },
   "dependencies": [
     {

@@ -5,20 +5,22 @@ existing Azure Function App and invoke a supported deployed function.
 
 ## Install
 
-In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL** and
-paste:
+In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL**.
+
+For the current approved staging build, paste this URL:
 
 `https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
 
-The `latest` tag moves only to approved releases and currently resolves to
-version 0.4.1. To pin the exact reviewed release instead, use:
+The `latest` tag is intentionally movable and currently resolves to version
+0.4.2. To pin the installation to the exact reviewed bytes instead, use:
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-v0-4-1-ce3795b/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
+`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-v0-4-2-f09928d/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
 
-Versioned tags are immutable. Use `latest` to receive approved updates; use the
-versioned URL when a test or report must remain reproducible.
+Versioned tags are immutable. Use `latest` for internal evaluation when you
+want approved staging updates; use the versioned URL when a test or report must
+remain reproducible.
 
-Install the extension, then fully quit and reopen GitHub Copilot. See the
+After installation or upgrade, fully quit and reopen GitHub Copilot. See the
 [Azure Functions Hosted Skills README](https://github.com/Azure/azure-dev-tools/blob/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/README.md)
 for this quickstart and safety guidance.
 
