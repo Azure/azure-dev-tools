@@ -1,0 +1,13 @@
+{
+  "name": "Resource Graph Explorer",
+  "owner": "Microsoft",
+  "sourcePage": "https://learn.microsoft.com/en-us/azure/architecture/icons/",
+  "archiveUrl": "https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip",
+  "archivePath": "Azure_Public_Service_Icons/Icons/management + governance/10318-icon-service-Resource-Graph-Explorer.svg",
+  "archiveSha256": "921594ccd1bf3d9c0a1bd7b6d924e050551a59342f2b353bb74bdcf761c35141",
+  "sha256": "6e9262653086bd4e83184ba6abb2e8b39a29e676107540c1fcfa41b4c8c0db37",
+  "size": 1230,
+  "modifications": "None. The original SVG bytes, geometry and colors are preserved.",
+  "usage": "Product identity in the Microsoft-authored Azure Resources Query canvas, requested by Alex Weininger on 2026-09-21 following the Canvases branding/icons design discussion.",
+  "terms": "Microsoft Azure icon terms apply. This is not an MIT-licensed toolkit asset or a grant of trademark rights. Public distribution remains subject to the repository's artifact-specific release rights approval."
+}

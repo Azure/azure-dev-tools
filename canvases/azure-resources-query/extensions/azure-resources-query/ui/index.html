@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Azure Resources Query</title>
+  <link rel="stylesheet" href="./canvas-ui/styles.css">
+  <link rel="stylesheet" href="./canvas-ui/subscription-picker.css">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./client.js" type="module"></script>
+</head>
+<body class="canvas-ui">
+  <main class="app" id="app">
+    <header class="app-header canvas-header">
+      <div class="heading">
+        <img class="app-mark" src="./assets/Resource-Graph-Explorer.svg" width="24" height="24" alt="" aria-hidden="true">
+        <div class="heading-copy">
+          <h1 id="product-title">Azure Resources Query</h1>
+          <p class="view-title" id="view-title" hidden></p>
+          <span class="state-badge" id="state-badge" hidden>Unsupported view</span>
+        </div>
+      </div>
+      <nav class="header-actions" aria-label="View history">
+        <button class="icon-button" id="back" type="button" title="Previous view" aria-label="Previous view" disabled><span data-canvas-icon="arrow-left"></span></button>
+        <button class="icon-button" id="forward" type="button" title="Next view" aria-label="Next view" disabled><span data-canvas-icon="arrow-right"></span></button>
+      </nav>
+    </header>
+
+    <div class="scope-bar">
+      <button id="scope-toggle" type="button" disabled>Choose subscriptions</button>
+    </div>
+
+    <div id="scope-status"></div>
+    <details class="query-controls" id="auth-controls">
+      <summary>Azure connection</summary>
+      <p class="muted small" id="auth-status">Loading CLI profile…</p>
+      <p class="muted small">Reload reads local metadata. Refresh from Azure may update the shared CLI profile. Neither reruns your query.</p>
+      <div>
+        <button class="secondary-button" id="auth-reload" type="button" disabled>Reload CLI profile</button>
+        <button class="secondary-button" id="auth-refresh" type="button" disabled>Refresh from Azure</button>
+        <button class="secondary-button" id="auth-disconnect" type="button" disabled>Disconnect browser</button>
+      </div>
+      <p><label>Tenant (optional) <input id="auth-tenant" type="text" maxlength="36" autocomplete="off" placeholder="Tenant ID"></label></p>
+      <p><label>Sign-in flow <select id="auth-flow"><option value="default">Browser / broker</option><option value="device-code">Device code</option></select></label></p>
+      <button class="secondary-button" id="auth-connect" type="button" disabled>Sign in</button>
+      <button class="secondary-button" id="auth-cancel" type="button" hidden>Cancel connection operation</button>
+      <pre id="auth-progress" role="status" hidden></pre>
+    </details>
+    <p class="message warning" id="auth-warnings" role="status" hidden></p>
+
+    <div class="ask-bar">
+      <input class="nl-input" id="nl-query" type="text" maxlength="400" autocomplete="off" placeholder="Describe the resources you want — Copilot writes the query…" aria-label="Describe the resources you want" disabled>
+      <button class="primary-button" id="nl-generate" type="button" disabled>Generate query</button>
+    </div>
+    <section class="proposed-query" id="proposed-query" aria-labelledby="proposed-query-heading" hidden>
+      <div class="section-heading"><h2 id="proposed-query-heading">Proposed query</h2><span class="muted small" id="proposed-note"></span></div>
+      <pre id="proposed-content" tabindex="0" aria-label="Proposed KQL"></pre>
+      <div class="proposed-actions">
+        <button class="primary-button" id="run-proposed" type="button">Run query</button>
+        <button class="text-button" id="dismiss-proposed" type="button">Dismiss</button>
+      </div>
+    </section>
+
+    <div class="message error" id="operation-error" role="alert" hidden><span id="operation-error-text"></span><button class="text-button" id="dismiss-error" type="button" aria-label="Dismiss operation error">Dismiss</button></div>
+    <div class="message warning" id="inventory-error" role="alert" hidden></div>
+    <button class="secondary-button retry-query" id="retry-query" type="button" hidden>Retry request</button>
+    <div class="message quiet" id="notice" role="status" hidden></div>
+    <div class="connection-status" id="connection-status" role="status" hidden></div>
+
+    <div class="workspace" id="workspace">
+      <section class="results-panel" id="results-panel" aria-label="Resource results">
+        <details class="query-controls" id="query-controls">
+          <summary>Query details</summary>
+          <section class="executed-query" id="executed-query" aria-labelledby="executed-query-heading" hidden>
+            <div class="section-heading"><h2 id="executed-query-heading">Executed query</h2><button class="text-button" id="copy-query" type="button">Copy executed query</button></div>
+            <p class="muted small">Exact KQL used for the displayed results.</p>
+            <pre id="executed-query-content" tabindex="0" aria-label="Executed KQL"></pre>
+          </section>
+        </details>
+
+        <div class="results-bar">
+          <div class="results-heading">
+            <div><h2 id="results-count">Resources</h2><p class="truth-label" id="truth-label">Resources visible to this account</p></div>
+            <span id="loading-status" class="loading-status" role="status" hidden>Updating…</span>
+          </div>
+          <div class="results-tools">
+            <button class="secondary-button" id="refresh" type="button" title="Rerun query" aria-label="Rerun query" disabled><span data-canvas-icon="refresh" aria-hidden="true"></span>Rerun query</button>
+            <label class="select-all"><input id="select-loaded" type="checkbox" disabled><span>Select loaded rows</span></label>
+          </div>
+        </div>
+        <div class="pagination-warning" id="pagination-warning" role="status" hidden></div>
+        <div class="resource-scroll" id="resource-scroll" tabindex="0" aria-label="Resource list">
+          <div id="resource-list" class="resource-list canvas-list" aria-busy="true">
+            <div class="empty-state"><span class="empty-mark" data-canvas-icon="resources" aria-hidden="true"></span><h3>Connecting to your resource browser</h3><p>Loading the saved view and available accounts…</p></div>
+          </div>
+          <div class="paging" id="paging" hidden><span class="muted small" id="page-note"></span><button class="secondary-button" id="load-more" type="button" hidden>Load more</button></div>
+        </div>
+        <div class="freshness" id="freshness">Waiting for state…</div>
+      </section>
+
+      <aside class="details-panel" id="details-panel" aria-labelledby="detail-name" hidden>
+        <div class="detail-nav"><button class="text-button" id="close-details" type="button"><span data-canvas-icon="arrow-left"></span>Back to results</button><span class="muted small">Resource details</span></div>
+        <div class="detail-scroll" id="detail-scroll">
+          <div class="detail-heading"><span id="detail-icon" class="resource-icon"></span><div><h2 id="detail-name" tabindex="-1">Resource</h2><p class="muted small" id="detail-type"></p></div></div>
+          <p class="detail-id" id="detail-id"></p>
+          <div class="detail-actions"><button class="secondary-button" id="copy-id" type="button">Copy ID</button><a class="secondary-button" id="detail-portal" target="_blank" rel="noopener noreferrer" hidden>Open in portal<span data-canvas-icon="external-link"></span></a></div>
+          <div class="message quiet" id="details-loading" role="status" hidden>Fetching resource details…</div>
+          <div class="message error" id="details-error" role="alert" hidden></div>
+          <button class="text-button" id="retry-details" type="button" hidden>Retry details</button>
+          <div id="detail-body"></div>
+          <p class="muted small detail-source" id="detail-source"></p>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="selection-toolbar" id="selection-toolbar" hidden>
+      <div class="selection-copy"><strong id="selection-count">0 selected</strong><span id="selection-outside" class="muted small"></span></div>
+      <button class="text-button" id="clear-selection" type="button">Clear</button>
+      <button class="primary-button" id="handoff" type="button">Add to chat</button>
+    </footer>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <div class="sr-only" id="live-summary" aria-live="polite" aria-atomic="true"></div>
+  </main>
+</body>
+</html>
