@@ -154,9 +154,3 @@ creating, changing, or running scheduled tasks.
 - Do not install a second provider to work around stale registration. Disable
   retired or duplicate registrations, reinstall the canonical extension, and
   restart GitHub Copilot.
-
-## Learn more
-
-- [Using Azure SRE Agent](../../docs/azure-sre-agent-usage.md)
-- [Execution authorization safety contract](../../docs/sre-execution-action-contract.md)
-- [Delegated connector safety and limitations](../../docs/sre-agent-private-connectors.md)
