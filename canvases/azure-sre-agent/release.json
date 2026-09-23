@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "format": "plugin",
   "name": "azure-sre-agent",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "plugin": {
     "manifest": ".github/plugin/plugin.json",
     "extension": {
@@ -38,6 +38,7 @@
     "extensions/azure-sre-agent/assets/toolkit/ui/styles.css",
     "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.css",
     "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs",
     "extensions/azure-sre-agent/extension.mjs",
     "extensions/azure-sre-agent/studio-package.json",
     "package.json",
@@ -51,8 +52,8 @@
   },
   "build": {
     "esbuild": "0.25.12",
-    "lockSha256": "a4007028ab2ec87da70dcc497a85d6ee401a0b26ffe07cc8bc55bd85e1595b2a",
-    "inputSha256": "b6100ac8ee5c109dcc8044cb9e04816f5a00a8f1ebd73a8bdf2b19b2c371e804"
+    "lockSha256": "e32598bb615fc6ff531aa86c3a5139c6b2ff1d23ef5144409ec8a316f05fc02d",
+    "inputSha256": "dcdf052c1eef9e68067a3810435d7c3d429a4747f8c74c912bd42a2ee0c893a6"
   },
   "dependencies": [
     {
@@ -68,7 +69,7 @@
     {
       "name": "@microsoft/canvas-toolkit",
       "version": "0.1.0",
-      "license": null
+      "license": "MIT"
     }
   ],
   "modules": [
@@ -94,6 +95,10 @@
     },
     {
       "file": "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs",
       "platform": "browser"
     },
     {
@@ -150,6 +155,11 @@
     {
       "file": "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
       "route": "canvas-ui/subscription-picker.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs",
+      "route": "canvas-ui/telemetry.mjs",
       "mime": "text/javascript; charset=utf-8"
     }
   ]

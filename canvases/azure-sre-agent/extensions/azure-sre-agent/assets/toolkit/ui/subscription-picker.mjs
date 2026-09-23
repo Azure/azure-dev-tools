@@ -35,6 +35,7 @@ function createSubscriptionPicker({
   ids.add(id);
   const ownsTrigger = !trigger;
   trigger ??= document.createElement("button");
+  if (ownsTrigger) trigger.setAttribute("data-metric-id", "subscription-picker-open");
   const originalChildren = [...trigger.childNodes];
   const originalAttributes = new Map(
     ["type", "aria-haspopup", "aria-controls", "aria-expanded", "aria-label", "title", "disabled"].map((name) => [name, trigger.getAttribute(name)])
@@ -75,6 +76,7 @@ function createSubscriptionPicker({
   }
   function button(suffix, text, style = "secondary") {
     const node = identified("button", suffix, text);
+    node.setAttribute("data-metric-id", `subscription-picker-${suffix}`);
     node.classList.add(`${prefix}-button`, `${prefix}-${style}`);
     node.type = "button";
     return node;
@@ -145,6 +147,7 @@ function createSubscriptionPicker({
   const selection = identified("div", "selection");
   const searchBox = element("div", "search-box");
   const search = identified("input", "search");
+  search.setAttribute("data-metric-id", "subscription-picker-search");
   search.type = "search";
   search.placeholder = "Search by name or ID...";
   search.autocomplete = "off";
@@ -267,6 +270,7 @@ function createSubscriptionPicker({
   function subscriptionRow(item) {
     const row = element("label", "option");
     const input = element("input", "input");
+    input.setAttribute("data-metric-id", "subscription-picker-item");
     const rowId = stableId(itemIds, item.key, "item");
     input.id = rowId;
     input.type = selectionMode === "single" ? "radio" : "checkbox";

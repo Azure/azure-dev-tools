@@ -642,12 +642,12 @@ function createAzureCliSession(runJson, { metadataTtlMs = 5 * 60 * 1e3, now = ()
         force
       );
     },
-    accessToken(subscription, resource, force = false) {
+    accessToken(subscription, resource, force = false, options = {}) {
       const key = `token:${subscription || "default"}:${resource}`;
       return cached(
         key,
         (token) => Math.max(now(), tokenExpiryMs(token) - 5 * 60 * 1e3),
-        () => runJson(["account", "get-access-token", "--resource", resource, "-o", "json"], subscription),
+        () => runJson(["account", "get-access-token", "--resource", resource, "-o", "json"], subscription, options),
         force
       );
     },
@@ -800,6 +800,30 @@ var azureSreAgentAssets = new Map([
   ...canvasUiAssets,
   ["assets/azure-sre-agent-color.svg", [new URL("./assets/azure-sre-agent-color.svg", import.meta.url), "image/svg+xml"]]
 ]);
+var EXTERNAL_AGENT_ROUTES = /* @__PURE__ */ new Set([
+  "/init",
+  "/select-subscription",
+  "/select-app-subscription",
+  "/select-agent",
+  "/refresh-agents",
+  "/open-shared-agent",
+  "/check-config-drift",
+  "/create-thread",
+  "/open-thread",
+  "/focus-thread",
+  "/unfocus-thread",
+  "/send-message",
+  "/investigate"
+]);
+var EXTERNAL_AGENT_ACTIONS = /* @__PURE__ */ new Set([
+  "list_agents",
+  "select_agent",
+  "get_thread",
+  "focus_thread",
+  "unfocus_thread",
+  "ask_agent",
+  "investigate"
+]);
 var AZURE_SRE_AGENT_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
@@ -810,28 +834,7 @@ var AZURE_SRE_AGENT_CSP = [
   "object-src 'none'",
   "font-src 'none'"
 ].join("; ");
-var WRITES_ENABLED = process.env.ALLOW_WRITES === "true";
-var PRIVATE_CONNECTORS_ENABLED = WRITES_ENABLED && process.env.ALLOW_PRIVATE_CONNECTORS === "true";
-var MUTATING_HTTP_ROUTES = /* @__PURE__ */ new Set([
-  "/create-thread",
-  "/send-message",
-  "/investigate",
-  "/grant-execution",
-  "/cancel-execution",
-  "/grant-durable-role",
-  "/create-incident",
-  "/diagnose-app",
-  "/correlate-ticket",
-  "/create-scheduled-task",
-  "/pause-scheduled-task",
-  "/resume-scheduled-task",
-  "/add-memory",
-  "/create-delegated-kusto-mcp",
-  "/confirm-delegated-kusto-consent",
-  "/attach-connector-namespace-mcp",
-  "/detach-connector",
-  "/generate-workflow"
-]);
+var PRIVATE_CONNECTORS_ENABLED = process.env.ALLOW_PRIVATE_CONNECTORS === "true";
 var PRIVATE_CONNECTOR_HTTP_ROUTES = /* @__PURE__ */ new Set([
   "/create-delegated-kusto-mcp",
   "/confirm-delegated-kusto-consent",
@@ -968,6 +971,44 @@ function parseSharedAgentReference(value) {
   }
   return { subscription, resourceGroup, name, id };
 }
+function parseExternalAgentReference(value) {
+  const input = String(value || "").trim();
+  let url;
+  try {
+    url = new URL(input);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+    throw new Error("External agent URLs must use HTTPS without credentials or a custom port.");
+  }
+  if (url.hostname.toLowerCase() === "sre.azure.com" && /^\/externalagents\//i.test(url.pathname)) {
+    const match = url.pathname.match(/^\/externalagents\/([^/]+)\/?$/i);
+    if (!match || url.searchParams.getAll("agentUrl").length !== 1) {
+      throw new Error("The external-agent portal link must contain one agentUrl and an agent name.");
+    }
+    let name;
+    try {
+      name = decodeURIComponent(match[1]);
+    } catch {
+      throw new Error("The external-agent portal link has an invalid agent name.");
+    }
+    const endpoint = parseExternalAgentReference(url.searchParams.get("agentUrl"));
+    if (!endpoint || !name.trim()) throw new Error("The external-agent portal link has an invalid agentUrl or name.");
+    return { ...endpoint, name: name.trim(), portalUrl: url.href };
+  }
+  if (!url.hostname.toLowerCase().endsWith(".azuresre.ai")) {
+    return null;
+  }
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Use the external agent's base HTTPS endpoint without a path, query, or fragment.");
+  }
+  return {
+    endpoint: url.origin,
+    name: url.hostname.split(".")[0].split("--")[0],
+    portalUrl: ""
+  };
+}
 async function graphQuery(query, subscription, entry, meta) {
   const args = ["graph", "query", "-q", query, "-o", "json"];
   if (subscription) args.push("--subscriptions", subscription);
@@ -993,6 +1034,7 @@ var APP_RESOURCE_TYPES = [
   "microsoft.devtestlab/labs",
   "microsoft.labservices/labs"
 ];
+var APP_RESOURCE_GRAPH_QUERY = `Resources | where type in~ (${APP_RESOURCE_TYPES.map((type) => `'${type}'`).join(",")}) or type contains 'sandbox' | project name, id, type, location, resourceGroup, kind | order by name asc`;
 function appResourceKind(row) {
   const type = String(row.type || "").toLowerCase();
   const kind = String(row.kind || "").split(",")[0];
@@ -1003,12 +1045,7 @@ function appResourceKind(row) {
   return kind || type.split("/").pop() || "resource";
 }
 async function listAppResources(subscription, entry) {
-  const types = APP_RESOURCE_TYPES.map((t) => `'${t}'`).join(",");
-  const query = `Resources
-| where type in~ (${types}) or type contains 'sandbox'
-| project name, id, type, location, resourceGroup, kind
-| order by name asc`;
-  const rows = await graphQuery(query, subscription, entry, { title: "graph query (apps)", purpose: "List App Service, Function App, Container App, AKS, and sandbox resources for the diagnose picker." });
+  const rows = await graphQuery(APP_RESOURCE_GRAPH_QUERY, subscription, entry, { title: "graph query (apps)", purpose: "List App Service, Function App, Container App, AKS, and sandbox resources for the diagnose picker." });
   return rows.map((r) => ({
     name: r.name,
     id: r.id,
@@ -1636,14 +1673,19 @@ async function dataPlaneFetch(agent, subscription, method, urlPath, body, entry,
   try {
     res = await fetch(url, {
       method,
+      redirect: agent.external ? "manual" : "follow",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json"
       },
-      body: body ? JSON.stringify(body) : void 0
+      body: body ? JSON.stringify(body) : void 0,
+      signal: agent.external ? AbortSignal.timeout(2e4) : void 0
     });
   } catch (err) {
     cmdEnd(entry, cmd, { ok: false, note: shortError(err) });
+    if (agent.external && err?.name === "TimeoutError") {
+      throw new Error("The external agent did not respond within 20 seconds. Check endpoint access or registration propagation and retry.");
+    }
     throw err;
   }
   const text = await res.text();
@@ -1656,7 +1698,8 @@ async function dataPlaneFetch(agent, subscription, method, urlPath, body, entry,
   if (!res.ok) {
     const message = shortError(new Error(parsed?.message || parsed?.error || text || `HTTP ${res.status}`));
     cmdEnd(entry, cmd, { ok: false, note: `HTTP ${res.status}: ${message}` });
-    throw new Error(`${method} ${urlPath} failed (${res.status}): ${message}`);
+    const accessHint = agent.external && (res.status === 401 || res.status === 403) ? " Verify that this Entra user can open the registered external agent in Portal; access changes may take about 15 minutes to propagate." : "";
+    throw new Error(`${method} ${urlPath} failed (${res.status}): ${message}${accessHint}`);
   }
   cmdEnd(entry, cmd, { ok: true, note: `HTTP ${res.status}` });
   return parsed;
@@ -1695,9 +1738,41 @@ async function currentIdentity(entry) {
   }
   return cachedIdentity;
 }
-async function listThreads(agent, subscription, entry) {
-  const data = await dataPlaneFetch(agent, subscription, "GET", "/api/v1/threads", void 0, entry, { title: "list threads" });
-  return sortThreadsByRecency(data?.value || data || []);
+var EXTERNAL_THREAD_PAGE_SIZE = 25;
+function projectExternalThreadSummary(thread) {
+  const summary = projectThread(thread);
+  if (!summary?.id) throw new Error("The external agent returned a thread without an id.");
+  const messagePreview = (message) => {
+    const projected = projectMessage(message, { textLimit: 240 });
+    return projected ? { text: projected.text, timeStamp: projected.timeStamp } : void 0;
+  };
+  return {
+    id: summary.id,
+    title: typeof summary.title === "string" ? summary.title.slice(0, 240) : "",
+    createdTimestamp: summary.createdTimestamp,
+    modifiedTimestamp: summary.modifiedTimestamp,
+    startMessage: messagePreview(thread.startMessage),
+    lastMessage: messagePreview(thread.lastMessage),
+    status: typeof thread.status === "string" ? thread.status : {
+      incidentStatus: { status: summary.incidentStatus },
+      actionsStatus: {
+        hasCriticalActions: summary.hasCriticalActions,
+        hasWarningActions: summary.hasWarningActions
+      }
+    }
+  };
+}
+async function listThreads(agent, subscription, entry, { fetchImpl = dataPlaneFetch } = {}) {
+  const path2 = agent.external ? `/api/v1/threads?top=${EXTERNAL_THREAD_PAGE_SIZE}&orderby=modifiedTimestamp%20desc` : "/api/v1/threads";
+  const data = await fetchImpl(agent, subscription, "GET", path2, void 0, entry, { title: "list threads" });
+  if (agent.external && !Array.isArray(data?.value) && !Array.isArray(data)) {
+    throw new Error("The external agent did not return a valid thread list.");
+  }
+  const threads = data?.value || data || [];
+  if (agent.external && threads.length > EXTERNAL_THREAD_PAGE_SIZE) {
+    throw new Error("The external agent ignored the bounded thread-list request.");
+  }
+  return sortThreadsByRecency(agent.external ? threads.map(projectExternalThreadSummary) : threads);
 }
 async function listNeedsAttention(agent, subscription, entry) {
   const data = await dataPlaneFetch(agent, subscription, "GET", "/api/v1/threads/needsAttention", void 0, entry, { title: "list threads waiting on you" });
@@ -1715,13 +1790,20 @@ async function getThreadMessages(agent, subscription, threadId2, entry) {
   );
   return messages?.value || messages || [];
 }
-async function getThread(agent, subscription, threadId2, entry) {
+async function getThread(agent, subscription, threadId2, entry, {
+  fetchImpl = dataPlaneFetch,
+  getMessagesImpl = getThreadMessages
+} = {}) {
   const [thread, messages] = await Promise.all([
-    dataPlaneFetch(agent, subscription, "GET", `/api/v1/threads/${encodeURIComponent(threadId2)}`, void 0, entry, { title: "get thread" }),
-    getThreadMessages(agent, subscription, threadId2, entry)
+    fetchImpl(agent, subscription, "GET", `/api/v1/threads/${encodeURIComponent(threadId2)}`, void 0, entry, { title: "get thread" }),
+    getMessagesImpl(agent, subscription, threadId2, entry)
   ]);
   if (!thread?.id) throw new Error(`Thread "${threadId2}" was not found.`);
-  return { ...thread, messages };
+  if (agent.external && !Array.isArray(messages)) {
+    throw new Error(`The external agent did not return valid messages for thread "${threadId2}".`);
+  }
+  const detail = { ...thread, messages };
+  return agent.external ? projectThreadDetail(detail) : detail;
 }
 function findExecutionInThread2(thread, kind, executionId) {
   return findExecutionInThread(thread, {
@@ -1877,6 +1959,14 @@ ${description || ""}`.trim();
 async function listScheduledTasks(agent, subscription, entry) {
   const data = await dataPlaneFetch(agent, subscription, "GET", "/api/v1/scheduledtasks", void 0, entry, { title: "list scheduled tasks" });
   return data?.value || data || [];
+}
+async function loadOptionalScheduledTasks(load) {
+  try {
+    return { tasks: await load(), accessError: "" };
+  } catch (error) {
+    if (!/^GET \/api\/v1\/scheduledtasks failed \(403\):.*Access denied by PDP/i.test(shortError(error))) throw error;
+    return { tasks: [], accessError: "Scheduled tasks unavailable: access denied by PDP (403)." };
+  }
 }
 async function createScheduledTask(agent, subscription, { name, cronExpression, message, description }, entry) {
   return dataPlaneFetch(agent, subscription, "POST", "/api/v1/scheduledtasks", {
@@ -2119,12 +2209,15 @@ function loadStickyState() {
       return {
         subscription: typeof parsed.subscription === "string" ? parsed.subscription : "",
         agentName: typeof parsed.agentName === "string" ? parsed.agentName : "",
-        agentResourceGroup: typeof parsed.agentResourceGroup === "string" ? parsed.agentResourceGroup : ""
+        agentResourceGroup: typeof parsed.agentResourceGroup === "string" ? parsed.agentResourceGroup : "",
+        externalAgentUrl: typeof parsed.externalAgentUrl === "string" ? parsed.externalAgentUrl : "",
+        externalAgentName: typeof parsed.externalAgentName === "string" ? parsed.externalAgentName : "",
+        externalPortalUrl: typeof parsed.externalPortalUrl === "string" ? parsed.externalPortalUrl : ""
       };
     } catch {
     }
   }
-  return { subscription: "", agentName: "", agentResourceGroup: "" };
+  return { subscription: "", agentName: "", agentResourceGroup: "", externalAgentUrl: "", externalAgentName: "", externalPortalUrl: "" };
 }
 function saveStickyState(state) {
   try {
@@ -2137,7 +2230,10 @@ function rememberSelection(entry) {
   saveStickyState({
     subscription: entry.subscription || "",
     agentName: entry.agent?.name || "",
-    agentResourceGroup: entry.agent?.resourceGroup || ""
+    agentResourceGroup: entry.agent?.resourceGroup || "",
+    externalAgentUrl: entry.agent?.external ? entry.agent.endpoint : "",
+    externalAgentName: entry.agent?.external ? entry.agent.name : "",
+    externalPortalUrl: entry.agent?.external ? entry.agent.portalUrl || "" : ""
   });
 }
 function ensureEntry(instanceId) {
@@ -2157,6 +2253,8 @@ function ensureEntry(instanceId) {
       agent: null,
       pendingAgentName: sticky.agentName,
       pendingAgentResourceGroup: sticky.agentResourceGroup,
+      pendingExternalAgentUrl: sticky.externalPortalUrl || sticky.externalAgentUrl,
+      pendingExternalAgentName: sticky.externalAgentName,
       appResources: [],
       connectors: [],
       connectorGateways: [],
@@ -2171,6 +2269,7 @@ function ensureEntry(instanceId) {
       needsAttention: [],
       executionGates: null,
       scheduledTasks: [],
+      scheduledTasksError: "",
       memoryResults: [],
       commands: [],
       configDrift: null,
@@ -2206,6 +2305,7 @@ function snapshot(entry) {
     needsAttention: entry.needsAttention,
     executionGates: entry.executionGates,
     scheduledTasks: entry.scheduledTasks,
+    scheduledTasksError: entry.scheduledTasksError,
     memoryResults: entry.memoryResults,
     commands: entry.commands,
     configDrift: entry.configDrift,
@@ -2339,9 +2439,10 @@ async function loadAgentsForSub(entry, { resetAgent = false, listAgentsImpl = li
     return true;
   }
   if (generation !== entry.selectionGeneration || subscription !== entry.subscription) return false;
-  entry.agents = agents;
+  const currentExternal = !resetAgent && entry.agent?.external ? entry.agent : null;
+  entry.agents = currentExternal ? [...agents, currentExternal] : agents;
   const wantedName = resetAgent ? "" : entry.agent?.name || entry.pendingAgentName || "";
-  const stillPresent = wantedName && agents.find((a) => a.name === wantedName);
+  const stillPresent = wantedName && entry.agents.find((a) => a.name === wantedName);
   if (resetAgent || !stillPresent) {
     entry.agent = null;
     entry.connectors = [];
@@ -2353,14 +2454,28 @@ async function loadAgentsForSub(entry, { resetAgent = false, listAgentsImpl = li
     entry.needsAttention = [];
     entry.executionGates = null;
     entry.scheduledTasks = [];
+    entry.scheduledTasksError = "";
   }
-  entry.status = entry.agents.length ? `Found ${entry.agents.length} SRE Agent(s). Select one to continue.` : "No SRE Agent resources found in this subscription.";
+  entry.status = currentExternal ? `Connected to external agent ${currentExternal.name}. Showing up to ${EXTERNAL_THREAD_PAGE_SIZE} recent threads; older threads are in Portal. ARM-managed features are unavailable.` : entry.agents.length ? `Found ${entry.agents.length} SRE Agent(s). Select one to continue.` : "No SRE Agent resources found in this subscription.";
   if (stillPresent && !resetAgent && (!entry.agent || entry.agent.name !== wantedName)) {
     await selectAgent(entry, stillPresent, { generation, subscription });
   }
   entry.pendingAgentName = "";
   entry.pendingAgentResourceGroup = "";
   return true;
+}
+async function listAgentsForSelection(entry, requestedSubscription, {
+  initSubscriptionsImpl = initSubscriptions,
+  loadAgentsImpl = loadAgentsForSub,
+  saveStickyStateImpl = saveStickyState
+} = {}) {
+  const changed = Boolean(requestedSubscription && requestedSubscription !== entry.subscription);
+  if (requestedSubscription) entry.subscription = requestedSubscription;
+  if (!entry.subscription) await initSubscriptionsImpl(entry);
+  const loaded = await loadAgentsImpl(entry, { resetAgent: changed });
+  if (changed && loaded) {
+    saveStickyStateImpl({ subscription: requestedSubscription, agentName: "", agentResourceGroup: "" });
+  }
 }
 async function loadAppsForSub(entry, subscription = entry.appSubscription || entry.subscription) {
   const generation = ++entry.appGeneration;
@@ -2376,13 +2491,19 @@ async function selectAgent(entry, agentRow, options = {}) {
   const activeThreadAtStart = entry.activeThread;
   const selectedAgent = options.resolvedAgent || await getAgent(agentRow.resourceGroup, agentRow.name, subscription, entry);
   dataPlaneEndpoint(selectedAgent);
+  if (selectedAgent.external) {
+    const account = options.account || await runAz(["account", "show", "-o", "json"]);
+    if (String(account?.user?.type || "").toLowerCase() !== "user") {
+      throw new Error("External SRE Agents require an az login with a delegated Entra user identity.");
+    }
+  }
   if (generation !== entry.selectionGeneration || subscription !== entry.subscription) return false;
-  const [connectors, threads, incidents, needsAttention, scheduledTasks] = await Promise.all([
+  const [connectors, threads, incidents, needsAttention, scheduledTasksResult] = selectedAgent.external ? [[], await (options.listThreadsImpl || listThreads)(selectedAgent, subscription, entry), [], [], { tasks: [], accessError: "" }] : await Promise.all([
     listConnectors(selectedAgent, subscription, entry),
     listThreads(selectedAgent, subscription, entry),
     listActiveIncidents(selectedAgent, subscription, entry),
     listNeedsAttention(selectedAgent, subscription, entry),
-    listScheduledTasks(selectedAgent, subscription, entry)
+    loadOptionalScheduledTasks(() => listScheduledTasks(selectedAgent, subscription, entry))
   ]);
   if (generation !== entry.selectionGeneration || subscription !== entry.subscription) return false;
   const changingAgent = isAgentContextSwitch(entry.agent, selectedAgent);
@@ -2393,7 +2514,7 @@ async function selectAgent(entry, agentRow, options = {}) {
   };
   await activateDefaultThread(
     hydrated,
-    (threadId2) => getThread(selectedAgent, subscription, threadId2, entry)
+    (threadId2) => (options.getThreadImpl || getThread)(selectedAgent, subscription, threadId2, entry)
   );
   if (generation !== entry.selectionGeneration || subscription !== entry.subscription) return false;
   entry.agent = selectedAgent;
@@ -2408,16 +2529,47 @@ async function selectAgent(entry, agentRow, options = {}) {
   entry.incidents = incidents;
   entry.needsAttention = needsAttention;
   entry.executionGates = null;
-  entry.scheduledTasks = scheduledTasks;
-  entry.status = `Connected to ${entry.agent.name}.`;
-  rememberSelection(entry);
+  entry.scheduledTasks = scheduledTasksResult.tasks;
+  entry.scheduledTasksError = scheduledTasksResult.accessError;
+  entry.status = selectedAgent.external ? `Connected to external agent ${entry.agent.name}. Showing up to ${EXTERNAL_THREAD_PAGE_SIZE} recent threads; older threads are in Portal. ARM-managed features are unavailable.` : `Connected to ${entry.agent.name}.`;
+  (options.rememberSelectionImpl || rememberSelection)(entry);
   return true;
 }
 async function openSharedAgentReference(entry, value, dependencies = {}) {
-  const parsed = parseSharedAgentReference(value);
   const getAgentImpl = dependencies.getAgent || getAgent;
   const selectAgentImpl = dependencies.selectAgent || selectAgent;
   const saveStickyStateImpl = dependencies.saveStickyState || saveStickyState;
+  const external = parseExternalAgentReference(value);
+  if (external) {
+    const agent2 = {
+      id: external.endpoint,
+      name: dependencies.externalName || external.name,
+      resourceGroup: "External agent",
+      endpoint: external.endpoint,
+      portalUrl: external.portalUrl,
+      external: true
+    };
+    const connected = await selectAgentImpl(entry, agent2, { subscription: entry.subscription, resolvedAgent: agent2 });
+    if (connected === false) return null;
+    entry.agents = [
+      ...entry.agents.filter((candidate) => candidate.id !== agent2.id),
+      agent2
+    ];
+    entry.pendingExternalAgentUrl = "";
+    entry.pendingExternalAgentName = "";
+    saveStickyStateImpl({
+      subscription: entry.subscription,
+      agentName: agent2.name,
+      agentResourceGroup: "",
+      externalAgentUrl: agent2.endpoint,
+      externalAgentName: agent2.name,
+      externalPortalUrl: agent2.portalUrl
+    });
+    entry.status = `Connected to external agent ${agent2.name}. Showing up to ${EXTERNAL_THREAD_PAGE_SIZE} recent threads; older threads are in Portal. ARM-managed features are unavailable.`;
+    entry.error = "";
+    return agent2;
+  }
+  const parsed = parseSharedAgentReference(value);
   const selectedAgent = await getAgentImpl(parsed.resourceGroup, parsed.name, parsed.subscription, entry);
   const agent = {
     ...selectedAgent,
@@ -2526,9 +2678,6 @@ data: ${JSON.stringify(snapshot(entry))}
     return;
   }
   const body = await readJsonBody(req);
-  if (MUTATING_HTTP_ROUTES.has(url.pathname) && !WRITES_ENABLED) {
-    throw new Error("This operation is unavailable in read-only mode. Restart with ALLOW_WRITES=true only after explicit approval.");
-  }
   if (PRIVATE_CONNECTOR_HTTP_ROUTES.has(url.pathname) && !PRIVATE_CONNECTORS_ENABLED) {
     throw new Error("Private connector mutations are disabled for staging because verified per-invocation user and thread ownership is not available.");
   }
@@ -2537,6 +2686,11 @@ data: ${JSON.stringify(snapshot(entry))}
       await initSubscriptions(entry);
       if (entry.subscription) await loadAgentsForSub(entry);
       if (entry.appSubscription) await loadAppsForSub(entry);
+      if (entry.pendingExternalAgentUrl) {
+        const externalUrl = entry.pendingExternalAgentUrl;
+        const externalName = entry.pendingExternalAgentName;
+        await openSharedAgentReference(entry, externalUrl, { externalName });
+      }
     }),
     "/select-subscription": async () => withBusy(entry, "Loading SRE Agents...", async () => {
       const previousSubscription = entry.subscription;
@@ -2566,11 +2720,12 @@ data: ${JSON.stringify(snapshot(entry))}
       entry.threads = upsertThread(entry.threads, result2);
       return result2;
     }),
-    "/open-thread": async () => withBusy(entry, "Loading thread...", async () => {
+    "/open-thread": async () => withBusy(entry, body.poll ? "" : "Loading thread...", async () => {
       const thread = await getThread(entry.agent, entry.subscription, body.threadId, entry);
       const activeId = threadId(entry.activeThread);
       if (!body.poll || !activeId || activeId === body.threadId) entry.activeThread = thread;
       entry.threads = upsertThread(entry.threads, thread);
+      if (!body.poll) entry.status = `Loaded thread "${thread.title || body.threadId}".`;
       return thread;
     }),
     "/focus-thread": async () => withBusy(entry, "Focusing thread...", async () => {
@@ -2671,6 +2826,7 @@ data: ${JSON.stringify(snapshot(entry))}
     "/correlate-ticket": async () => withBusy(entry, "Correlating ticket...", async () => correlateTicket(entry, body)),
     "/list-scheduled-tasks": async () => withBusy(entry, "Loading scheduled tasks...", async () => {
       entry.scheduledTasks = await listScheduledTasks(entry.agent, entry.subscription, entry);
+      entry.scheduledTasksError = "";
     }),
     "/create-scheduled-task": async () => withBusy(entry, "Creating scheduled task...", async () => {
       const result2 = await createScheduledTask(entry.agent, entry.subscription, body, entry);
@@ -2752,6 +2908,11 @@ data: ${JSON.stringify(snapshot(entry))}
     res.writeHead(404).end();
     return;
   }
+  if (entry.agent?.external && !EXTERNAL_AGENT_ROUTES.has(url.pathname)) {
+    entry.error = "This operation requires an ARM-managed SRE Agent. External agents support conversation threads only.";
+    broadcast(entry, "state", snapshot(entry));
+    throw new Error(entry.error);
+  }
   const result = await handler();
   responseJson(res, { ok: true, result });
 }
@@ -2773,6 +2934,10 @@ function readJsonBody(req) {
 async function ensureAgentSelected(entry) {
   if (entry.agent) return;
   const sticky = loadStickyState();
+  if (sticky.externalAgentUrl) {
+    await openSharedAgentReference(entry, sticky.externalAgentUrl, { externalName: sticky.externalAgentName });
+    return;
+  }
   if (!sticky.agentName) throw new Error("Select an SRE Agent first.");
   if (sticky.subscription && sticky.subscription !== entry.subscription) {
     entry.subscription = sticky.subscription;
@@ -2840,10 +3005,7 @@ var canvas = createCanvas({
       inputSchema: { type: "object", properties: { subscription: { type: "string" } } },
       async handler({ input, instanceId }) {
         const entry = ensureEntry(instanceId);
-        const changed = Boolean(input?.subscription && input.subscription !== entry.subscription);
-        if (input?.subscription) entry.subscription = input.subscription;
-        if (!entry.subscription) await initSubscriptions(entry);
-        await loadAgentsForSub(entry, { resetAgent: changed });
+        await listAgentsForSelection(entry, input?.subscription);
         broadcast(entry, "state", snapshot(entry));
         return { ok: true, agents: entry.agents, subscription: entry.subscription };
       }
@@ -2858,7 +3020,7 @@ var canvas = createCanvas({
         if (!row) return { ok: false, message: `Agent not found: ${input?.name}. Call list_agents first.` };
         await selectAgent(entry, row);
         broadcast(entry, "state", snapshot(entry));
-        return { ok: true, agent: entry.agent };
+        return { ok: true, agent: entry.agent, scheduledTasksError: entry.scheduledTasksError };
       }
     },
     {
@@ -3080,6 +3242,7 @@ var canvas = createCanvas({
         const entry = ensureEntry(instanceId);
         if (!entry.agent) return { ok: false, message: "Select an SRE Agent first." };
         entry.scheduledTasks = await listScheduledTasks(entry.agent, entry.subscription, entry);
+        entry.scheduledTasksError = "";
         broadcast(entry, "state", snapshot(entry));
         return { ok: true, scheduledTasks: entry.scheduledTasks };
       }
@@ -3143,9 +3306,12 @@ var canvas = createCanvas({
         return { ok: true, result };
       }
     }
-  ].filter((action) => WRITES_ENABLED || !action.mutates).map((action) => ({
+  ].map((action) => ({
     ...action,
     async handler(args) {
+      if (ensureEntry(args.instanceId).agent?.external && !EXTERNAL_AGENT_ACTIONS.has(action.name)) {
+        throw new Error("This action requires an ARM-managed SRE Agent. External agents support conversation threads only.");
+      }
       const result = await action.handler(args);
       return appendFocusContract(ensureEntry(args.instanceId), result);
     }
@@ -3268,6 +3434,11 @@ function renderHtml() {
   .row-main span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-item:hover { border-color: var(--accent2); }
   .row-item.active { border-color: var(--accent); background: rgba(107,63,214,.08); }
+  .thread-master .row-item { min-width: 0; padding: .42rem .5rem; border: 0; border-radius: 5px; align-items: center; overflow: hidden; white-space: nowrap; }
+  .thread-master .row-item:hover { background: rgba(107,63,214,.06); }
+  .thread-master .row-item.active { border-left: 3px solid var(--accent); padding-left: calc(.5rem - 3px); }
+  .thread-master .thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-master .thread-status { flex: none; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .68rem; }
   .tag { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
   .focus-badge { font: inherit; font-size: .68rem; color: #fff; background: var(--accent); border: 0; border-radius: 999px; padding: 2px 8px; cursor: pointer; }
   .status { font-size: .78rem; color: var(--muted); min-height: 1.2em; }
@@ -3282,6 +3453,8 @@ function renderHtml() {
   ${COMMAND_CSS}
   details.cmdlog { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: .8rem 1rem; margin-bottom: 1rem; }
   details.cmdlog summary { cursor: pointer; font-size: .82rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #azure-config-card .config-connection { display: inline-block; max-width: calc(100% - 190px); margin-left: .6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; color: var(--ink); font-weight: 400; text-transform: none; letter-spacing: normal; }
+  #azure-config-card[open] .config-connection { display: none; }
   .cmd-list { display: flex; flex-direction: column; gap: .4rem; max-height: 260px; overflow-y: auto; margin-top: .6rem; }
   .cmd-row { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; background: #fff; font-size: .76rem; }
   .cmd-row .cmd-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem; }
@@ -3306,6 +3479,9 @@ function renderHtml() {
   .chat-log { background: #fbfaff; border: 1px solid var(--line); border-radius: 8px; padding: .8rem; max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: .6rem; }
   .threads-layout { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.7fr); gap: 1rem; align-items: start; }
   .thread-master { min-width: 0; }
+  .thread-master > summary { cursor: pointer; color: var(--muted); font-size: .82rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .thread-master > .head-actions { margin: .7rem 0; }
+  .threads-layout:has(.thread-master:not([open])) { grid-template-columns: minmax(110px, 150px) minmax(0, 1fr); }
   .thread-master .row-list { max-height: min(58vh, 520px); }
   .thread-detail { min-width: 0; outline: none; }
   .thread-detail:focus-visible { outline: 2px solid var(--color-focus-outline, var(--accent)); outline-offset: 4px; border-radius: 8px; }
@@ -3314,6 +3490,7 @@ function renderHtml() {
   @media (max-width: 760px) {
     body { padding: 1rem; }
     .threads-layout { grid-template-columns: 1fr; }
+    .threads-layout:has(.thread-master:not([open])) { grid-template-columns: 1fr; }
     .thread-master .row-list { max-height: 240px; }
   }
   @media (forced-colors: active) {
@@ -3361,23 +3538,25 @@ function renderHtml() {
 <body class="${COREAI_AZURE_VISUAL_PROFILE.className}">
   <h1 class="product-heading"><img class="product-mark" src="./assets/azure-sre-agent-color.svg" alt="" aria-hidden="true"><span class="product-title">Azure SRE Agent</span><a class="doc" href="${DOC_URL}" target="_blank" rel="noreferrer">docs &#8599;</a></h1>
   <p class="sub">Discover Azure SRE Agents, investigate failing apps, correlate ICM/S360 tickets, and manage incidents, scheduled tasks, connectors, and memories.</p>
-  <p class="hint"><strong>${WRITES_ENABLED ? "Write mode enabled." : "Read-only mode."}</strong> ${WRITES_ENABLED ? "Mutating operations require an explicit user action." : "Mutating actions are not registered and panel write requests are rejected unless ALLOW_WRITES=true."}</p>
   <div id="status" class="status"></div>
+  <div id="scheduled-tasks-access" class="status err" role="alert" hidden></div>
 
   <details class="cmdlog canvas-accordion-plain" id="azure-config-card" open style="margin-bottom:1rem">
-    <summary>Azure Configuration</summary>
+    <summary>Azure Configuration <span id="config-connection" class="config-connection" role="status" aria-live="polite">No agent connected</span></summary>
     <div class="panel" style="margin-top:8px">
       <h2 style="font-size:.85rem">Subscription &amp; agent</h2>
       <select id="sub-select" aria-label="Azure subscription"></select>
       <div class="agent-picker">
-        <button type="button" id="agent-select" class="agent-picker-trigger" aria-haspopup="listbox" aria-expanded="false">No SRE Agents found</button>
+        <button type="button" id="agent-select" class="agent-picker-trigger" aria-haspopup="listbox" aria-expanded="false" aria-describedby="agent-discovery-hint">Select a subscription above</button>
         <div id="agent-options" class="agent-options" role="listbox" aria-label="SRE Agents" hidden></div>
       </div>
+      <p class="hint" id="agent-discovery-hint" role="status" aria-live="polite" hidden></p>
       <button class="btn ghost" id="refresh-agents">Refresh agents</button>
-      <label class="field-label" for="shared-agent-reference">Open a shared agent</label>
-      <p class="hint">If discovery is unavailable with resource-scoped access, paste the agent's Azure resource ID or sre.azure.com URL.</p>
-      <input id="shared-agent-reference" type="text" autocomplete="off" spellcheck="false" placeholder="/subscriptions/.../providers/Microsoft.App/agents/..." />
-      <button class="btn ghost" id="open-shared-agent">Open shared agent</button>
+      <label class="field-label" for="shared-agent-reference">Open an agent by URL or resource ID</label>
+      <p class="hint">Paste a shared agent's ARM ID, an sre.azure.com agent or external-agent link, or the external agent's https://*.azuresre.ai endpoint.</p>
+      <input id="shared-agent-reference" type="text" autocomplete="off" spellcheck="false" placeholder="https://agent--id.region.azuresre.ai" />
+      <button class="btn ghost" id="open-shared-agent">Connect to agent</button>
+      <button class="btn ghost" id="open-external-portal">Open external link in Portal &#8599;</button>
       <div id="agent-summary"></div>
       <div id="config-drift-result"></div>
     </div>
@@ -3398,16 +3577,14 @@ function renderHtml() {
 
     <div class="tabpage active" id="threads-page" role="tabpanel" data-page="threads">
       <div class="threads-layout">
-        <aside class="thread-master" aria-label="Thread navigation">
-          <div class="panel-head">
-            <h2>Threads</h2>
-            <div class="head-actions">
-              <button class="btn ghost mini" id="new-thread"${WRITES_ENABLED ? "" : " disabled"}>New Thread</button>
-              <button class="btn ghost mini" id="search-threads">&#128269; Search Threads</button>
-            </div>
+        <details class="thread-master" id="threads-card" aria-label="Thread navigation" open>
+          <summary>Threads</summary>
+          <div class="head-actions">
+            <button class="btn ghost mini" id="new-thread">New Thread</button>
+            <button class="btn ghost mini" id="search-threads">&#128269; Search Threads</button>
           </div>
           <div id="thread-list" class="row-list" role="listbox" aria-label="Threads"></div>
-        </aside>
+        </details>
         <section id="thread-detail" class="panel thread-detail" aria-label="Active thread" tabindex="-1">
           <div class="panel-head">
             <h2>Active thread</h2>
@@ -3416,7 +3593,7 @@ function renderHtml() {
           <div id="thread-log" class="chat-log" aria-live="polite">No thread selected.</div>
           <textarea id="reply-msg" aria-label="Thread message" placeholder="Ask the SRE Agent for a diagnosis or reply to the selected thread..."></textarea>
           <div class="row-actions">
-            <button type="button" class="btn" id="send-reply"${WRITES_ENABLED ? "" : " disabled"}>Send</button>
+            <button type="button" class="btn" id="send-reply">Send</button>
             <button type="button" class="btn ghost" id="focus-thread" hidden>Focus this thread</button>
             <button class="btn ghost" id="open-in-portal">Open in Portal &#8599;</button>
           </div>
@@ -3432,7 +3609,7 @@ function renderHtml() {
           <select id="app-resource-select"></select>
           <input id="app-resource" placeholder="Or enter a resource ID / name" />
           <textarea id="app-note" placeholder="Optional: symptoms, error messages, recent changes"></textarea>
-          <button class="btn" id="diagnose-app"${WRITES_ENABLED ? "" : " disabled"}>Diagnose with SRE Agent</button>
+          <button class="btn" id="diagnose-app">Diagnose with SRE Agent</button>
           <button class="btn ghost" id="check-config-drift">Check workspace &lt;-&gt; Azure config</button>
         </div>
       </div>
@@ -3455,7 +3632,7 @@ function renderHtml() {
           <input id="kusto-cluster-url" placeholder="Or enter cluster URL, e.g. https://help.kusto.windows.net" />
           <input id="kusto-database" placeholder="Or enter database name" />
           <button class="btn" id="create-delegated-kusto-mcp"${PRIVATE_CONNECTORS_ENABLED ? "" : " disabled"}>Configure Kusto DB &amp; attach</button>
-          <p class="hint" style="margin-top:.6rem"><strong>Staging safety gate:</strong> delegated connector creation, attachment, consent completion, and detachment are disabled unless both <code>ALLOW_WRITES=true</code> and <code>ALLOW_PRIVATE_CONNECTORS=true</code>. The SRE runtime does not yet provide signed per-invocation user and thread ownership proof, so this surface is not generally available.</p>
+          <p class="hint" style="margin-top:.6rem"><strong>Staging safety gate:</strong> delegated connector creation, attachment, consent completion, and detachment are disabled unless <code>ALLOW_PRIVATE_CONNECTORS=true</code>. The SRE runtime does not yet provide signed per-invocation user and thread ownership proof, so this surface is not generally available.</p>
         </div>
       </div>
 
@@ -3471,7 +3648,7 @@ function renderHtml() {
           </select>
           <textarea id="incident-desc" placeholder="Description (ICM/S360 reference, symptoms, etc.)"></textarea>
           <input id="incident-services" placeholder="Affected services (comma separated)" />
-          <button class="btn" id="create-incident"${WRITES_ENABLED ? "" : " disabled"}>Create incident</button>
+          <button class="btn" id="create-incident">Create incident</button>
         </div>
         <div class="panel">
           <h2>Active incidents</h2>
@@ -3548,6 +3725,7 @@ function renderHtml() {
     });
   }
   function activateTab(name) {
+    if (document.querySelector('.tab[data-tab="' + name + '"]')?.disabled) return;
     document.querySelectorAll('.tab[data-tab]').forEach(function (t) {
       var selected = t.dataset.tab === name;
       t.classList.toggle('active', selected);
@@ -3652,6 +3830,9 @@ function renderHtml() {
     state = s;
     setStatus(s.status, Boolean(s.error));
     if (s.error) setStatus(s.error, true);
+    var scheduledTasksAccess = document.getElementById('scheduled-tasks-access');
+    scheduledTasksAccess.textContent = s.scheduledTasksError || '';
+    scheduledTasksAccess.hidden = !s.scheduledTasksError;
     // Guard the whole render body: if any one section throws on an unexpected
     // message/thread shape, we must still reach scheduleThreadPoll() below or
     // the poll loop silently dies and the active thread pane looks "stuck"
@@ -3666,6 +3847,14 @@ function renderHtml() {
     }
   }
   function renderBody(s) {
+    var external = Boolean(s.agent && s.agent.external);
+    document.querySelectorAll('.tab[data-tab]').forEach(function (tab) {
+      var unsupported = external && tab.dataset.tab !== 'threads' && tab.dataset.tab !== 'apps';
+      tab.disabled = unsupported;
+      tab.setAttribute('aria-disabled', String(unsupported));
+      tab.title = unsupported ? 'External agents support conversation threads only.' : '';
+    });
+    if (external && document.querySelector('.tab.active[data-tab]')?.disabled) activateTab('threads');
 
     var subSelect = document.getElementById('sub-select');
     subSelect.innerHTML = (s.subscriptions || []).map(function (sub) {
@@ -3677,9 +3866,18 @@ function renderHtml() {
     var agentSelect = document.getElementById('agent-select');
     agentSelect.textContent = selectedAgent
       ? selectedAgent.name + ' (' + selectedAgent.resourceGroup + ')'
-      : (agents.length ? 'Select an SRE Agent' : 'No SRE Agents found');
+      : (agents.length ? 'Select an SRE Agent' : (s.subscription ? 'No agents in selected subscription' : 'Select a subscription above'));
     agentSelect.disabled = !agents.length;
     agentSelect.dataset.value = selectedAgent ? selectedAgent.name : '';
+    if (agents.length) agentSelect.removeAttribute('aria-describedby');
+    else agentSelect.setAttribute('aria-describedby', 'agent-discovery-hint');
+    var agentHint = document.getElementById('agent-discovery-hint');
+    var selectedSub = (s.subscriptions || []).find(function (sub) { return sub.id === s.subscription; });
+    agentHint.textContent = s.subscription
+      ? 'No SRE Agents in ' + (selectedSub ? selectedSub.name + ' (' + s.subscription + ')' : s.subscription) +
+        '. Choose another subscription above or open a shared agent.'
+      : 'Select a subscription above to discover SRE Agents.';
+    agentHint.hidden = agents.length > 0;
     document.getElementById('agent-options').innerHTML = agents.map(function (a) {
       var selected = selectedAgent && selectedAgent.name === a.name;
       return '<button type="button" class="agent-option" role="option" data-agent-name="' + escapeHtml(a.name) +
@@ -3715,8 +3913,9 @@ function renderHtml() {
     var activeThread = displayedActiveThread(s, draftThread);
     renderRowList(document.getElementById('thread-list'), displayedThreads, function (t) {
       var status = threadStatusLabel(t);
-      return '<span>' + escapeHtml(threadLabel(t)) + '</span>' +
-        (status ? '<span class="tag">' + escapeHtml(status) + '</span>' : '');
+      var label = escapeHtml(threadLabel(t));
+      return '<span class="thread-title" title="' + label + '">' + label + '</span>' +
+        (status ? '<span class="thread-status" title="' + escapeHtml(status) + '">' + escapeHtml(status) + '</span>' : '');
     }, function (t) { openThread(t.id || t.threadId); }, activeThread && (activeThread.id || activeThread.threadId));
 
     var log = document.getElementById('thread-log');
@@ -3745,17 +3944,25 @@ function renderHtml() {
   function renderAgentSummary(s) {
     var summary = document.getElementById('agent-summary');
     if (!summary) return;
+    var connection = document.getElementById('config-connection');
+    var connectionText = !s.agent ? 'No agent connected'
+      : s.agent.external
+        ? [s.agent.name, s.agent.endpoint].filter(Boolean).join(' \xB7 ')
+        : [s.agent.name, s.agent.resourceGroup].filter(Boolean).join(' \xB7 ') || s.agent.id || 'Agent details unavailable';
+    if (connection.textContent !== connectionText) connection.textContent = connectionText;
+    connection.title = s.agent && !s.agent.external ? s.agent.id || connectionText : connectionText;
     if (!s.agent) {
       summary.innerHTML = '<div class="hint">Select an SRE Agent to see connection details.</div>';
       return;
     }
-    var items = [
-      ['Endpoint', s.agent.endpoint || 'unknown'],
-      ['Resource group', s.agent.resourceGroup || 'unknown'],
-      ['Provisioning', s.agent.provisioningState || 'unknown'],
-      ['Connectors', String((s.connectors || []).length)],
-      ['Subscription', s.subscription || 'unknown'],
-    ];
+    var items = s.agent.external
+      ? [['Connection', 'External agent (conversation threads only)'], ['Endpoint', s.agent.endpoint || 'unknown'],
+        ['Portal', s.agent.portalUrl ? 'Registered external-agent link available' : 'Paste a portal link to open in Portal']]
+      : [['Endpoint', s.agent.endpoint || 'unknown'],
+        ['Resource group', s.agent.resourceGroup || 'unknown'],
+        ['Provisioning', s.agent.provisioningState || 'unknown'],
+        ['Connectors', String((s.connectors || []).length)],
+        ['Subscription', s.subscription || 'unknown']];
     summary.innerHTML = '<div class="connection-grid">' + items.map(function (item) {
       return '<div class="connection-item"><span>' + item[0] + '</span><strong title="' + escapeHtml(item[1]) + '">' + escapeHtml(item[1]) + '</strong></div>';
     }).join('') + '</div>';
@@ -4043,9 +4250,9 @@ function renderHtml() {
         (scopes ? ' If you grant permissions, the command will be re-executed using your credentials (OBO) with scope: <b>' + escapeHtml(scopes) + '</b>.' : ' Grant permissions to re-run this command using your own credentials (OBO).') +
         '</div>' +
         '<div class="tool-auth-actions">' +
-          (${WRITES_ENABLED ? "true" : "false"} ? '<button class="btn grant-exec" data-kind="' + field.key + '" data-thread="' + escapeHtml(threadId || '') + '" data-exec="' + escapeHtml(exec.id || '') + '" data-command="' + encodeURIComponent(String(exec.command || '')) + '">Grant permissions (this run)</button>' : '') +
-          (${WRITES_ENABLED ? "true" : "false"} ? '<button class="btn grant-role" data-kind="' + field.key + '" data-thread="' + escapeHtml(threadId || '') + '" data-exec="' + escapeHtml(exec.id || '') + '" title="Create a real RBAC role assignment for the agent&#39;s own identity, so it stops needing OBO for this resource.">Grant durable access &#8635;</button>' : '') +
-          (${WRITES_ENABLED ? "true" : "false"} ? '<button class="btn ghost cancel-exec" data-kind="' + field.key + '" data-thread="' + escapeHtml(threadId || '') + '" data-exec="' + escapeHtml(exec.id || '') + '" data-command="' + encodeURIComponent(String(exec.command || '')) + '">Cancel</button>' : '') +
+          '<button class="btn grant-exec" data-kind="' + field.key + '" data-thread="' + escapeHtml(threadId || '') + '" data-exec="' + escapeHtml(exec.id || '') + '" data-command="' + encodeURIComponent(String(exec.command || '')) + '">Grant permissions (this run)</button>' +
+          '<button class="btn grant-role" data-kind="' + field.key + '" data-thread="' + escapeHtml(threadId || '') + '" data-exec="' + escapeHtml(exec.id || '') + '" title="Create a real RBAC role assignment for the agent&#39;s own identity, so it stops needing OBO for this resource.">Grant durable access &#8635;</button>' +
+          '<button class="btn ghost cancel-exec" data-kind="' + field.key + '" data-thread="' + escapeHtml(threadId || '') + '" data-exec="' + escapeHtml(exec.id || '') + '" data-command="' + encodeURIComponent(String(exec.command || '')) + '">Cancel</button>' +
         '</div>'
       ) : '') +
       (exec.output ? '<div class="tool-output">' + escapeHtml(truncateTranscriptText(exec.output, MAX_TOOL_OUTPUT_CHARS)) + '</div>' : '') +
@@ -4183,7 +4390,8 @@ function renderHtml() {
     var threadId = thread.id || thread.threadId || '';
     var allMessages = thread.messages || thread.value || [];
     var messages = boundedTranscriptMessages(thread);
-    var hiddenCount = Math.max(0, allMessages.length - messages.length);
+    var totalMessages = thread.totalMessages || allMessages.length;
+    var hiddenCount = Math.max(0, totalMessages - messages.length);
     var showTyping = threadIsAwaitingAgent(thread);
     if (!messages.length) {
       el.innerHTML = (thread.startMessage ? renderChatMessage(thread.startMessage, threadId) : '<div class="status">No messages yet.</div>') +
@@ -4191,7 +4399,7 @@ function renderHtml() {
       el.scrollTop = el.scrollHeight;
       return;
     }
-    el.innerHTML = (hiddenCount ? '<div class="transcript-notice"><span>Showing the latest ' + messages.length + ' of ' + allMessages.length + ' messages.</span><button class="btn ghost mini portal-full-transcript">Open full transcript in Portal &#8599;</button></div>' : '') + messages.map(function (m) {
+    el.innerHTML = (hiddenCount ? '<div class="transcript-notice"><span>Showing the latest ' + messages.length + ' of ' + totalMessages + ' messages.</span><button class="btn ghost mini portal-full-transcript">Open full transcript in Portal &#8599;</button></div>' : '') + messages.map(function (m) {
       try {
         return renderChatMessage(m, threadId);
       } catch (err) {
@@ -4315,7 +4523,7 @@ function renderHtml() {
   });
   function openSharedAgent() {
     var reference = document.getElementById('shared-agent-reference').value.trim();
-    if (!reference) { setStatus('Enter the shared SRE Agent resource ID or sre.azure.com URL.', true); return; }
+    if (!reference) { setStatus('Enter an SRE Agent resource ID, portal link, or external agent endpoint.', true); return; }
     postJson('/open-shared-agent', { reference: reference });
   }
   document.getElementById('open-shared-agent').addEventListener('click', openSharedAgent);
@@ -4323,6 +4531,26 @@ function renderHtml() {
     if (event.key !== 'Enter') return;
     event.preventDefault();
     openSharedAgent();
+  });
+  document.getElementById('open-external-portal').addEventListener('click', function () {
+    var input = document.getElementById('shared-agent-reference').value.trim();
+    try {
+      var portal = new URL(input);
+      var urls = portal.searchParams.getAll('agentUrl');
+      if (portal.protocol !== 'https:' || portal.host !== 'sre.azure.com' ||
+          !/^\\/externalagents\\/[^/]+\\/?$/i.test(portal.pathname) || urls.length !== 1) {
+        throw new Error('Paste a registered sre.azure.com/externalagents/ portal link to open it in Portal.');
+      }
+      var endpoint = new URL(urls[0]);
+      if (endpoint.protocol !== 'https:' || !endpoint.hostname.endsWith('.azuresre.ai') ||
+          endpoint.username || endpoint.password || endpoint.port ||
+          endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
+        throw new Error('The portal link must contain a valid external agent endpoint.');
+      }
+      window.open(portal.href, '_blank', 'noopener');
+    } catch (error) {
+      setStatus(error.message, true);
+    }
   });
 
   document.getElementById('app-sub-select').addEventListener('change', function (e) {
@@ -4469,7 +4697,16 @@ function renderHtml() {
     openThread(state.focusedThreadId);
   });
   function openSelectedThreadInPortal() {
-    if (!state.agent || !state.subscription) { setStatus('Select an SRE Agent first.', true); return; }
+    if (!state.agent) { setStatus('Select an SRE Agent first.', true); return; }
+    if (state.agent.external) {
+      if (!state.agent.portalUrl) {
+        setStatus('Paste the registered external-agent portal link to open it in Portal.', true);
+        return;
+      }
+      window.open(state.agent.portalUrl, '_blank', 'noopener');
+      return;
+    }
+    if (!state.subscription) { setStatus('Select a subscription first.', true); return; }
     var activeThread = displayedActiveThread(state, draftThread);
     var activeId = activeThread && !activeThread.draft ? threadId(activeThread) : '';
     var url = 'https://sre.azure.com/agents/subscriptions/' + encodeURIComponent(state.subscription) +
@@ -4510,6 +4747,7 @@ function renderHtml() {
 </html>`;
 }
 export {
+  APP_RESOURCE_GRAPH_QUERY,
   AZURE_SRE_AGENT_CSP,
   activateDefaultThread,
   appendFocusContract,
@@ -4520,11 +4758,17 @@ export {
   clearThreadContext,
   connectorNameOwnedBy,
   connectorOwnerKey,
+  getThread,
   isAgentContextSwitch,
   isNoQueryableSubscriptionsError,
+  listAgentsForSelection,
+  listThreads,
   loadAgentsForSub,
+  loadOptionalScheduledTasks,
   openSharedAgentReference,
+  parseExternalAgentReference,
   parseSharedAgentReference,
   renderHtml,
+  selectAgent,
   waitForNewAgentReplies
 };
