@@ -11,10 +11,11 @@ paste this URL:
 
 `https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent`
 
-The `latest` tag is intentionally movable and currently resolves to version
-0.2.1. To pin the installation to the exact reviewed bytes instead, use:
+After the approved 0.2.2 staging release, the `latest` tag will resolve to
+version 0.2.2. To pin the installation to the exact reviewed bytes instead,
+use the source-qualified versioned URL:
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-v0-2-1-8aa2a9bc/canvases/azure-sre-agent/extensions/azure-sre-agent`
+`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-v0-2-2-e872d7a1/canvases/azure-sre-agent/extensions/azure-sre-agent`
 
 Versioned tags are immutable. Use `latest` for internal evaluation when you
 want approved staging updates; use the versioned URL when a test or report must
@@ -45,7 +46,9 @@ Open SRE Agent Canvas
 - Access to an Azure subscription containing an existing Azure SRE Agent.
 - Permission to view and use that SRE Agent.
 
-Azure SRE Agent does not create the Azure SRE Agent resource.
+Azure SRE Agent does not create the Azure SRE Agent resource. Discovery is
+scoped to the selected subscription and to resources visible to your signed-in
+Azure CLI identity.
 
 ## Quickstart
 
@@ -80,7 +83,13 @@ Investigate why the Function App checkout-api started returning 503 responses af
 Keep the symptom and resource name specific. The canvas adds the selected
 resource and available Azure context when it starts the investigation.
 
-## Continue an investigation
+## Find and continue an investigation
+
+For external agents, **Threads** shows up to 25 latest conversations; the
+owned-agent thread listing is unchanged. Expand the compact **Threads** section
+to choose a thread; collapse it when you need more space. After selection,
+collapse **Azure Configuration** to a connection summary. These controls do
+not change your Azure access.
 
 Select an existing thread, enter a follow-up in **Active thread**, and select
 **Send**.
@@ -97,17 +106,33 @@ Focus mode makes the focused thread the default destination for operational
 follow-ups. It does not redirect every chat message: questions that can be
 answered from already-loaded canvas data may still be answered locally.
 
+## External agents and scheduled tasks
+
+Registered external agents may expose a portal link and conversation threads
+through validated `*.azuresre.ai` endpoints. Conversation requests use the
+signed-in Azure CLI user's identity; a portal link is not a grant of access or
+proof that every external-agent operation is supported. ARM-only actions are
+not available for external agents.
+
+Scheduled-task access is partial and depends on the selected agent and your
+permissions. Do not assume that discovering an agent or viewing a task permits
+creating, changing, or running scheduled tasks.
+
 ## Safety
 
 - The extension uses your Azure CLI identity and never signs in for you.
-- The extension defaults to read-only operation. Actions that change Azure or
-  SRE Agent state require explicit write enablement or host confirmation.
+- Native read and write actions are registered in the GitHub canvas. Mutations
+  require an explicit panel action or host confirmation.
 - Starting or continuing an investigation writes messages to an SRE Agent
-  thread; review the requested action before approving it.
+  thread; review the action before selecting it or confirming it with the host.
+- Access to agents, threads, and scheduled tasks depends on the signed-in
+  user's permissions; subscription discovery or a registered external-agent
+  portal link does not expand them.
 - One-time execution authorization and durable Azure role assignment are
   separate operations. Neither should be inferred or combined automatically.
-- Delegated Azure Data Explorer connector setup is preview functionality.
-  Connector mutations require additional gating.
+- Delegated Azure Data Explorer connector setup is preview functionality and
+  separately requires `ALLOW_PRIVATE_CONNECTORS=true`; connector mutations
+  require additional gating.
 - The current delegated connector path must not be treated as private for
   production or multi-user use until the runtime can enforce verified,
   per-invocation user and thread ownership.
@@ -121,8 +146,11 @@ answered from already-loaded canvas data may still be answered locally.
 - If subscriptions or agents are absent, run `az account show`, verify the
   selected subscription and your agent permissions, then refresh the canvas.
 - Resource Graph may not enumerate a subscription when you have access only to
-  one agent. Use **Open a shared agent** and paste its Azure resource ID or
-  `sre.azure.com` portal URL.
+  one agent. Use **Open an agent by URL or resource ID**, enter its Azure
+  resource ID or `sre.azure.com` portal URL, and select **Connect to agent**.
+- An external-agent portal link does not guarantee thread access: confirm
+  that the endpoint is an accepted `*.azuresre.ai` host and that your Azure
+  CLI user has permission to access its conversation threads.
 - Do not install a second provider to work around stale registration. Disable
   retired or duplicate registrations, reinstall the canonical extension, and
   restart GitHub Copilot.
