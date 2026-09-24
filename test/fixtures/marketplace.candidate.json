@@ -1,0 +1,38 @@
+{
+  "name": "azure-dev-tools-fixture",
+  "owner": {
+    "name": "Azure"
+  },
+  "plugins": [
+    {
+      "name": "azure-sre-agent",
+      "version": "0.2.3",
+      "source": {
+        "source": "github",
+        "repo": "Azure/azure-dev-tools",
+        "sha": "af40b92f86d215845f78d6008f85a0eeb2bb6297",
+        "path": "canvases/azure-sre-agent"
+      }
+    },
+    {
+      "name": "azure-functions-hosted-skills",
+      "version": "0.5.0",
+      "source": {
+        "source": "github",
+        "repo": "Azure/azure-dev-tools",
+        "sha": "9fd0b64a8c9097fccbf0d74fc23181b5324af814",
+        "path": "canvases/azure-functions-hosted-skills"
+      }
+    },
+    {
+      "name": "azure-resources-query",
+      "version": "0.1.0",
+      "source": {
+        "source": "github",
+        "repo": "Azure/azure-dev-tools",
+        "sha": "ebb43d1b1920ef3db647542e17f2ef9a7a4e933c",
+        "path": "canvases/azure-resources-query"
+      }
+    }
+  ]
+}

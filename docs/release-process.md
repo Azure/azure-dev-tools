@@ -20,6 +20,11 @@ even when the change is described as a rebuild or correction. The source SHA in
 the immutable tag records the reviewed source revision; it does not permit the
 same version to be reused for different output.
 
+When one approved public PR contains multiple independently reviewed products,
+their distinct source-qualified immutable version tags may all point to that
+same PR's merge commit. Verify each product's source revision, version, and
+package bytes separately; do not create the tags before the PR merges.
+
 Release order:
 
 1. Start with content cleared for public distribution in this repository.
