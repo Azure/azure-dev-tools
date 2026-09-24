@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>__CANVAS_NAME__</title>
+    <link rel="stylesheet" href="./app.css">
+    <script type="module" src="./app.js"></script>
+</head>
+<body class="canvas-ui">
+    <main>
+        <h1>Azure resource groups</h1>
+        <p id="source" class="source">Loading source...</p>
+        <p>A small canvas built from the authoring plugin and toolkit. No automatic login or resource query.</p>
+        <div class="controls">
+            <button id="profile" class="secondary-button" disabled>Load profile</button>
+            <button id="scope" class="secondary-button" disabled>Select subscription</button>
+            <button id="list" class="primary-button" disabled>List resource groups</button>
+            <button id="cancel" class="secondary-button" disabled>Cancel</button>
+        </div>
+        <p id="selection">No subscription selected.</p>
+        <p id="status" role="status">Not loaded</p>
+        <p id="error" role="alert" hidden></p>
+        <ul id="rows" aria-label="Resource groups"></ul>
+        <p id="connection" role="status">Connecting...</p>
+        <p id="build" class="note">Build loading...</p>
+        <p class="note">Read-only. Maximum 200 rows / 10 pages. Scope and results belong to this panel and reset when it closes or the provider restarts.</p>
+    </main>
+</body>
+</html>

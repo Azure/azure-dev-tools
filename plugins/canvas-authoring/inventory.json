@@ -1,0 +1,33 @@
+{
+  "plugin": "plugins/canvas-authoring",
+  "version": "0.1.0",
+  "sha256": "ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da",
+  "files": {
+    "README.md": "599e9b2e912cbcddb292b6f448c37fb3584b70dbe707b04085a69648b3b89afa",
+    "plugin.json": "e1b6922d92c9760de4afe6606d0abe2a78e579325348a09c3a97b0be009c8af4",
+    "skills/create-canvas-app/SKILL.md": "18f308efc70199eaf41fb6f52b85e5b5ceb21c790d91effa0c88f94dfb82d872",
+    "skills/create-canvas-app/references/toolkit.md": "b5824155c9558d115a16a503de581cc001194f8414057292ab5cc04e14792ea0",
+    "skills/create-canvas-app/references/toolkit/LICENSE": "d25deed12d803f6c973597348627b1939e2d19bbc28fda83c93ea0cde44702da",
+    "skills/create-canvas-app/references/toolkit/README.md": "f51a3c75c5a092757d99bd479e77c122e1343c14424e10cacae926e236ba45ab",
+    "skills/create-canvas-app/references/toolkit/auth.md": "d33a60ee92d725c10b4c3b7c958b5b58ed999eb7084da630c333145f8544ae04",
+    "skills/create-canvas-app/references/toolkit/examples/README.md": "70d8d6683e31c01ce8538d339f676901ac1332710dc19ff8afbfa443b0ae399b",
+    "skills/create-canvas-app/references/toolkit/examples/custom-fetch-client.mjs": "18ea90a17fb7d39104f343b3a53079dfed536bdd9a6dafc71321de5158be61bb",
+    "skills/create-canvas-app/references/toolkit/examples/resource-groups.mjs": "3d81ea6de1551da83f008251f204e06e736e9655aed450765b4f416a834d1eb8",
+    "skills/create-canvas-app/references/toolkit/examples/run-read-only.mjs": "5809596d28119f393975235a44b5784d95a82354eb56d84c2adcbba0f2ab34ce",
+    "skills/create-canvas-app/references/toolkit/examples/sdk-client.mjs": "e9adf9797984f6b23f2f7b0807898a551f2ca5ab122f5f644033e705e2efa1cc",
+    "skills/create-canvas-app/references/toolkit/provenance.json": "f66a79d5e46e8a472505c45365ceb0782861cd9371649d7ac0c12049244d7174",
+    "skills/create-canvas-app/references/toolkit/quickstart.md": "d3065afc604b25762100051476d28b06b53a4b28acdda5b41869fc12eb2d6b0e",
+    "skills/create-canvas-app/scripts/setup-toolkit.mjs": "721004c52d2ce05d5da548d98dbc581da2198840b4e481deed3b0ddad21aad8d",
+    "skills/create-canvas-app/templates/azure-resource-groups/README.md": "2e517e47f4f537dfa4362abe8dac4fe754dfd076459231526298997c3e592b2e",
+    "skills/create-canvas-app/templates/azure-resource-groups/package.json": "67451cd55721f065083817d8a6cf0e1068b54a828e000cf00627fe25fe44ca6f",
+    "skills/create-canvas-app/templates/azure-resource-groups/scripts/check-entry.mjs": "3bcf34bcc5dd31561430a860e289e35a641d7e328e7cf20b08ee4fc819320c15",
+    "skills/create-canvas-app/templates/azure-resource-groups/scripts/smoke.mjs": "94397d5f1426d39ba319d5f03dfd6c03b8c9e2837cb04438c897f687eeecdd9a",
+    "skills/create-canvas-app/templates/azure-resource-groups/src/browser/app.css": "8ad79093b4bcc4aa319918ecd4c8258d729a791439bdd1e7c277458aee5763cd",
+    "skills/create-canvas-app/templates/azure-resource-groups/src/browser/app.mjs": "99943892a9a29ec75aed93150b208f9d1ff014d0d3649310158399c3043ee3e6",
+    "skills/create-canvas-app/templates/azure-resource-groups/src/browser/index.html": "25cef53f8e5218625b86507312b43942ad9332141037f21dbaa590cc783223e8",
+    "skills/create-canvas-app/templates/azure-resource-groups/src/canvas.mjs": "16dfd1d2bd48e3563e84597337b97e87d6ed20960336ac7249fa131ed641dd54",
+    "skills/create-canvas-app/templates/azure-resource-groups/src/domain.mjs": "62b66ccbf5d74cd8b59c53a3a5ba74772e58f51893a0199c92e36c05db127b12",
+    "skills/create-canvas-app/templates/azure-resource-groups/src/fixture.mjs": "f8f66cbd63fa3a07427676085b64e2684f60398e1459e7a3927b2104d8fb8186",
+    "skills/create-canvas-app/templates/azure-resource-groups/tests/app.test.mjs": "55e688f04faa2d6bf4587f6a5f9bdd445494c2e5b13495eef58ef2004497daa4"
+  }
+}
