@@ -40,6 +40,21 @@ function requireFile(sha, path) {
   git("cat-file", "-e", `${sha}:${path}`);
 }
 
+function releaseTagFor(name, version) {
+  const tags = git("tag", "-l", `${name}-v${version.replaceAll(".", "-")}-*`)
+    .split("\n").filter(Boolean);
+  if (tags.length !== 1) {
+    throw new Error(`${name}@${version}: expected exactly one reviewed immutable release tag`);
+  }
+  return tags[0];
+}
+
+export function verifyCombinedReleaseCommits(commits) {
+  if (commits.length !== products.length || new Set(commits).size !== 1) {
+    throw new Error("Combined release tags must point to the same reviewed public merge commit");
+  }
+}
+
 export function verifyMarketplace(manifest) {
   if (!manifest.name || !/^[a-z][a-z0-9-]*$/.test(manifest.name)) {
     throw new Error("Marketplace must have a kebab-case name");
@@ -57,7 +72,18 @@ export function verifyMarketplace(manifest) {
     throw new Error("Marketplace versions must match the three reviewed source releases");
   }
 
-  return manifest.plugins.map(verifyPlugin);
+  const results = manifest.plugins.map(verifyPlugin);
+  if (manifest.name === "azure-dev-tools") {
+    const commits = manifest.plugins.map(({ name, version }) =>
+      git("rev-parse", `${releaseTagFor(name, version)}^{commit}`));
+    verifyCombinedReleaseCommits(commits);
+    try {
+      git("merge-base", "--is-ancestor", commits[0], "HEAD");
+    } catch {
+      throw new Error("Refresh this branch onto the reviewed public release merge commit");
+    }
+  }
+  return results;
 }
 
 export function verifyTagSource(name, version, tag) {
@@ -78,12 +104,7 @@ export function verifyPlugin({ source, name, version }) {
   let revision;
   let releaseTag;
   if (source === path) {
-    const tags = git("tag", "-l", `${name}-v${version.replaceAll(".", "-")}-*`)
-      .split("\n").filter(Boolean);
-    if (tags.length !== 1) {
-      throw new Error(`${name}@${version}: expected exactly one reviewed immutable release tag`);
-    }
-    releaseTag = tags[0];
+    releaseTag = releaseTagFor(name, version);
     verifyTagSource(name, version, releaseTag);
     revision = "HEAD";
     if (git("rev-parse", `${revision}:${path}`) !==

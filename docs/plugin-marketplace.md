@@ -43,8 +43,10 @@ tree exactly matches it, checks each tag's source fragment against its
 independently reviewed full source SHA, and verifies `plugin.json`, the
 extension, and all expected skills (including both Hosted Skills companions).
 The three distinct version tags can point to one approved combined-public-PR
-merge commit. Build-input provenance remains a separate release PR review
-fact; a source-qualified tag name alone does not prove the build's origin.
+merge commit; the validator requires all three to resolve to that same commit
+and the marketplace branch to include it. Build-input provenance remains a
+separate release PR review fact; a source-qualified tag name alone does not
+prove the build's origin.
 The validator intentionally fails while target releases are absent.
 
 After merge, check the actual GitHub-hosted marketplace with fresh, isolated

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  verifyCombinedReleaseCommits,
   verifyMarketplace,
   verifyPlugin,
   verifyTagSource,
@@ -93,4 +94,10 @@ test("target tags must identify each independently reviewed source commit", () =
   assert.throws(() => verifyMarketplace(modified((m) => {
     m.name = "azure-dev-tools";
   })), /versions must match/);
+});
+
+test("distinct product tags may share exactly one combined public merge commit", () => {
+  assert.doesNotThrow(() => verifyCombinedReleaseCommits(["abc", "abc", "abc"]));
+  assert.throws(() => verifyCombinedReleaseCommits(["abc", "def", "abc"]), /same reviewed public merge/);
+  assert.throws(() => verifyCombinedReleaseCommits(["abc", "abc"]), /same reviewed public merge/);
 });
