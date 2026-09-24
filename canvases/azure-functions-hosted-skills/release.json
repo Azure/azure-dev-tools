@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "format": "plugin",
   "name": "azure-functions-hosted-skills",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "plugin": {
     "manifest": ".github/plugin/plugin.json",
     "extension": {
@@ -52,7 +52,9 @@
     "extensions/azure-functions-hosted-skills/assets/toolkit/ui/theme.mjs",
     "extensions/azure-functions-hosted-skills/azure-auth.mjs",
     "extensions/azure-functions-hosted-skills/extension.mjs",
+    "extensions/azure-functions-hosted-skills/funcignore-policy.mjs",
     "extensions/azure-functions-hosted-skills/studio-package.json",
+    "extensions/azure-functions-hosted-skills/templates/hosted-skill-funcignore.txt",
     "extensions/azure-functions-hosted-skills/templates/hosted-skill/.gitignore",
     "extensions/azure-functions-hosted-skills/templates/hosted-skill/azure.yaml",
     "extensions/azure-functions-hosted-skills/templates/hosted-skill/infra/abbreviations.json",
@@ -85,8 +87,8 @@
   },
   "build": {
     "esbuild": "0.25.12",
-    "lockSha256": "6f350e3ca1970793a450576ca200e359888a654a48feefd20fa533d5d842e65b",
-    "inputSha256": "96a6c87fba42042117b744e7d9d08a68da6ecc49715a17fb78368de263899c3f"
+    "lockSha256": "85fc39f23086274ac8ece08087948882cfe594f5fa2cfc81ca5e6c4dddd53cc1",
+    "inputSha256": "1aa49928368cff19ac94d318baf45ff0baffb61ef010a0e3ac5c9355b733953c"
   },
   "dependencies": [
     {
@@ -304,6 +306,10 @@
     },
     {
       "file": "extensions/azure-functions-hosted-skills/extension.mjs",
+      "platform": "node"
+    },
+    {
+      "file": "extensions/azure-functions-hosted-skills/funcignore-policy.mjs",
       "platform": "node"
     },
     {
