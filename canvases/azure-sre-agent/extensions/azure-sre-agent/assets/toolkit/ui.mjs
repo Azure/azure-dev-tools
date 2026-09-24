@@ -4,6 +4,7 @@ const require = __canvasCreateRequire(import.meta.url);
 // packages/canvas-toolkit/src/ui.mjs
 var canvasUiAssets = /* @__PURE__ */ new Map([
   ["canvas-ui/styles.css", [new URL("./ui/styles.css", import.meta.url), "text/css; charset=utf-8"]],
+  ["canvas-ui/theme.mjs", [new URL("./ui/theme.mjs", import.meta.url), "text/javascript; charset=utf-8"]],
   ["canvas-ui/profiles/coreai-azure.css", [new URL("./ui/profiles/coreai-azure.css", import.meta.url), "text/css; charset=utf-8"]],
   ["canvas-ui/icons.mjs", [new URL("./ui/icons.mjs", import.meta.url), "text/javascript; charset=utf-8"]],
   ["canvas-ui/locations.mjs", [new URL("./ui/locations.mjs", import.meta.url), "text/javascript; charset=utf-8"]],

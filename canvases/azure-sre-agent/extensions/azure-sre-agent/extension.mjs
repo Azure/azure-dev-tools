@@ -5,9 +5,10 @@ const require = __canvasCreateRequire(import.meta.url);
 import { execFile as execFile2 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdirSync, readdirSync, readFileSync as readFileSync2, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync as readFileSync2, statSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { canvasUiAssets } from "./assets/toolkit/ui.mjs";
@@ -710,8 +711,13 @@ function execFileText(file, args, options = {}) {
     });
   });
 }
-function redactDeploymentOutput(value) {
-  return String(value || "").replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]").replace(
+function redactDeploymentOutput(value, sensitiveValues = []) {
+  let output = String(value || "");
+  for (const sensitiveValue of sensitiveValues) {
+    const secret = String(sensitiveValue || "");
+    if (secret) output = output.split(secret).join("[REDACTED]");
+  }
+  return output.replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]").replace(
     /((?:^|[\s,{])["']?[A-Za-z0-9_-]*(?:token|secret|password|key|connection[_-]?string)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
     "$1[REDACTED]"
   ).replace(/([?&](?:code|key|sig|token|secret)=)[^&\s]+/gi, "$1[REDACTED]");
@@ -813,7 +819,10 @@ var EXTERNAL_AGENT_ROUTES = /* @__PURE__ */ new Set([
   "/focus-thread",
   "/unfocus-thread",
   "/send-message",
-  "/investigate"
+  "/investigate",
+  "/add-favorite",
+  "/remove-favorite",
+  "/select-favorite"
 ]);
 var EXTERNAL_AGENT_ACTIONS = /* @__PURE__ */ new Set([
   "list_agents",
@@ -2202,6 +2211,103 @@ var session;
 var STICKY_STATE_DIR = join(homedir(), ".copilot", "azure-sre-agent");
 var LEGACY_STICKY_STATE_FILE = join(homedir(), ".copilot", "sre-agent-studio", "last-selection.json");
 var STICKY_STATE_FILE = join(STICKY_STATE_DIR, "last-selection.json");
+var FAVORITES_FILE = join(STICKY_STATE_DIR, "favorites.json");
+var MAX_FAVORITES = 20;
+var MAX_FAVORITES_BYTES = 16384;
+function favoriteOf(agent, subscription) {
+  if (!agent || typeof agent.name !== "string" || !agent.name.trim() || agent.name.length > 128) {
+    throw new Error("A connected agent with a valid name is required to save a Favorite.");
+  }
+  if (agent.external) {
+    const parsed2 = parseExternalAgentReference(agent.endpoint);
+    if (!parsed2 || parsed2.endpoint !== agent.endpoint) throw new Error("This external agent has no valid base endpoint.");
+    let portalUrl = "";
+    if (agent.portalUrl) {
+      const portal = parseExternalAgentReference(agent.portalUrl);
+      if (!portal || portal.endpoint !== agent.endpoint || !portal.portalUrl) {
+        throw new Error("This external agent's Portal link does not match its endpoint.");
+      }
+      portalUrl = `https://sre.azure.com/externalagents/${encodeURIComponent(agent.name)}?agentUrl=${encodeURIComponent(agent.endpoint)}`;
+    }
+    return { kind: "external", endpoint: agent.endpoint, name: agent.name, portalUrl };
+  }
+  const parsed = parseSharedAgentReference(agent.id);
+  if (parsed.id.toLowerCase() !== agent.id.toLowerCase() || parsed.subscription.toLowerCase() !== String(subscription).toLowerCase() || parsed.name.toLowerCase() !== agent.name.toLowerCase() || parsed.resourceGroup.toLowerCase() !== String(agent.resourceGroup).toLowerCase()) {
+    throw new Error("The connected SRE Agent's resource identity does not match its subscription.");
+  }
+  return { kind: "native", id: parsed.id, name: parsed.name, resourceGroup: parsed.resourceGroup, subscription: parsed.subscription };
+}
+function favoriteKey(favorite) {
+  return favorite.kind === "external" ? `external:${favorite.endpoint.toLowerCase()}` : `native:${favorite.id.toLowerCase()}`;
+}
+function readFavorites(file = FAVORITES_FILE) {
+  let data;
+  try {
+    if (statSync(file).size > MAX_FAVORITES_BYTES) throw new Error("Saved Favorites exceed the size limit.");
+    data = JSON.parse(readFileSync2(file, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw new Error(`Could not load saved Favorites: ${error.message}`);
+  }
+  if (data?.version !== 1 || !Array.isArray(data.favorites) || data.favorites.length > MAX_FAVORITES) {
+    throw new Error("Saved Favorites have an unsupported or invalid format.");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return data.favorites.map((favorite) => {
+    if (!favorite || typeof favorite !== "object" || Array.isArray(favorite)) {
+      throw new Error("Saved Favorites contain an invalid connection.");
+    }
+    const expected = favorite.kind === "external" ? favoriteOf({ external: true, endpoint: favorite.endpoint, name: favorite.name, portalUrl: favorite.portalUrl }, "") : favorite.kind === "native" ? favoriteOf({ id: favorite.id, name: favorite.name, resourceGroup: favorite.resourceGroup }, favorite.subscription) : null;
+    if (!expected || Object.keys(expected).length !== Object.keys(favorite).length || Object.entries(expected).some(([key, value]) => favorite[key] !== value) || seen.has(favoriteKey(expected))) {
+      throw new Error("Saved Favorites contain an invalid or duplicate connection.");
+    }
+    seen.add(favoriteKey(expected));
+    return expected;
+  });
+}
+function writeFavorites(favorites, file = FAVORITES_FILE) {
+  const data = JSON.stringify({ version: 1, favorites });
+  if (Buffer.byteLength(data) > MAX_FAVORITES_BYTES) throw new Error("Saved Favorites exceed the size limit.");
+  mkdirSync(dirname(file), { recursive: true });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, data, { mode: 384, flag: "wx" });
+    renameSync(temporary, file);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch (cleanupError) {
+      if (cleanupError.code !== "ENOENT") throw cleanupError;
+    }
+    throw error;
+  }
+}
+function updateFavorite(agent, subscription, remove = false, file = FAVORITES_FILE) {
+  const favorite = favoriteOf(agent, subscription);
+  const favorites = readFavorites(file);
+  const key = favoriteKey(favorite);
+  const remaining = favorites.filter((item) => favoriteKey(item) !== key);
+  if (remove && remaining.length === favorites.length) throw new Error("This connection is no longer in Favorites. Refresh and try again.");
+  if (!remove && remaining.length === favorites.length && favorites.length >= MAX_FAVORITES) {
+    throw new Error(`Favorites are limited to ${MAX_FAVORITES} connections. Remove one before adding another.`);
+  }
+  writeFavorites(remove ? remaining : [...remaining, favorite], file);
+  return remove ? remaining : [...remaining, favorite];
+}
+async function selectSavedFavorite(entry, key, {
+  readFavoritesImpl = readFavorites,
+  openReferenceImpl = openSharedAgentReference
+} = {}) {
+  const favorite = readFavoritesImpl().find((item) => favoriteKey(item) === key);
+  if (!favorite) throw new Error("Favorite not found. Refresh and try again.");
+  const connected = await openReferenceImpl(
+    entry,
+    favorite.kind === "external" ? favorite.portalUrl || favorite.endpoint : favorite.id,
+    favorite.kind === "external" ? { externalName: favorite.name } : {}
+  );
+  if (!connected) throw new Error(`Could not reconnect to Favorite ${favorite.name}. It may have been removed or access may have changed.`);
+  return connected;
+}
 function loadStickyState() {
   for (const file of [STICKY_STATE_FILE, LEGACY_STICKY_STATE_FILE]) {
     try {
@@ -2284,7 +2390,16 @@ function ensureEntry(instanceId) {
   return entry;
 }
 function snapshot(entry) {
+  let favorites = [];
+  let favoritesError = "";
+  try {
+    favorites = readFavorites();
+  } catch (error) {
+    favoritesError = shortError(error);
+  }
   return {
+    favorites,
+    favoritesError,
     subscriptions: entry.subscriptions,
     subscription: entry.subscription,
     appSubscription: entry.appSubscription,
@@ -2313,6 +2428,9 @@ function snapshot(entry) {
     error: entry.error,
     busy: entry.busy
   };
+}
+function broadcastFavorites() {
+  for (const entry of instances.values()) broadcast(entry, "state", snapshot(entry));
 }
 function appendFocusContract(entry, result) {
   if (!entry.focusedThreadId || !result || typeof result !== "object" || Array.isArray(result)) return result;
@@ -2549,8 +2667,8 @@ async function openSharedAgentReference(entry, value, dependencies = {}) {
       portalUrl: external.portalUrl,
       external: true
     };
-    const connected = await selectAgentImpl(entry, agent2, { subscription: entry.subscription, resolvedAgent: agent2 });
-    if (connected === false) return null;
+    const connected2 = await selectAgentImpl(entry, agent2, { subscription: entry.subscription, resolvedAgent: agent2 });
+    if (connected2 === false) return null;
     entry.agents = [
       ...entry.agents.filter((candidate) => candidate.id !== agent2.id),
       agent2
@@ -2588,7 +2706,8 @@ async function openSharedAgentReference(entry, value, dependencies = {}) {
   entry.subscription = parsed.subscription;
   if (!entry.appSubscription) entry.appSubscription = parsed.subscription;
   entry.agents = [...entry.agents.filter((candidate) => String(candidate.id).toLowerCase() !== parsed.id.toLowerCase()), agent];
-  await selectAgentImpl(entry, agent, { subscription: parsed.subscription, resolvedAgent: agent });
+  const connected = await selectAgentImpl(entry, agent, { subscription: parsed.subscription, resolvedAgent: agent });
+  if (connected === false) return null;
   saveStickyStateImpl({
     subscription: parsed.subscription,
     agentName: agent.name,
@@ -2691,6 +2810,7 @@ data: ${JSON.stringify(snapshot(entry))}
         const externalName = entry.pendingExternalAgentName;
         await openSharedAgentReference(entry, externalUrl, { externalName });
       }
+      return { agentConnected: Boolean(entry.agent), favoritesError: snapshot(entry).favoritesError };
     }),
     "/select-subscription": async () => withBusy(entry, "Loading SRE Agents...", async () => {
       const previousSubscription = entry.subscription;
@@ -2713,6 +2833,24 @@ data: ${JSON.stringify(snapshot(entry))}
       const row = entry.agents.find((a) => a.name === body.name);
       if (!row) throw new Error(`Agent not found: ${body.name}`);
       await selectAgent(entry, row);
+    }),
+    "/add-favorite": async () => {
+      const favorites = updateFavorite(entry.agent, entry.subscription);
+      entry.status = `Saved ${entry.agent.name} to Favorites.`;
+      broadcastFavorites();
+      return favorites;
+    },
+    "/remove-favorite": async () => {
+      const favorites = readFavorites();
+      const favorite = favorites.find((item) => favoriteKey(item) === body.key);
+      if (!favorite) throw new Error("Favorite not found. Refresh and try again.");
+      const updated = updateFavorite(favorite.kind === "external" ? { ...favorite, external: true } : favorite, favorite.subscription, true);
+      entry.status = `Removed ${favorite.name} from Favorites.`;
+      broadcastFavorites();
+      return updated;
+    },
+    "/select-favorite": async () => withBusy(entry, "Connecting to Favorite...", async () => {
+      await selectSavedFavorite(entry, body.key);
     }),
     "/create-thread": async () => withBusy(entry, "Starting thread...", async () => {
       const result2 = await createThread(entry.agent, entry.subscription, body.message, entry);
@@ -3362,13 +3500,28 @@ function renderHtml() {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg: #ffffff; --panel: #f7f6fb; --line: #e6e3f0; --ink: #1b1a24; --muted: #6a6775;
-    --accent: #6b3fd6; --accent2: #7b52e0; --ok: #0f9d6e; --warn: #b45309; --err: #dc2626;
+    --bg: #ffffff; --panel: #f7f6fb; --line: #e6e3f0; --ink: #1b1a24; --muted: #55515f;
+    --accent: #5427ae; --accent2: #7042c7; --ok: #0f9d6e; --warn: #b45309; --err: #dc2626;
+    --selected-bg: #e8defb; --selected-ink: #361573; --thread-surface: #fbfaff;
+    --user-bubble: #eef0ff;
+  }
+  :root[data-theme-tone="dark"], :root[data-color-mode="dark"]:not([data-theme-tone="light"]) {
+    --bg: #16151c; --panel: #23212c; --line: #494453; --ink: #f5f1fc; --muted: #c9c1d4;
+    --accent: #d7baff; --accent2: #c6a2fa; --err: #ffadad;
+    --selected-bg: #453267; --selected-ink: #ffffff; --thread-surface: #211e2a;
+    --user-bubble: #3c345e;
+  }
+  :root[data-theme-tone="dark"] body.canvas-profile-coreai-azure,
+  :root[data-color-mode="dark"]:not([data-theme-tone="light"]) body.canvas-profile-coreai-azure {
+    --bg: #16151c; --panel: #23212c; --line: #494453; --ink: #f5f1fc; --muted: #c9c1d4;
   }
   body {
     background: radial-gradient(1200px 600px at 10% -10%, rgba(107,63,214,.06), transparent), var(--bg);
-    color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; padding: 1.5rem;
+    color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; padding: 1rem;
+    min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column;
   }
+  #main-grid, #threads-page, .threads-layout { flex: 1; min-height: 0; }
+  #threads-page.active { display: flex; flex-direction: column; }
   h1 { font-size: 1.1rem; display: flex; align-items: center; gap: .5rem; min-width: 0; }
   .product-mark { width: 32px; height: 32px; flex: 0 0 auto; object-fit: contain; }
   .product-title { min-width: 0; }
@@ -3380,7 +3533,7 @@ function renderHtml() {
   .panel h2, .thread-master h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: .6rem; }
   select, input, textarea, button { font: inherit; }
   select, input, textarea {
-    width: 100%; background: #ffffff; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
     padding: .5rem .6rem; font-size: .84rem; margin-bottom: .5rem;
   }
   textarea { min-height: 70px; resize: vertical; }
@@ -3402,7 +3555,7 @@ function renderHtml() {
   .connection-item strong { display: block; color: var(--ink); font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .agent-picker { position: relative; margin-bottom: .5rem; }
   .agent-picker-trigger {
-    position: relative; width: 100%; background: #fff; color: var(--ink);
+    position: relative; width: 100%; background: var(--bg); color: var(--ink);
     border: 1px solid var(--line); border-radius: 8px; padding: .5rem 1.5rem .5rem .6rem;
     font-size: .84rem; cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -3415,38 +3568,47 @@ function renderHtml() {
   .agent-picker-trigger:focus-visible, .agent-option:focus-visible { outline: 2px solid var(--color-focus-outline, var(--accent)); outline-offset: 2px; }
   .agent-options {
     position: absolute; z-index: 20; top: calc(100% + 2px); left: 0; right: 0; padding: .15rem;
-    background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 16px rgba(27,26,36,.14);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 16px rgba(27,26,36,.14);
     max-height: 240px; overflow-y: auto;
   }
-  .agent-option { width: 100%; border: 0; border-radius: 6px; padding: .35rem .45rem; background: #fff; color: var(--ink); cursor: pointer; text-align: left; font-size: .84rem; }
+  .agent-option { width: 100%; border: 0; border-radius: 6px; padding: .35rem .45rem; background: var(--bg); color: var(--ink); cursor: pointer; text-align: left; font-size: .84rem; }
   .agent-option:hover, .agent-option:focus { background: rgba(107,63,214,.08); outline: none; }
   .agent-option[aria-selected="true"] { font-weight: 600; color: var(--accent); }
   .provider-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; }
-  .provider-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: .75rem; }
+  .provider-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: .75rem; }
   .provider-card h3 { font-size: .86rem; margin-bottom: .35rem; }
   .provider-card.disabled { opacity: .72; }
   .row-list { display: flex; flex-direction: column; gap: .35rem; max-height: 220px; overflow-y: auto; }
   .row-item {
     border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; font-size: .8rem; cursor: pointer;
-    display: flex; justify-content: space-between; gap: .5rem; background: #fff;
+    display: flex; justify-content: space-between; gap: .5rem; background: var(--bg);
   }
   .row-main { min-width: 0; display: flex; align-items: center; gap: .45rem; overflow: hidden; }
   .row-main span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-item:hover { border-color: var(--accent2); }
-  .row-item.active { border-color: var(--accent); background: rgba(107,63,214,.08); }
-  .thread-master .row-item { min-width: 0; padding: .42rem .5rem; border: 0; border-radius: 5px; align-items: center; overflow: hidden; white-space: nowrap; }
-  .thread-master .row-item:hover { background: rgba(107,63,214,.06); }
-  .thread-master .row-item.active { border-left: 3px solid var(--accent); padding-left: calc(.5rem - 3px); }
+  .row-item.active { border-color: var(--accent); background: var(--selected-bg); color: var(--selected-ink); }
+  .thread-master .row-item { min-width: 0; min-height: 46px; padding: .65rem .7rem; border: 1px solid transparent; border-radius: 8px; align-items: center; overflow: hidden; white-space: nowrap; }
+  .thread-master .row-item:hover { background: var(--selected-bg); color: var(--selected-ink); }
+  .thread-master .row-item.active { border-color: var(--accent); border-left: 4px solid var(--accent); padding-left: calc(.7rem - 4px); background: var(--selected-bg); color: var(--selected-ink); font-weight: 700; }
   .thread-master .thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .thread-master .thread-status { flex: none; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .68rem; }
+  .thread-master .thread-status { flex: none; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; font-size: .68rem; }
+  .thread-master .row-item:focus-visible, .thread-master > summary:focus-visible, .favorite-item:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .favorites-list { display: flex; flex-direction: column; gap: .3rem; max-height: 180px; overflow-y: auto; margin: .5rem 0; }
+  .favorite-item { width: 100%; text-align: left; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: .5rem; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .favorite-item[aria-current="true"] { background: var(--selected-bg); color: var(--selected-ink); border-color: var(--accent); font-weight: 700; }
+  .favorites-error { color: var(--err); }
   .tag { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
   .focus-badge { font: inherit; font-size: .68rem; color: #fff; background: var(--accent); border: 0; border-radius: 999px; padding: 2px 8px; cursor: pointer; }
+  :root[data-theme-tone="dark"] .focus-badge, :root[data-color-mode="dark"]:not([data-theme-tone="light"]) .focus-badge { color: #25133e; }
   .status { font-size: .78rem; color: var(--muted); min-height: 1.2em; }
   .status.err { color: var(--err); }
   .thread-log { background: #fbfaff; border: 1px solid var(--line); border-radius: 8px; padding: .7rem; max-height: 320px; overflow-y: auto; font-size: .8rem; white-space: pre-wrap; }
-  .tabs { display: flex; gap: .4rem; margin-bottom: .8rem; flex-wrap: wrap; }
-  .tab { font-size: .78rem; padding: .35rem .7rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: .3rem; }
+  .tabs { display: flex; gap: .4rem; margin-bottom: .8rem; flex-wrap: nowrap; overflow-x: auto; }
+  .tab { flex: none; white-space: nowrap; font-size: .78rem; padding: .35rem .7rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: .3rem; }
   .tab.active { color: var(--ink); border-color: var(--accent); background: rgba(107,63,214,.08); }
+  .tab .nyi-tag { font-size: .6rem; margin-left: 2px; text-transform: uppercase; letter-spacing: .3px; }
   .tabpage { display: none; }
   .tabpage.active { display: block; }
   code { background: #f0eef8; border-radius: 4px; padding: 1px 5px; font-size: .78rem; }
@@ -3456,7 +3618,7 @@ function renderHtml() {
   #azure-config-card .config-connection { display: inline-block; max-width: calc(100% - 190px); margin-left: .6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; color: var(--ink); font-weight: 400; text-transform: none; letter-spacing: normal; }
   #azure-config-card[open] .config-connection { display: none; }
   .cmd-list { display: flex; flex-direction: column; gap: .4rem; max-height: 260px; overflow-y: auto; margin-top: .6rem; }
-  .cmd-row { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; background: #fff; font-size: .76rem; }
+  .cmd-row { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; background: var(--bg); font-size: .76rem; }
   .cmd-row .cmd-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem; }
   .cmd-kind { font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .cmd-kind.az { color: #0969da; border-color: #b6d4f5; background: #eef6ff; }
@@ -3476,31 +3638,37 @@ function renderHtml() {
   .typing-dots span:nth-child(2) { animation-delay: .15s; }
   .typing-dots span:nth-child(3) { animation-delay: .3s; }
   /* Chat transcript, styled after the SRE Agent portal's own thread view. */
-  .chat-log { background: #fbfaff; border: 1px solid var(--line); border-radius: 8px; padding: .8rem; max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: .6rem; }
-  .threads-layout { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.7fr); gap: 1rem; align-items: start; }
+  .chat-log { background: var(--thread-surface); border: 1px solid var(--line); border-radius: 8px; padding: .8rem; flex: 1; min-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: .6rem; }
+  .threads-layout { display: grid; grid-template-columns: minmax(240px, .85fr) minmax(0, 2fr); gap: .75rem; align-items: stretch; }
   .thread-master { min-width: 0; }
-  .thread-master > summary { cursor: pointer; color: var(--muted); font-size: .82rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .thread-master > summary { cursor: pointer; color: var(--ink); font-size: .82rem; font-weight: 400; list-style: none; display: flex; align-items: center; gap: .5rem; }
+  .thread-master > summary::-webkit-details-marker { display: none; }
+  .thread-rail-icon { width: 20px; height: 20px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.5; }
   .thread-master > .head-actions { margin: .7rem 0; }
-  .threads-layout:has(.thread-master:not([open])) { grid-template-columns: minmax(110px, 150px) minmax(0, 1fr); }
-  .thread-master .row-list { max-height: min(58vh, 520px); }
-  .thread-detail { min-width: 0; outline: none; }
+  .threads-layout:has(.thread-master:not([open])) { grid-template-columns: 52px minmax(0, 1fr); }
+  .thread-master:not([open]) { padding: .8rem .9rem; }
+  .thread-master:not([open]) .thread-rail-label { display: none; }
+  .thread-master .row-list { max-height: min(62dvh, 720px); }
+  .thread-detail { min-width: 0; height: clamp(420px, calc(100dvh - 355px), 950px); outline: none; display: flex; flex-direction: column; }
   .thread-detail:focus-visible { outline: 2px solid var(--color-focus-outline, var(--accent)); outline-offset: 4px; border-radius: 8px; }
   .thread-detail h3 { font-size: .86rem; margin-bottom: .5rem; }
   .transcript-notice { display: flex; justify-content: space-between; align-items: center; gap: .75rem; padding: .45rem .6rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); font-size: .75rem; }
   @media (max-width: 760px) {
-    body { padding: 1rem; }
-    .threads-layout { grid-template-columns: 1fr; }
-    .threads-layout:has(.thread-master:not([open])) { grid-template-columns: 1fr; }
-    .thread-master .row-list { max-height: 240px; }
+    body { padding: .7rem; }
+    .threads-layout { grid-template-columns: minmax(0, 1fr); }
+    .threads-layout:has(.thread-master:not([open])) { grid-template-columns: 52px minmax(0, 1fr); }
+    .thread-master .row-list { max-height: 220px; }
+    .thread-detail { height: clamp(380px, calc(100dvh - 520px), 800px); }
   }
   @media (forced-colors: active) {
     .product-mark { forced-color-adjust: none; }
+    .thread-master .row-item.active, .favorite-item[aria-current="true"] { border-color: Highlight; outline: 2px solid Highlight; }
   }
   .chat-msg { display: flex; flex-direction: column; gap: .3rem; }
   .chat-msg .who { font-size: .72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
   .chat-bubble { border-radius: 10px; padding: .55rem .7rem; font-size: .84rem; line-height: 1.4; }
-  .chat-msg.user .chat-bubble { background: #eef0ff; align-self: flex-end; max-width: 85%; }
-  .chat-msg.agent .chat-bubble { background: #ffffff; border: 1px solid var(--line); max-width: 92%; }
+  .chat-msg.user .chat-bubble { background: var(--user-bubble); align-self: flex-end; max-width: 85%; }
+  .chat-msg.agent .chat-bubble { background: var(--bg); border: 1px solid var(--line); max-width: 92%; }
   .chat-msg.user { align-items: flex-end; }
   /* Markdown rendering inside chat bubbles (SRE Agent replies often contain GFM tables). */
   .chat-bubble p { margin: 0 0 .5rem; white-space: pre-wrap; }
@@ -3515,21 +3683,21 @@ function renderHtml() {
   .chat-bubble table { border-collapse: collapse; width: 100%; margin: .3rem 0 .6rem; font-size: .8rem; }
   .chat-bubble table th, .chat-bubble table td { border: 1px solid var(--line); padding: .3rem .5rem; text-align: left; vertical-align: top; }
   .chat-bubble table th { background: var(--panel); color: var(--muted); font-weight: 600; }
-  .chat-bubble table tr:nth-child(even) td { background: #fbfaff; }
-  .tool-card { border: 1px solid var(--line); border-radius: 10px; padding: .55rem .7rem; background: #ffffff; font-size: .78rem; }
+  .chat-bubble table tr:nth-child(even) td { background: var(--thread-surface); }
+  .tool-card { border: 1px solid var(--line); border-radius: 10px; padding: .55rem .7rem; background: var(--bg); font-size: .78rem; }
   .tool-card .tool-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; }
   .tool-card .tool-title { font-weight: 600; }
   .tool-badge { font-size: .64rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .tool-badge.safe { color: var(--ok); border-color: #bfe9d6; background: #e4f7ef; }
   .tool-badge.risk { color: var(--warn); border-color: #f2ddb0; background: #fdf0d8; }
   .tool-badge.done { color: var(--muted); }
-  .tool-cmd { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; background: #f0eef8; border-radius: 6px; word-break: break-all; }
+  .tool-cmd { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; background: var(--thread-surface); border-radius: 6px; word-break: break-all; }
   .tool-cmd pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
   .tool-output { margin-top: .35rem; color: var(--muted); white-space: pre-wrap; max-height: 160px; overflow-y: auto; }
   .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .copy-cmd { font-size: .68rem; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
-  .tool-auth-notice { margin-top: .45rem; padding: .5rem .6rem; background: #f5f5fa; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: .76rem; }
+  .copy-cmd { font-size: .68rem; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+  .tool-auth-notice { margin-top: .45rem; padding: .5rem .6rem; background: var(--thread-surface); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: .76rem; }
   .tool-auth-actions { margin-top: .5rem; display: flex; gap: .5rem; }
   .tool-auth-actions .btn { padding: .35rem .9rem; font-size: .78rem; }
   .build-stamp { margin-top: 1rem; color: var(--muted); font: 10px/1.2 ui-monospace, "SFMono-Regular", Menlo, monospace; text-align: right; opacity: .7; }
@@ -3557,6 +3725,15 @@ function renderHtml() {
       <input id="shared-agent-reference" type="text" autocomplete="off" spellcheck="false" placeholder="https://agent--id.region.azuresre.ai" />
       <button class="btn ghost" id="open-shared-agent">Connect to agent</button>
       <button class="btn ghost" id="open-external-portal">Open external link in Portal &#8599;</button>
+      <div class="favorites-controls">
+        <button type="button" class="btn ghost" id="save-favorite" disabled>Save connected agent</button>
+        <button type="button" class="btn ghost" id="show-favorites" aria-expanded="false" aria-controls="favorites-panel">Favorites</button>
+      </div>
+      <div id="favorites-panel" hidden>
+        <p id="favorites-error" class="hint favorites-error" role="alert" hidden></p>
+        <div id="favorites-list" class="favorites-list" aria-label="Saved agent connections"></div>
+        <button type="button" class="btn ghost mini" id="remove-favorite" disabled>Remove selected Favorite</button>
+      </div>
       <div id="agent-summary"></div>
       <div id="config-drift-result"></div>
     </div>
@@ -3567,18 +3744,18 @@ function renderHtml() {
       <button type="button" class="tab active" role="tab" aria-selected="true" aria-controls="threads-page" tabindex="0" data-tab="threads">Threads</button>
       <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="apps-page" tabindex="-1" data-tab="apps">Apps</button>
       <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="connectors-page" tabindex="-1" data-tab="connectors">Connectors</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Operations Hub</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="incidents-page" tabindex="-1" data-tab="incidents">Incidents</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Automation</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Live Reports</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Releases</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">S360</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="incidents-page" tabindex="-1" data-tab="incidents">Incidents<span class="nyi-tag">NYI</span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Automation<span class="nyi-tag">NYI</span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Operations Hub<span class="nyi-tag">NYI</span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Live Reports<span class="nyi-tag">NYI</span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">Releases<span class="nyi-tag">NYI</span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" tabindex="-1" title="Coming soon">S360<span class="nyi-tag">NYI</span></button>
     </div>
 
     <div class="tabpage active" id="threads-page" role="tabpanel" data-page="threads">
       <div class="threads-layout">
         <details class="thread-master" id="threads-card" aria-label="Thread navigation" open>
-          <summary>Threads</summary>
+          <summary aria-label="Collapse Threads" title="Collapse Threads"><svg class="thread-rail-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="1.5" y="1.5" width="17" height="17" rx="2"/><path d="M7.5 1.5v17"/></svg><span class="thread-rail-label">Threads</span></summary>
           <div class="head-actions">
             <button class="btn ghost mini" id="new-thread">New Thread</button>
             <button class="btn ghost mini" id="search-threads">&#128269; Search Threads</button>
@@ -3615,24 +3792,27 @@ function renderHtml() {
       </div>
 
       <div class="tabpage" id="connectors-page" role="tabpanel" data-page="connectors" hidden>
-        <div class="panel">
-          <h2>Connectors attached to this SRE Agent</h2>
-          <div id="connector-list" class="row-list"></div>
-        </div>
-        <div class="panel">
-          <h2>Connect Azure Data Explorer</h2>
-          <p class="hint">Choose the Kusto cluster and database you can already access. Select <strong>Configure Kusto DB &amp; attach</strong>; general Connector Namespace v2 stores your delegated sign-in, wraps the Kusto query as an authenticated MCP, and registers that endpoint with SRE Agent as a normal remote MCP. If the subscription has no Connector Namespace, the canvas creates one in the SRE Agent resource group.</p>
-          <label class="field-label" for="connector-sub-select">Discovery subscription</label>
-          <select id="connector-sub-select"></select>
-          <button class="btn ghost" id="discover-kusto">Discover Data Explorer resources</button>
-          <label class="field-label" for="kusto-cluster-select">Kusto cluster</label>
-          <select id="kusto-cluster-select"></select>
-          <label class="field-label" for="kusto-database-select">Kusto database</label>
-          <select id="kusto-database-select"></select>
-          <input id="kusto-cluster-url" placeholder="Or enter cluster URL, e.g. https://help.kusto.windows.net" />
-          <input id="kusto-database" placeholder="Or enter database name" />
-          <button class="btn" id="create-delegated-kusto-mcp"${PRIVATE_CONNECTORS_ENABLED ? "" : " disabled"}>Configure Kusto DB &amp; attach</button>
-          <p class="hint" style="margin-top:.6rem"><strong>Staging safety gate:</strong> delegated connector creation, attachment, consent completion, and detachment are disabled unless <code>ALLOW_PRIVATE_CONNECTORS=true</code>. The SRE runtime does not yet provide signed per-invocation user and thread ownership proof, so this surface is not generally available.</p>
+        <p class="hint" id="connector-external-note" role="status" hidden>External URL agents support conversation threads only. Connect a native Azure SRE Agent to view or manage its connectors.</p>
+        <div id="connector-native-content">
+          <div class="panel">
+            <h2>Connectors attached to this SRE Agent</h2>
+            <div id="connector-list" class="row-list"></div>
+          </div>
+          <div class="panel">
+            <h2>Connect Azure Data Explorer</h2>
+            <p class="hint">Choose the Kusto cluster and database you can already access. Select <strong>Configure Kusto DB &amp; attach</strong>; general Connector Namespace v2 stores your delegated sign-in, wraps the Kusto query as an authenticated MCP, and registers that endpoint with SRE Agent as a normal remote MCP. If the subscription has no Connector Namespace, the canvas creates one in the SRE Agent resource group.</p>
+            <label class="field-label" for="connector-sub-select">Discovery subscription</label>
+            <select id="connector-sub-select"></select>
+            <button class="btn ghost" id="discover-kusto">Discover Data Explorer resources</button>
+            <label class="field-label" for="kusto-cluster-select">Kusto cluster</label>
+            <select id="kusto-cluster-select"></select>
+            <label class="field-label" for="kusto-database-select">Kusto database</label>
+            <select id="kusto-database-select"></select>
+            <input id="kusto-cluster-url" placeholder="Or enter cluster URL, e.g. https://help.kusto.windows.net" />
+            <input id="kusto-database" placeholder="Or enter database name" />
+            <button class="btn" id="create-delegated-kusto-mcp"${PRIVATE_CONNECTORS_ENABLED ? "" : " disabled"}>Configure Kusto DB &amp; attach</button>
+            <p class="hint" style="margin-top:.6rem"><strong>Staging safety gate:</strong> delegated connector creation, attachment, consent completion, and detachment are disabled unless <code>ALLOW_PRIVATE_CONNECTORS=true</code>. The SRE runtime does not yet provide signed per-invocation user and thread ownership proof, so this surface is not generally available.</p>
+          </div>
         </div>
       </div>
 
@@ -3677,7 +3857,81 @@ function renderHtml() {
   var state = { agents: [], threads: [], incidents: [], scheduledTasks: [], memoryResults: [], connectors: [], connectorGateways: [], connectorNamespaceMcps: [], kustoResources: [] };
   var draftThread = null;
   var lastTranscriptKey = '';
+  var selectedFavoriteKey = '';
   var NEW_THREAD_TEMPLATE = 'Investigate a failing app or service:\\n\\nResource / service:\\nSymptoms:\\nWhen it started:\\nRecent changes or deployments:\\nWhat I already checked:';
+  var configCard = document.getElementById('azure-config-card');
+  var configSummaryTouched = false;
+  configCard.querySelector('summary').addEventListener('click', function () { configSummaryTouched = true; });
+
+  var threadsCard = document.getElementById('threads-card');
+  function syncThreadRail() {
+    var summary = threadsCard.querySelector('summary');
+    var label = threadsCard.open ? 'Collapse Threads' : 'Open Threads';
+    summary.setAttribute('aria-label', label);
+    summary.title = label;
+  }
+  threadsCard.addEventListener('toggle', syncThreadRail);
+  syncThreadRail();
+
+  function connectionKey(agent) {
+    if (!agent) return '';
+    return agent.external ? 'external:' + String(agent.endpoint || '').toLowerCase()
+      : 'native:' + String(agent.id || '').toLowerCase();
+  }
+  function renderFavorites(s) {
+    var favorites = s.favorites || [];
+    var activeKey = connectionKey(s.agent);
+    var currentSaved = favorites.some(function (item) { return connectionKey(item.kind === 'external' ? { external: true, endpoint: item.endpoint } : item) === activeKey; });
+    var save = document.getElementById('save-favorite');
+    save.disabled = !s.agent || Boolean(s.favoritesError) || Boolean(s.busy);
+    save.textContent = currentSaved ? 'Remove connected Favorite' : 'Save connected agent';
+    var error = document.getElementById('favorites-error');
+    error.textContent = s.favoritesError || '';
+    error.hidden = !s.favoritesError;
+    if (s.favoritesError) {
+      document.getElementById('favorites-panel').hidden = false;
+      document.getElementById('show-favorites').setAttribute('aria-expanded', 'true');
+    }
+    var list = document.getElementById('favorites-list');
+    list.innerHTML = favorites.length ? favorites.map(function (item) {
+      var key = connectionKey(item.kind === 'external' ? { external: true, endpoint: item.endpoint } : item);
+      return '<button type="button" class="favorite-item" data-key="' + escapeHtml(key) +
+        '" aria-current="' + (key === activeKey ? 'true' : 'false') +
+        '" title="' + escapeHtml(item.kind === 'external' ? item.endpoint : item.id) + '">' +
+        escapeHtml(item.name + ' \xB7 ' + (item.kind === 'external' ? item.endpoint : item.resourceGroup + ' \xB7 ' + item.subscription)) +
+        '</button>';
+    }).join('') : '<p class="hint">No Favorites yet. Connect to an agent, then save it here.</p>';
+    if (!favorites.some(function (item) {
+      return connectionKey(item.kind === 'external' ? { external: true, endpoint: item.endpoint } : item) === selectedFavoriteKey;
+    })) selectedFavoriteKey = '';
+    document.getElementById('remove-favorite').disabled = !selectedFavoriteKey || Boolean(s.favoritesError);
+  }
+  document.getElementById('save-favorite').addEventListener('click', function () {
+    var saved = (state.favorites || []).some(function (item) {
+      return connectionKey(item.kind === 'external' ? { external: true, endpoint: item.endpoint } : item) === connectionKey(state.agent);
+    });
+    postJson(saved ? '/remove-favorite' : '/add-favorite', saved ? { key: connectionKey(state.agent) } : {})
+      .catch(function (error) { setStatus('Could not update Favorite: ' + error.message, true); });
+  });
+  document.getElementById('show-favorites').addEventListener('click', function () {
+    var panel = document.getElementById('favorites-panel');
+    panel.hidden = !panel.hidden;
+    this.setAttribute('aria-expanded', String(!panel.hidden));
+  });
+  document.getElementById('favorites-list').addEventListener('click', function (event) {
+    var button = event.target.closest('.favorite-item');
+    if (!button) return;
+    selectedFavoriteKey = button.dataset.key;
+    document.getElementById('remove-favorite').disabled = false;
+    postJson('/select-favorite', { key: selectedFavoriteKey }).then(
+      function () { document.getElementById('azure-config-card').open = false; },
+      function (error) { setStatus('Could not reconnect to Favorite: ' + error.message, true); }
+    );
+  });
+  document.getElementById('remove-favorite').addEventListener('click', function () {
+    if (selectedFavoriteKey) postJson('/remove-favorite', { key: selectedFavoriteKey })
+      .catch(function (error) { setStatus('Could not remove Favorite: ' + error.message, true); });
+  });
 
   function postJson(url, payload) {
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}) })
@@ -3847,12 +4101,14 @@ function renderHtml() {
     }
   }
   function renderBody(s) {
+    renderFavorites(s);
     var external = Boolean(s.agent && s.agent.external);
     document.querySelectorAll('.tab[data-tab]').forEach(function (tab) {
-      var unsupported = external && tab.dataset.tab !== 'threads' && tab.dataset.tab !== 'apps';
+      var unsupported = external && tab.dataset.tab !== 'threads' && tab.dataset.tab !== 'apps' && tab.dataset.tab !== 'connectors';
       tab.disabled = unsupported;
       tab.setAttribute('aria-disabled', String(unsupported));
-      tab.title = unsupported ? 'External agents support conversation threads only.' : '';
+      tab.title = unsupported ? 'External agents support conversation threads only.'
+        : tab.dataset.tab === 'incidents' ? 'Incident list and creation available; other incident features not yet implemented' : '';
     });
     if (external && document.querySelector('.tab.active[data-tab]')?.disabled) activateTab('threads');
 
@@ -3969,6 +4225,10 @@ function renderHtml() {
   }
 
   function renderConnectors(s) {
+    var external = Boolean(s.agent && s.agent.external);
+    document.getElementById('connector-external-note').hidden = !external;
+    document.getElementById('connector-native-content').hidden = external;
+    if (external) return;
     var list = document.getElementById('connector-list');
     if (list) {
       var items = s.connectors || [];
@@ -4740,7 +5000,11 @@ function renderHtml() {
       setStatus('Lost connection to the canvas server (likely reloaded on a new port) - reopen this canvas panel to reconnect.', true);
     }
   });
-  postJson('/init');
+  postJson('/init').then(function (response) {
+    if (response.result?.agentConnected && !response.result.favoritesError && !configSummaryTouched) configCard.open = false;
+  }, function (error) {
+    setStatus('Could not initialize Azure Configuration: ' + error.message, true);
+  });
 })();
 </script>
 </body>
@@ -4768,7 +5032,10 @@ export {
   openSharedAgentReference,
   parseExternalAgentReference,
   parseSharedAgentReference,
+  readFavorites,
   renderHtml,
   selectAgent,
+  selectSavedFavorite,
+  updateFavorite,
   waitForNewAgentReplies
 };
