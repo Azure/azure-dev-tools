@@ -24,6 +24,11 @@ When one approved public PR contains multiple independently reviewed products,
 their distinct source-qualified immutable version tags may all point to that
 same PR's merge commit. Verify each product's source revision, version, and
 package bytes separately; do not create the tags before the PR merges.
+When a later PR releases a separate skill-only plugin, its immutable and latest
+tags must point to that later product merge commit, not the earlier combined
+canvas release. Marketplace validation must compare the skill-only package
+against its own tag and receipt and keep the three existing tags pinned to
+their original reviewed commit.
 
 Release order:
 
@@ -61,6 +66,12 @@ Before approval and again after tagging, verify that the README:
 An export may update the README only when the release PR explicitly presents
 the customer-facing change for review. Missing sections, a wrapper-directory
 install URL, a branch URL, or packaging-only prose blocks the release.
+
+For a skill-only package under `plugins/`, do not apply the nested canvas URL
+and prompt-to-open requirements. Instead require an accurate immutable-tag
+plugin directory install path, its host-skill prerequisite, one contributed
+skill, and explicit disclosure that no canvas/extension is installed. Do not
+claim a toolkit npm version is compatible with `/build` until verified.
 
 ## Public release PR communication
 
