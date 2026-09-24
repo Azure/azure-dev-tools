@@ -76,7 +76,7 @@ If recovery still fails, report the real error and give the canonical
 reinstallation steps, then stop:
 
 1. Copy
-   `https://github.com/Azure/azure-dev-tools/tree/main/canvases/azure-functions-hosted-skills`.
+   `https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`.
 2. In GitHub Copilot, choose **Install extension from URL…** and paste the
    URL.
 3. Open **Azure Functions Hosted Skills Preview** in a fresh project chat.

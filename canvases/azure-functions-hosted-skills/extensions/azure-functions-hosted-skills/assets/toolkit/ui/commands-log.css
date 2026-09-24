@@ -1,6 +1,4 @@
-/* Command activity — an Azure Portal "Activity log"-style surface. A bordered
-   container with a toolbar header over a tinted well of individual command
-   cards. Scoped under .canvas-commands-log; consumes ui/styles.css tokens. */
+/* Command activity. Scoped under .canvas-commands-log; consumes ui/styles.css. */
 
 .canvas-commands-log {
     display: flex;
@@ -11,10 +9,9 @@
     border-radius: var(--canvas-radius);
     overflow: clip;
     color: var(--canvas-fg);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
     font-size: var(--canvas-ui);
     line-height: var(--canvas-line);
-    box-shadow: 0 1px 2px color-mix(in srgb, var(--canvas-fg) 6%, transparent),
-                0 2px 8px color-mix(in srgb, var(--canvas-fg) 4%, transparent);
 }
 
 /* --- Toolbar header ---------------------------------------------------- */
@@ -45,7 +42,7 @@
     border-radius: 9px;
     background: var(--canvas-selected);
     color: var(--canvas-muted);
-    font-size: 11px;
+    font-size: var(--canvas-small);
     font-weight: var(--font-weight-semibold, 600);
     font-variant-numeric: tabular-nums;
     line-height: 1;
@@ -63,43 +60,36 @@
     display: none;
 }
 
-/* --- Cards ------------------------------------------------------------- */
+/* --- Rows -------------------------------------------------------------- */
 .canvas-commands-log-list {
     list-style: none;
     margin: 0;
-    padding: 10px;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
     min-width: 0;
-    background: var(--canvas-tint);
+    background: var(--canvas-bg);
 }
 
 .canvas-commands-log-row {
     position: relative;
     padding: 10px 12px 11px;
     background: var(--canvas-bg);
-    border: 1px solid var(--canvas-border);
-    border-radius: var(--canvas-radius);
-    box-shadow: 0 1px 2px color-mix(in srgb, var(--canvas-fg) 5%, transparent);
-    transition: box-shadow 120ms ease, border-color 120ms ease;
+    border-bottom: 1px solid var(--canvas-divider);
 }
 
+.canvas-commands-log-row:last-child { border-bottom: 0; }
 .canvas-commands-log-row:hover {
-    border-color: color-mix(in srgb, var(--canvas-border) 40%, var(--canvas-fg));
-    box-shadow: 0 1px 2px color-mix(in srgb, var(--canvas-fg) 8%, transparent),
-                0 2px 6px color-mix(in srgb, var(--canvas-fg) 6%, transparent);
+    background: var(--canvas-hover);
 }
 
-/* A restrained inset accent rail on the failed / running cards. */
+/* Status also has a visible text label. */
 .canvas-commands-log-row[data-status="err"] {
-    box-shadow: inset 3px 0 0 var(--canvas-danger),
-                0 1px 2px color-mix(in srgb, var(--canvas-fg) 5%, transparent);
+    box-shadow: inset 3px 0 0 var(--canvas-danger);
 }
 
 .canvas-commands-log-row[data-status="run"] {
-    box-shadow: inset 3px 0 0 var(--canvas-accent),
-                0 1px 2px color-mix(in srgb, var(--canvas-fg) 5%, transparent);
+    box-shadow: inset 3px 0 0 var(--canvas-accent);
 }
 
 /* --- Primary line ------------------------------------------------------ */
@@ -135,7 +125,7 @@
 }
 
 .canvas-commands-log-status-ok {
-    color: light-dark(#1a7f37, #3fb950);
+    color: var(--canvas-success);
 }
 
 .canvas-commands-log-status-err {
@@ -164,7 +154,7 @@
 /* Kind: a subtle uppercase tag, not a colored badge. */
 .canvas-commands-log-kind {
     flex: none;
-    font-size: 10px;
+    font-size: var(--canvas-small);
     font-weight: var(--font-weight-semibold, 600);
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -209,9 +199,9 @@
 
 .canvas-commands-log-cmd-text {
     display: block;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Code", monospace;
-    font-size: var(--canvas-small);
-    line-height: 1.55;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Code", monospace);
+    font-size: var(--text-code-block, var(--canvas-small));
+    line-height: var(--leading-code-block, 1.6667);
     color: var(--canvas-fg);
     white-space: pre-wrap;
     overflow-wrap: anywhere;

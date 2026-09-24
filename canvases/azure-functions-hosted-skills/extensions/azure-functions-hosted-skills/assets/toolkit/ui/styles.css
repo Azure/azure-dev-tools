@@ -6,8 +6,11 @@
   --canvas-border: var(--border-color-default, light-dark(#d1d9e0, #30363d));
   --canvas-accent: var(--text-color-accent, var(--true-color-blue, light-dark(#0969da, #79b8ff)));
   --canvas-danger: var(--text-color-danger, var(--true-color-red, light-dark(#cf222e, #ff7b72)));
+  --canvas-success: var(--text-color-success, light-dark(#1a7f37, #3fb950));
+  --canvas-attention: var(--text-color-attention, light-dark(#9a6700, #d29922));
   --canvas-focus: var(--color-focus-outline, var(--canvas-accent));
   --canvas-tint: var(--background-color-muted, color-mix(in srgb, var(--canvas-fg) 4%, var(--canvas-bg)));
+  --canvas-overlay: var(--background-color-overlay, var(--canvas-bg));
   --canvas-hover: var(--background-color-control-transparent-hover, color-mix(in srgb, var(--canvas-fg) 7%, var(--canvas-bg)));
   --canvas-selected: var(--background-color-accent-muted, color-mix(in srgb, var(--canvas-accent) 10%, var(--canvas-bg)));
   --canvas-divider: var(--border-color-muted, color-mix(in srgb, var(--canvas-border) 65%, transparent));
@@ -17,6 +20,21 @@
   --canvas-line: var(--leading-body-ui, 20px);
   --canvas-radius: 8px;
 }
+
+/* External themes have a resolved tone without Primer's color-mode attributes. */
+:root[data-theme-tone="light"],
+:root:not([data-theme-tone="light"]):not([data-theme-tone="dark"])[data-color-mode="light"] { color-scheme: light; }
+:root[data-theme-tone="dark"],
+:root:not([data-theme-tone="light"]):not([data-theme-tone="dark"])[data-color-mode="dark"] { color-scheme: dark; }
+
+.canvas-theme-probe-bg { color: var(--canvas-bg); }
+.canvas-theme-probe-fg { color: var(--canvas-fg); }
+.canvas-theme-probe-muted { color: var(--canvas-muted); }
+.canvas-theme-probe-border { color: var(--canvas-border); }
+.canvas-theme-probe-accent { color: var(--canvas-accent); }
+.canvas-theme-probe-success { color: var(--canvas-success); }
+.canvas-theme-probe-attention { color: var(--canvas-attention); }
+.canvas-theme-probe-danger { color: var(--canvas-danger); }
 
 /* Keep the document's rem base intact: host type-ramp values are rem-based. */
 .canvas-ui {
@@ -107,6 +125,8 @@
 }
 .canvas-ui .text-button { min-height: 28px; padding: 3px 8px; font-size: var(--canvas-small); }
 .canvas-ui .icon-button { width: 28px; min-width: 28px; min-height: 28px; padding: 5px; }
+:where(.pointer-on-hover) .canvas-ui :where(button, select, input[type="checkbox"], summary):not(:disabled),
+.canvas-ui.pointer-on-hover :where(button, select, input[type="checkbox"], summary):not(:disabled) { cursor: pointer; }
 .canvas-list {
   min-width: 0;
   background: var(--canvas-bg);
