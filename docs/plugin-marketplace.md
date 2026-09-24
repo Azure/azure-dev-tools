@@ -36,12 +36,10 @@ copilot skill list
 The three canvas products (SRE Agent 0.2.4, Functions Hosted Skills 0.5.1,
 and Resources Query 0.1.1) share reviewed public release commit `482188d`.
 The fourth product, `canvas-authoring` 0.1.0, merged separately at public
-product commit `5bea7ba`; its final updated head still needs human release
-attestation. Its
-immutable `canvas-authoring-v0-1-0-23aa6b1` tag and
-`canvas-authoring-latest` must both point to that product commit. **Neither
-builder tag currently exists; the merged marketplace is not a release or
-install-ready.** Its merged
+product commit `5bea7ba`. Its immutable
+`canvas-authoring-v0-1-0-23aa6b1` and movable `canvas-authoring-latest`
+tags both point to that product commit. Tagging does not verify marketplace
+or App installation. Its merged
 public `SHA256SUMS` digest is
 `ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da`.
 The [merged public package](https://github.com/Azure/azure-dev-tools/tree/5bea7baefed06b627a279da2dcc78331289598ef/plugins/canvas-authoring)
@@ -55,21 +53,43 @@ follow the then-current public default branch, and `version` is display
 metadata. After fetching the public immutable release tags, run
 `node --test test/plugin-marketplace.test.mjs` and
 `node scripts/verify-plugin-marketplace.mjs` before merge. The validator
-requires a unique version tag per product and current package trees to match
-tagged bytes, checks each tag's source fragment against its independently reviewed
-full source SHA, and checks manifest shape and skill count. The first three
+requires a unique version tag per product and the current package's protected
+files to match the tagged files, checks each tag's source fragment against its
+independently reviewed full source SHA, and checks manifest shape and skill
+count. The first three
 tags must point to the exact reviewed release commit. The builder tag must
 point to the exact `5bea7ba` product commit merged into public `origin/main`,
 introduce only files under `plugins/canvas-authoring/` relative to staging
-main, have the merged
-`SHA256SUMS` receipt, per-file digests and inventory, and match
+main, retain the merged **full-package** `SHA256SUMS` receipt, per-file digests
+and inventory at the immutable tag, and match
 `canvas-authoring-latest`. Fetch current `origin/main` and release tags before
 verification. The marketplace
 branch must include that commit. Synthetic local-only tags in temporary clones
 exercise the pretag verifier; they are not releases and must never be pushed.
 Build-input provenance remains a separate release PR review fact; tag names
-alone do not prove build origin. The default verifier **fails closed** while
-the real builder tag is absent; there is no `--candidate` bypass.
+alone do not prove build origin. There is no `--candidate` bypass.
+
+Regular non-executable `README*` text files (bare `README` or `.md`,
+`.markdown`, `.txt`, `.rst`, `.adoc`) at any non-runtime package depth, and
+the same text files plus raster images (`.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.avif`) under a package-root `doc/` or `docs/`, may change on the
+marketplace branch without a new version or tag. Executable/active files
+such as `.js`, `.mjs`, `.html` or `.svg`, symlinks, submodules, nested `doc/`
+or `docs/` directories, and files used by tagged runtime modules/assets
+are **not** exempt. License, licence, notice, copying, copyright, authors,
+attribution and patents files, `SHA256SUMS`, and `inventory.json` remain
+protected even inside documentation paths.
+Runtime, skills, manifests, `checksums.json` and all other files must still
+match the immutable tag. Reviewers must also check for dynamic runtime access
+not expressed as a direct path or in release metadata. Existing checksum
+files describe their historical tagged snapshots, not updated documentation
+on `main`. The
+historical builder tag and its original full receipt remain checked
+byte-for-byte; future release receipts should cover only
+protected payload files and declare that scope explicitly. Git commit/tree
+IDs still include documentation, and immutable-tag URLs still display the
+tagged documentation: this is an exception to the marketplace's HEAD-vs-tag
+comparison, **not** a claim of Git signing or a retagging mechanism.
 
 On pull requests to `main`, the **Marketplace release qualification** check
 is reported for every PR, but only runs the targeted Node tests and strict
@@ -77,16 +97,17 @@ default verifier when marketplace, product, verifier, fixture, workflow, or
 release-guide files change. It fetches complete history and tags; it does not
 create release refs or approve a release. A repository administrator must make
 this check required on `main` for CI failures to block merges. Relevant PRs
-remain red until the reviewed receipt and approved builder tags qualify
-against public `origin/main`.
+fail when protected package bytes or release refs do not qualify against public
+`origin/main`.
 
 After approved merge and authorization to install, check the actual
 GitHub-hosted marketplace with fresh, isolated
 `HOME`, `COPILOT_HOME`, and `COPILOT_CACHE_HOME` directories. Confirm that each
 canvas plugin contains its `extensions/<product>` directory and all declared
 skills, and that the builder contributes one skill but no extension. Compare
-installed package bytes to the reviewed immutable tag; an `install` success
-message alone is insufficient. In CLI 1.0.84-5, a
+installed protected package bytes to the reviewed immutable tag; documentation
+on the marketplace branch may differ from the immutable snapshot. An `install`
+success message alone is insufficient. In CLI 1.0.84-5, a
 local-directory marketplace with a remote SHA-pinned plugin source can report
 success while leaving no plugin or skill installed. Do not use a personal
 profile for smoke tests or mistake that local test for remote App verification.

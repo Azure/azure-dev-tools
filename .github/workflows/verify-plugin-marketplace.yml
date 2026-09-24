@@ -30,7 +30,8 @@ jobs:
             scripts/verify-plugin-marketplace.mjs \
             test/plugin-marketplace.test.mjs \
             test/fixtures/marketplace.candidate.json \
-            docs/plugin-marketplace.md; then
+            docs/plugin-marketplace.md \
+            docs/release-process.md; then
             echo "qualified=false" >> "$GITHUB_OUTPUT"
           else
             status=$?
