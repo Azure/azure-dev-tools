@@ -71,8 +71,14 @@ function changed(manifest, update) {
   return clone;
 }
 
+function withReviewedPublicMain(directory) {
+  git(directory, "merge-base", "--is-ancestor", candidate, publicMainAtBranch);
+  git(directory, "update-ref", "refs/remotes/origin/main", publicMainAtBranch);
+}
+
 function withApprovedCandidate(callback) {
   return withClone((directory) => {
+    withReviewedPublicMain(directory);
     const name = "azure-sre-agent";
     const path = `canvases/${name}`;
     const heroPath = `extensions/${name}/assets/preview.png`;
@@ -148,6 +154,7 @@ function withApprovedCandidate(callback) {
 
 function withApprovedNewCanvas(callback) {
   return withClone((directory) => {
+    withReviewedPublicMain(directory);
     const name = "azure-new-canvas";
     const version = "0.1.0";
     const sourceSha = "c".repeat(40);
