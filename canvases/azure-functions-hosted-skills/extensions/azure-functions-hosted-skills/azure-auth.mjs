@@ -14230,12 +14230,12 @@ function createAzureCliSession(runJson, { metadataTtlMs = 5 * 60 * 1e3, now = ()
         force
       );
     },
-    accessToken(subscription, resource, force = false) {
+    accessToken(subscription, resource, force = false, options = {}) {
       const key = `token:${subscription || "default"}:${resource}`;
       return cached(
         key,
         (token) => Math.max(now(), tokenExpiryMs(token) - 5 * 60 * 1e3),
-        () => runJson(["account", "get-access-token", "--resource", resource, "-o", "json"], subscription),
+        () => runJson(["account", "get-access-token", "--resource", resource, "-o", "json"], subscription, options),
         force
       );
     },
@@ -14245,8 +14245,13 @@ function createAzureCliSession(runJson, { metadataTtlMs = 5 * 60 * 1e3, now = ()
     }
   };
 }
-function redactDeploymentOutput(value) {
-  return String(value || "").replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]").replace(
+function redactDeploymentOutput(value, sensitiveValues = []) {
+  let output = String(value || "");
+  for (const sensitiveValue of sensitiveValues) {
+    const secret = String(sensitiveValue || "");
+    if (secret) output = output.split(secret).join("[REDACTED]");
+  }
+  return output.replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]").replace(
     /((?:^|[\s,{])["']?[A-Za-z0-9_-]*(?:token|secret|password|key|connection[_-]?string)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
     "$1[REDACTED]"
   ).replace(/([?&](?:code|key|sig|token|secret)=)[^&\s]+/gi, "$1[REDACTED]");
@@ -14436,11 +14441,30 @@ function createHostedSkillsAzureAuth({
     }
     return bindings.get(key);
   }
-  async function accessToken(subscription, resource, force = false) {
+  async function accessToken(subscription, resource, force = false, options = {}) {
     const { context: context3, scope } = bindingFor(subscription, resource);
     if (force) context3.invalidateTokens();
-    const signal = controller2.signal;
-    const token = await context3.credential.getToken(scope, { abortSignal: signal });
+    const signal = options.signal ? AbortSignal.any([controller2.signal, options.signal]) : controller2.signal;
+    let token;
+    const acquisition = context3.credential.getToken(scope, { abortSignal: signal });
+    if (options.signal) {
+      let rejectAbort;
+      const aborted = new Promise((_resolve, reject) => {
+        rejectAbort = () => reject(Object.assign(new Error("Azure token acquisition was cancelled."), {
+          name: "AbortError",
+          code: "ABORT_ERR"
+        }));
+      });
+      if (options.signal.aborted) rejectAbort();
+      else options.signal.addEventListener("abort", rejectAbort, { once: true });
+      try {
+        token = await Promise.race([acquisition, aborted]);
+      } finally {
+        options.signal.removeEventListener("abort", rejectAbort);
+      }
+    } else {
+      token = await acquisition;
+    }
     context3.assertActive();
     if (signal.aborted) throw new AuthError("auth-invalidated", "The Azure profile changed. Retry the operation.");
     if (!token?.token || !Number.isFinite(token.expiresOnTimestamp)) {
@@ -14589,9 +14613,9 @@ function createLegacyHostedSkillsAzureAuth({
       pickerSnapshot = null;
       session.clear();
     },
-    accessToken: (subscription, resource, force = false) => {
+    accessToken: (subscription, resource, force = false, options = {}) => {
       assertOpen();
-      return session.accessToken(subscription, resource, force);
+      return session.accessToken(subscription, resource, force, options);
     },
     armClient,
     dispose() {

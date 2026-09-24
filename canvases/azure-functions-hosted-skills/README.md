@@ -11,10 +11,11 @@ For the current approved staging build, paste this URL:
 
 `https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
 
-The `latest` tag is intentionally movable and currently resolves to version
-0.4.2. To pin the installation to the exact reviewed bytes instead, use:
+The `latest` tag is intentionally movable and follows the approved staging
+release. This candidate is version 0.5.0. After approval and publication, use
+the following immutable URL to pin its exact reviewed bytes:
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-v0-4-2-f09928d/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
+`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-v0-5-0-7dfe5ac/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
 
 Versioned tags are immutable. Use `latest` for internal evaluation when you
 want approved staging updates; use the versioned URL when a test or report must
@@ -42,8 +43,8 @@ Open Azure Functions Hosted Skills canvas
 - `uv` (preferred) or Python 3.13 or later. When `uv` is available, the canvas
   can provision the required Python version for the generated app.
 - Azurite for the first local run.
-- Access to an existing Microsoft Foundry model deployment or governed AI
-  Gateway model.
+- A compatible model in the current GitHub Copilot session, or access to an
+  existing Microsoft Foundry deployment or governed Azure AI Gateway model.
 
 Open **Doctor → Run Doctor** for a read-only check of the required tools,
 Python package access, Azure CLI sign-in, and extension registration. Azure
@@ -58,8 +59,12 @@ Developer CLI (`azd`) is optional unless you choose **Create Models** or
 2. In **Parameters JSON object**, keep
    `{"repository":"Azure/azure-functions-host"}` or replace it with an
    `owner/repo` value or GitHub repository URL.
-3. Under **MODEL ENDPOINT**, keep **Existing**, choose a subscription, select
-   **Microsoft Foundry** or **AI Gateway**, and select an existing model.
+3. Under **MODEL ENDPOINT**, keep the default **GitHub Copilot** provider and
+   review the selected model. The canvas prefers GPT-5 mini when that model is
+   available in the current session; otherwise it uses the first compatible
+   model in the host-provided catalog. Choose **Microsoft Foundry** or
+   **Azure AI Gateway** only when you want an Azure-backed model; those
+   providers then require an Azure subscription.
 4. Select **Start local function**. The canvas prepares an isolated Python
    environment, installs the app dependencies, starts Azurite when needed, and
    starts the local Functions host.
@@ -67,6 +72,13 @@ Developer CLI (`azd`) is optional unless you choose **Create Models** or
    **Invoke Trigger**.
 6. Review **Agent digest**, **Trigger activity**, **Commands**, and the
    **Local function host log**.
+
+Switching Timer, HTTP, and Queue only changes the selected view; it does not
+rewrite the generated app or restart the local host. A new Queue skill is
+created when you save its instructions, open it in VS Code, start the host, or
+invoke it. Existing apps do not synthesize missing skills. An invalid Queue
+test-input draft stays in the editor when you switch away and back; correct it
+before invoking.
 
 You can also use **Open existing app…** for a local folder that contains
 `host.json` and at least one valid `.agent.md` file. Local Queue invocation
@@ -131,6 +143,21 @@ Select an existing Azure Function App and help me test a supported function.
   scale, or deploy Azure resources, but it can affect the target workload.
 - Generated app files are created in the selected subfolder. Removal stops if
   managed files were changed, to avoid deleting user work.
+
+## Product-usage telemetry
+
+This candidate enables product-usage telemetry automatically. It sends
+code-defined action, outcome, and panel-control metadata, together with the
+numeric GitHub user ID resolved through your existing GitHub CLI sign-in, to
+the public canvas usage service. This build does not offer an opt-in or
+opt-out control for product-usage telemetry.
+
+Prompts, inputs, outputs, resource IDs, repository names, URLs, paths, commands,
+raw errors, tokens, and secrets are excluded from event data. Delivery uses
+HTTPS with bounded, asynchronous, in-memory queues; the usage request does not
+carry an Azure or GitHub bearer token. Telemetry failures do not alter an
+action result. Product-usage telemetry is separate from the optional live
+Application Insights view for a selected Azure Function App.
 
 ## Learn more
 

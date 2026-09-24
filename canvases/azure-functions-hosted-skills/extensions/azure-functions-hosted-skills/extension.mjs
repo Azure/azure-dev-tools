@@ -4,10 +4,10 @@ const require = __canvasCreateRequire(import.meta.url);
 // canvases/azure-functions-hosted-skills/src/extension.mjs
 import { createServer } from "node:http";
 import { spawn as spawn2 } from "node:child_process";
-import { chmod, cp as cp3, mkdir as mkdir5, readdir as readdir6, readFile as readFile9, rename as rename6, rm as rm6, writeFile as writeFile4 } from "node:fs/promises";
-import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
+import { chmod, cp as cp3, mkdir as mkdir6, readdir as readdir6, readFile as readFile10, rename as rename6, rm as rm8, writeFile as writeFile4 } from "node:fs/promises";
+import { createHash as createHash8, randomUUID as randomUUID7, timingSafeEqual } from "node:crypto";
 import net from "node:net";
-import path11 from "node:path";
+import path12 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { canvasUiAssets } from "./assets/toolkit/ui.mjs";
@@ -934,8 +934,13 @@ async function prepareDeploymentProjectCopy(sourceDir, deployDir) {
     await rm(nextDestination, { recursive: true, force: true });
   }
 }
-function redactDeploymentOutput(value) {
-  return String(value || "").replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]").replace(
+function redactDeploymentOutput(value, sensitiveValues = []) {
+  let output = String(value || "");
+  for (const sensitiveValue of sensitiveValues) {
+    const secret = String(sensitiveValue || "");
+    if (secret) output = output.split(secret).join("[REDACTED]");
+  }
+  return output.replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]").replace(
     /((?:^|[\s,{])["']?[A-Za-z0-9_-]*(?:token|secret|password|key|connection[_-]?string)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
     "$1[REDACTED]"
   ).replace(/([?&](?:code|key|sig|token|secret)=)[^&\s]+/gi, "$1[REDACTED]");
@@ -1083,6 +1088,7 @@ async function deployToAzure(dir, {
   onOutput,
   onMilestone,
   env,
+  redactValues = [],
   environmentName,
   subscription,
   location,
@@ -1144,7 +1150,7 @@ async function deployToAzure(dir, {
       windowsVerbatimArguments: azdCommand.windowsVerbatimArguments
     });
     const emitLine = (stream, line) => {
-      const text = redactDeploymentOutput(line);
+      const text = redactDeploymentOutput(line, redactValues);
       if (!text) return;
       const event = { sequence: ++sequence, stream, text, at: Date.now() };
       if (typeof onOutput === "function") onOutput(event);
@@ -1205,6 +1211,212 @@ async function deployToAzure(dir, {
   });
 }
 
+// packages/canvas-toolkit/src/ui/telemetry.mjs
+function observeCanvasUsage({ root = document, enabled = false, controls = {}, send, onDiagnostic } = {}) {
+  if (typeof enabled !== "boolean") throw new TypeError("enabled must be a boolean.");
+  if (!enabled) return Object.freeze({ dispose() {
+  } });
+  if (typeof send !== "function") throw new TypeError("send must be a function.");
+  if (onDiagnostic !== void 0 && typeof onDiagnostic !== "function") throw new TypeError("onDiagnostic must be a function.");
+  const types = /* @__PURE__ */ new Set(["button", "link", "select", "input", "textarea", "details", "other"]);
+  const registry = new Map(Object.entries(controls));
+  for (const [id, type] of registry) {
+    if (!/^[a-z][a-z0-9_.-]{0,79}$/.test(id) || ["__proto__", "constructor", "prototype"].includes(id) || !types.has(type)) {
+      throw new TypeError("Controls must contain only static bounded IDs and supported types.");
+    }
+  }
+  let disposed = false, reported = false;
+  function failed() {
+    if (reported) return;
+    reported = true;
+    if (onDiagnostic) {
+      const reportFailure = () => console.warn("Canvas telemetry diagnostic callback failed.");
+      try {
+        Promise.resolve(onDiagnostic({ code: "interaction_delivery_failed" })).catch(reportFailure);
+      } catch {
+        reportFailure();
+      }
+    } else console.warn("Canvas telemetry interaction delivery failed.");
+  }
+  function listener(event) {
+    if (disposed || !event.isTrusted) return;
+    const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+    const interactive = target?.closest?.('button,a,select,input,textarea,summary,details,form,[role="button"]');
+    const owner = interactive?.closest("[data-metric-id],[id]");
+    const controlId = owner?.getAttribute("data-metric-id") || owner?.id;
+    if (!registry.has(controlId) || root.contains && !root.contains(owner)) return;
+    const tag = interactive.tagName.toLowerCase();
+    const type = interactive.getAttribute("role") === "button" ? "button" : tag === "a" ? "link" : ["summary", "details"].includes(tag) ? "details" : ["button", "select", "input", "textarea"].includes(tag) ? tag : "other";
+    if (registry.get(controlId) !== type) return;
+    try {
+      Promise.resolve(send({ interactionType: event.type, controlId, controlType: type })).catch(failed);
+    } catch {
+      failed();
+    }
+  }
+  const events = ["click", "change", "submit"];
+  for (const type of events) root.addEventListener(type, listener, true);
+  return Object.freeze({
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const type of events) root.removeEventListener(type, listener, true);
+    }
+  });
+}
+
+// packages/function-app-core/src/usage-contract.mjs
+function usage(featureId, featureArea, usageClass = "intentional", mutates = false) {
+  return Object.freeze({ featureId, featureArea, usageClass, mutates });
+}
+function contract(canvasId, host, versions, actions, controls) {
+  return Object.freeze({
+    canvasId,
+    host,
+    versions: Object.freeze([...versions]),
+    actions: Object.freeze(actions),
+    controls: Object.freeze(controls)
+  });
+}
+var FUNCTION_STUDIO_USAGE_CONTRACT = contract(
+  "azure-functions-hosted-skills",
+  "copilot_app",
+  ["0.5.0"],
+  {
+    installation_status: usage("installation.status", "installation"),
+    set_trigger: usage("trigger.select", "authoring"),
+    set_target: usage("runtime.target.select", "execution"),
+    set_timer_schedule: usage("trigger.timer.schedule", "authoring"),
+    start_local_function: usage("runtime.local.start", "execution", "intentional", true),
+    run_doctor: usage("diagnostics.run", "diagnostics"),
+    refresh_model_bindings: usage("model.binding.refresh", "model"),
+    bind_existing_model: usage("model.binding.select", "model", "intentional", true),
+    explain_model_creation: usage("model.creation.explain", "model"),
+    stop_local_function: usage("runtime.local.stop", "execution", "intentional", true),
+    select_azure_subscription: usage("azure.subscription.select", "azure"),
+    select_azure_function_app: usage("azure.function_app.select", "azure"),
+    select_azure_function: usage("azure.function.select", "azure"),
+    invoke_trigger: usage("function.invoke", "execution", "intentional", true),
+    run_load_test: usage("function.load_test.start", "testing", "intentional", true),
+    stop_load_test: usage("function.load_test.stop", "testing", "intentional", true),
+    clear_invocations: usage("activity.clear", "activity", "intentional", true),
+    registration_completed: usage("app.registration.complete", "integration", "automatic")
+  },
+  {
+    "docs-link": "link",
+    "feedback-link": "link",
+    "doctor-toggle": "button",
+    "doctor-run": "button",
+    "target-local": "button",
+    "target-azure": "button",
+    "source-customize": "button",
+    "source-create": "button",
+    "source-cancel": "button",
+    "source-remove": "button",
+    "source-relative-path": "input",
+    "open-existing-app": "button",
+    "return-generated-app": "button",
+    "existing-app-path": "input",
+    "existing-app-confirm": "button",
+    "existing-app-cancel": "button",
+    "model-binding-panel": "details",
+    "model-mode-existing": "button",
+    "model-mode-create": "button",
+    "model-subscription": "select",
+    "model-subscription-trigger": "button",
+    "azure-subscription-trigger": "button",
+    "subscription-picker-open": "button",
+    "subscription-picker-back": "button",
+    "subscription-picker-refresh": "button",
+    "subscription-picker-close": "button",
+    "subscription-picker-search": "input",
+    "subscription-picker-bulk": "button",
+    "subscription-picker-item": "input",
+    "subscription-picker-choose": "button",
+    "subscription-picker-continue": "button",
+    "subscription-picker-cancel": "button",
+    "subscription-picker-apply": "button",
+    "model-source": "select",
+    "model-resource": "select",
+    "model-model": "select",
+    "model-refresh": "button",
+    "model-create-confirm": "button",
+    "azure-function-app-panel": "details",
+    sub: "select",
+    app: "select",
+    "refresh-apps": "button",
+    "open-vscode": "button",
+    "refresh-source": "button",
+    "register-app-project": "button",
+    "local-toggle": "button",
+    "deploy-azure": "button",
+    "deployment-preflight": "button",
+    "deployment-cancel": "button",
+    "deployment-output": "details",
+    "trigger-option": "button",
+    "trigger-test-input": "textarea",
+    "parameters-panel": "details",
+    "http-request-headers": "textarea",
+    "http-request-body": "textarea",
+    "timer-cadence": "select",
+    "timer-time": "input",
+    "timer-weekday": "select",
+    "timer-weekly-time": "input",
+    "timer-minute": "input",
+    instr: "details",
+    "hosted-skill-picker": "select",
+    "prompt-preview": "textarea",
+    "edit-instructions": "button",
+    invoke: "button",
+    "clear-invocations": "button",
+    "open-app-insights": "button",
+    "load-test-toggle": "button",
+    "lt-target": "select",
+    "lt-duration": "input",
+    "lt-concurrency": "select",
+    "lt-rps": "input",
+    "telemetry-panel": "details",
+    "telemetry-toggle": "button",
+    "local-log-wrap": "details",
+    cmdlog: "details",
+    "command-copy": "button"
+  }
+);
+var FUNCTION_APP_OPERATIONS_USAGE_CONTRACT = contract(
+  "azure-functions-hosted-skills-function-app-operations",
+  "mcp_app",
+  ["0.2.0"],
+  {
+    open_function_studio: usage("canvas.open", "navigation"),
+    view_function_state: usage("state.view", "navigation", "automatic"),
+    diagnose_function_auth: usage("diagnostics.auth", "diagnostics"),
+    list_function_subscriptions: usage("azure.subscription.list", "azure", "automatic"),
+    list_function_apps: usage("azure.function_app.list", "azure", "automatic"),
+    select_function_app: usage("azure.function_app.select", "azure"),
+    list_deployed_triggers: usage("azure.trigger.list", "azure"),
+    prepare_function_invocation: usage("function.invoke.prepare", "execution"),
+    invoke_deployed_function: usage("function.invoke", "execution", "intentional", true),
+    observe_application_insights: usage("application_insights.observe", "observability", "automatic")
+  },
+  {
+    "subscription-select": "select",
+    "app-select": "select",
+    refresh: "button",
+    "function-select": "select",
+    "invoke-input": "input",
+    invoke: "button",
+    observe: "button"
+  }
+);
+var FUNCTION_APP_USAGE_CONTRACTS = Object.freeze([
+  FUNCTION_STUDIO_USAGE_CONTRACT,
+  FUNCTION_APP_OPERATIONS_USAGE_CONTRACT
+]);
+
+// canvases/azure-functions-hosted-skills/src/usage-metadata.mjs
+var FUNCTION_STUDIO_ACTION_USAGE = FUNCTION_STUDIO_USAGE_CONTRACT.actions;
+var FUNCTION_STUDIO_USAGE_CONTROLS = FUNCTION_STUDIO_USAGE_CONTRACT.controls;
+
 // canvases/azure-functions-hosted-skills/src/canonical-renderer.mjs
 var HOSTED_SKILLS_RENDERER_FEATURES = Object.freeze([
   "doctor",
@@ -1259,6 +1471,23 @@ function retainedHostedSkillsClient() {
     $('status').textContent = result.message || (result.ok ? '' : 'Request failed.');
     return result;
   };
+  let modelCreateTabActive = false;
+  function setModelTab(create) {
+    if (create && $('model-mode-create')?.hidden) return;
+    modelCreateTabActive = create;
+    for (const [tab, selected] of [
+      [$('model-mode-existing'), !create],
+      [$('model-mode-create'), create],
+    ]) {
+      if (!tab) continue;
+      tab.classList.toggle('on', selected);
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    $('model-existing-view').hidden = create;
+    if ($('model-create-view')) $('model-create-view').hidden = !create;
+    if (create) post('/models/create-plan');
+  }
   function render(next) {
     state = next;
     const doctor = next.doctor;
@@ -1273,23 +1502,43 @@ function retainedHostedSkillsClient() {
     $('return-generated-app').hidden = !attached;
     if (document.activeElement !== $('source-relative-path')) $('source-relative-path').value = source.relativePath || '';
     const binding = next.modelBinding || {};
+    const provider = binding.source || 'copilot';
+    const copilot = provider === 'copilot';
     $('model-subscription').innerHTML = (next.azure?.subscriptions || []).map((item) => '<option value="' + esc(item.id) + '">' + esc(item.name) + '</option>').join('') || '<option value="">No enabled subscriptions found</option>';
     $('model-subscription').value = binding.subscription || next.azure?.subscription || '';
-    $('model-source').value = 'foundry';
+    $('model-source').value = provider;
+    $('model-subscription-legacy').hidden = copilot;
+    if (copilot) $('model-subscription-legacy').style.setProperty('display', 'none', 'important');
+    else $('model-subscription-legacy').style.removeProperty('display');
+    $('model-subscription').required = !copilot;
+    $('model-resource-field').hidden = copilot;
+    if (copilot) $('model-resource-field').style.setProperty('display', 'none', 'important');
+    else $('model-resource-field').style.removeProperty('display');
     $('model-resource').innerHTML = (binding.foundry || []).map((item) => '<option value="' + esc(item.id) + '">' + esc(item.label) + '</option>').join('') || '<option value="">No Foundry projects discovered</option>';
     $('model-resource').value = binding.resourceId || '';
     const resource = (binding.foundry || []).find((item) => item.id === binding.resourceId) || (binding.foundry || [])[0];
-    $('model-model').innerHTML = (resource?.models || []).map((item) => '<option value="' + esc(item.id) + '">' + esc(item.label) + '</option>').join('') || '<option value="">No deployed models</option>';
+    const models = copilot ? (binding.copilotModels || []) : (resource?.models || []);
+    $('model-model').innerHTML = models.map((item) => '<option value="' + esc(item.id) + '">' + esc(item.label || item.name || item.id) + '</option>').join('') || '<option value="">No compatible models</option>';
     $('model-model').value = binding.modelId || '';
     $('model-binding-tag').textContent = binding.loading ? 'discovering' : binding.configured ? 'ready' : (binding.readiness?.state || 'select model').replace(/-/g, ' ');
     const subscription = (next.azure?.subscriptions || []).find((item) => item.id === (binding.subscription || next.azure?.subscription));
     const activeResource = (binding.foundry || []).find((item) => item.id === binding.activeResourceId);
-    const activeModel = activeResource?.models?.find((item) => item.id === binding.activeModelId);
+    const activeModel = copilot
+      ? (binding.copilotModels || []).find((item) => item.id === binding.activeModelId)
+      : activeResource?.models?.find((item) => item.id === binding.activeModelId);
     $('model-summary-detail').textContent = binding.configured
-      ? [subscription?.name, activeResource?.label, activeModel?.label || binding.activeModelId].filter(Boolean).join(' · ')
-      : binding.error || binding.readiness?.message || binding.status || binding.activeLabel || 'Choose a Microsoft Foundry model.';
+      ? [copilot ? '' : subscription?.name, activeResource?.label, activeModel?.label || activeModel?.name || binding.activeModelId].filter(Boolean).join(' · ')
+      : binding.error || binding.readiness?.message || binding.status || binding.activeLabel || 'Choose a model.';
     $('model-status').textContent = binding.error || binding.status || binding.activeLabel || '';
     $('model-refresh').disabled = Boolean(binding.loading);
+    if ($('model-mode-create')) {
+      if (copilot && modelCreateTabActive) {
+        const focused = document.activeElement === $('model-mode-create');
+        setModelTab(false);
+        if (focused) $('model-mode-existing').focus();
+      }
+      $('model-mode-create').hidden = copilot;
+    }
     const create = next.modelCreate || {};
     $('model-create-resources').innerHTML = (create.resources || []).map((item) => '<li><strong>' + esc(item.kind) + '</strong>: ' + esc(item.note) + '</li>').join('') || '<li>Plan loading...</li>';
     $('model-create-alternatives').textContent = (create.alternatives || []).join(' ');
@@ -1372,15 +1621,26 @@ function retainedHostedSkillsClient() {
     await post('/source/create', { mode: 'current', relativePath: $('source-relative-path').value || '' });
   });
   $('model-subscription').addEventListener('change', () => post('/models/select-subscription', { subscription: $('model-subscription').value }));
-  $('model-source').addEventListener('change', () => post('/models/select-source', { source: 'foundry' }));
+  $('model-source').addEventListener('change', () => post('/models/select-source', { source: $('model-source').value }));
   $('model-resource').addEventListener('change', () => {
     const resource = (state?.modelBinding?.foundry || []).find((item) => item.id === $('model-resource').value);
     post('/models/select-choice', { resourceId: $('model-resource').value, modelId: resource?.models?.[0]?.id || '' });
   });
   $('model-model').addEventListener('change', () => post('/models/select-choice', { resourceId: $('model-resource').value, modelId: $('model-model').value }));
   $('model-refresh').addEventListener('click', () => post('/models/refresh'));
-  $('model-mode-existing').addEventListener('click', () => { $('model-existing-view').style.display = ''; $('model-create-view').hidden = true; });
-  $('model-mode-create').addEventListener('click', () => { $('model-existing-view').style.display = 'none'; $('model-create-view').hidden = false; post('/models/create-plan'); });
+  $('model-mode-existing').addEventListener('click', () => setModelTab(false));
+  $('model-mode-create')?.addEventListener('click', () => setModelTab(true));
+  $('model-mode-tabs').addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || event.target.getAttribute('role') !== 'tab') return;
+    const tabs = [...$('model-mode-tabs').querySelectorAll('[role="tab"]:not([hidden]):not(:disabled)')];
+    if (!tabs.length) return;
+    const current = Math.max(0, tabs.indexOf(document.activeElement));
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+  });
   $('model-create-confirm').addEventListener('click', () => post('/models/create', { confirm: true }));
   $('open-vscode').addEventListener('click', async () => { try { await flushInstructions(); } catch { return; } await post('/open-vscode'); });
   $('open-existing-app').addEventListener('click', async () => {
@@ -1442,7 +1702,7 @@ function createHostedSkillsRendererProfile({
     features: Object.freeze(Object.fromEntries(HOSTED_SKILLS_RENDERER_FEATURES.map((feature) => [feature, features[feature]])))
   });
 }
-function renderHostedSkillsHtml(profile) {
+function renderHostedSkillsHtml(profile, { usageMetricsEnabled = false } = {}) {
   const {
     documentationUrl: DOC_URL2,
     minPythonLabel: MIN_PYTHON_LABEL2,
@@ -1528,6 +1788,10 @@ ${withToolkitSubscriptions ? '<link rel="stylesheet" href="./canvas-ui/styles.cs
   .scope-note { margin: .45rem 0 .8rem; max-width: 760px; }
 
   .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .3rem 0 .8rem; }
+  .trigger-tabs { max-width: 100%; margin: .3rem 0 .8rem; overflow-x: auto; }
+  .trigger-tabs button { flex: 0 0 auto; white-space: nowrap; }
+  .trigger-tabs button.nyi { cursor: not-allowed; opacity: .55; }
+  .trigger-tabs .nyi-tag { font-size: .6rem; margin-left: 5px; text-transform: uppercase; letter-spacing: .3px; }
   .trig { font-size: .76rem; font-weight: 600; border-radius: 999px; padding: 5px 12px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
   .trig.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   .trig.nyi { cursor: not-allowed; opacity: .55; }
@@ -1753,7 +2017,7 @@ ${withDeployment ? `  #deploy-azure svg { color: var(--accent); }` : ""}
   .model-binding .model-summary-detail { color: var(--muted); flex: 1 1 220px; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
   .model-binding .model-summary-detail.err { color: var(--bad); }
   .model-binding > summary .tag { margin-left: auto; flex: 0 0 auto; }
-  .model-binding .endpoint-mode { margin-bottom: .8rem; }
+  .model-binding .endpoint-mode { max-width: 100%; margin-bottom: .8rem; overflow-x: auto; }
   .model-binding .fields { align-items: end; }
   .model-binding .fields label { flex: 1 1 180px; }
   .model-binding .fields select { width: 100%; min-width: 160px; }
@@ -1865,7 +2129,7 @@ ${withLoadTest || withDeployment || withTelemetry ? `  .load-terminal { margin: 
 ` : ""}</style>
 ${withCoreAiAzureProfile ? '<link rel="stylesheet" href="./canvas-ui/profiles/coreai-azure.css" />' : ""}
 </head>
-<body${withCoreAiAzureProfile ? ' class="canvas-profile-coreai-azure"' : ""}>
+<body${withCoreAiAzureProfile ? ' class="canvas-profile-coreai-azure"' : ""} data-usage-metrics-enabled="${usageMetricsEnabled}">
   <div class="wrap">
     <div class="topline">
       <span class="badge">Initial Concept</span>
@@ -1879,7 +2143,7 @@ ${withCoreAiAzureProfile ? '<link rel="stylesheet" href="./canvas-ui/profiles/co
     <h1 class="product-heading"><img class="azure-service-icon" src="./assets/Function-Apps.svg" alt="" aria-hidden="true"><span>${displayName}</span></h1>
     <p class="sub">
       Build and run <strong>Hosted Skills</strong> in a local Function App${withAzureExistingApp ? ", or select an existing Azure Function App to invoke remotely." : "."}
-      <a href="${DOC_URL2}" target="_blank" rel="noreferrer">Docs</a>
+      <a href="${DOC_URL2}" target="_blank" rel="noreferrer" data-metric-id="docs-link">Docs</a>
     </p>
 
     <div class="doctor-panel" id="doctor-panel" hidden>
@@ -1928,37 +2192,38 @@ ${withCoreAiAzureProfile ? '<link rel="stylesheet" href="./canvas-ui/profiles/co
         <span class="tag" id="model-binding-tag">discovering</span>
       </summary>
       <div class="body">
-        <div class="seg endpoint-mode" role="tablist" aria-label="Model endpoint source">
-          <button class="on" id="model-mode-existing" aria-selected="true">Existing</button>
-${withModelCreation ? '          <button id="model-mode-create" aria-selected="false">Create Models</button>' : ""}
+        <div class="seg canvas-nav-tabs endpoint-mode" id="model-mode-tabs" role="tablist" aria-label="Model endpoint source">
+          <button type="button" role="tab" class="on" id="model-mode-existing" aria-selected="true" aria-controls="model-existing-view" tabindex="0">Existing</button>
+${withModelCreation ? '          <button type="button" role="tab" id="model-mode-create" aria-selected="false" aria-controls="model-create-view" tabindex="-1">Create Models</button>' : ""}
         </div>
-        <div id="model-existing-view">
+        <div id="model-existing-view" role="tabpanel" aria-labelledby="model-mode-existing" tabindex="0">
           <div class="fields">
-${withToolkitSubscriptions ? `            <div class="subscription-picker-field" id="model-subscription-toolkit">
+            <label id="model-provider-field">Provider
+              <select id="model-source">
+                <option value="copilot">GitHub Copilot</option>
+                <option value="foundry">Microsoft Foundry</option>${withAiGateway ? '\n                <option value="gateway">Azure AI Gateway</option>' : ""}
+              </select>
+            </label>
+${withToolkitSubscriptions ? `            <div class="subscription-picker-field" id="model-subscription-toolkit" hidden>
               <span>Subscription</span>
               <button type="button" id="model-subscription-trigger">Choose subscription</button>
               <div id="model-subscription-status"></div>
-            </div>` : '            <label id="model-subscription-legacy">Subscription<select id="model-subscription"></select></label>'}
-            <label>Provider
-              <select id="model-source">
-                <option value="foundry">Microsoft Foundry</option>${withAiGateway ? '\n                <option value="gateway">AI Gateway</option>' : ""}
-              </select>
-            </label>
-            <label>${withAiGateway ? "Project or gateway" : "Project"}<select id="model-resource"></select></label>
-            <label>Model<select id="model-model"></select></label>
+            </div>` : '            <label id="model-subscription-legacy" hidden>Subscription<select id="model-subscription"></select></label>'}
+            <label id="model-resource-field" hidden>${withAiGateway ? "Project or gateway" : "Project"}<select id="model-resource"></select></label>
+            <label id="model-model-field">Model<select id="model-model"></select></label>
           </div>
           <div class="model-actions">
             <button class="btn ghost" id="model-refresh">Refresh</button>
             <span class="model-status" id="model-status"></span>
           </div>
         </div>
-${withModelCreation ? `        <div id="model-create-view" hidden>
+${withModelCreation ? `        <div id="model-create-view" role="tabpanel" aria-labelledby="model-mode-create" tabindex="0" hidden>
           <p class="inline-note">${withAiGateway ? "Opinionated setup: create the Foundry project and two preconfigured model deployments used by the AI Gateway template with safe defaults. This is not a full portal customization experience." : "Opinionated setup: create two preconfigured model deployments with safe defaults in the selected Microsoft Foundry account. This is not a full portal customization experience."}</p>
           <p class="inline-note">Only the explicit <strong>Create Models</strong> button starts creation. The operation may create a resource group, Foundry account and project, two model deployments, and the role assignments required by the generated app. No Function App or hosting resources are deployed.</p>
           <ul class="model-create-resources" id="model-create-resources"></ul>
           <div class="model-actions">
             <button class="btn" id="model-create-confirm">Create Models</button>
-            <span class="model-status" id="model-create-status"></span>
+            <span class="model-status" id="model-create-status" role="status" aria-live="polite"></span>
           </div>
           <p class="inline-note model-create-alt" id="model-create-alternatives"></p>
         </div>` : ""}
@@ -1973,9 +2238,9 @@ ${withAzureExistingApp ? `    <details class="panel model-binding canvas-accordi
         <div class="fields">
 ${withToolkitSubscriptions ? `          <div class="subscription-picker-field" id="azure-subscription-toolkit">
             <span>Subscription</span>
-            <button type="button" id="azure-subscription-trigger">Choose subscription</button>
+            <button type="button" id="azure-subscription-trigger" aria-required="true">Choose subscription</button>
             <div id="azure-subscription-status"></div>
-          </div>` : '          <label id="azure-subscription-legacy">Subscription<select id="sub" title="Azure subscription"></select></label>'}
+          </div>` : '          <label id="azure-subscription-legacy">Subscription<select id="sub" title="Azure subscription" required></select></label>'}
           <label>Function App<select id="app" title="Azure Function App"></select></label>
         </div>
         <div class="model-actions">
@@ -2019,7 +2284,7 @@ ${withDeployment ? `    <details class="cmdlog deployment-output canvas-accordio
     </details>` : ""}
 
     <h2 class="sec" id="trigger-section-label">Trigger</h2>
-    <div class="chips" id="triggers"></div>
+    <div class="seg canvas-nav-tabs trigger-tabs" id="triggers" role="tablist" aria-labelledby="trigger-section-label"></div>
     <div class="trigger-test-input" id="trigger-test-input-wrap" hidden>
       <label><span id="trigger-test-input-label">Trigger/test input (optional)</span>
         <textarea id="trigger-test-input" maxlength="65536" placeholder="Optional input for this test only"></textarea>
@@ -2158,7 +2423,7 @@ ${withLoadTest ? `    <div class="panel" id="load-test-panel" style="display:non
 
     <div class="footer-meta">
       <div class="build-stamp">${displayName} v${STUDIO_VERSION2} &middot; rev ${STUDIO_REVISION2} &middot; ${PLUGIN_ID2}</div>
-      <a class="feedback-link" href="${feedbackUrl.replaceAll("&", "&amp;")}" target="_blank" rel="noopener noreferrer">Send feedback</a>
+      <a class="feedback-link" href="${feedbackUrl.replaceAll("&", "&amp;")}" target="_blank" rel="noopener noreferrer" data-metric-id="feedback-link">Send feedback</a>
     </div>
   </div>
 
@@ -2204,7 +2469,7 @@ ${commandClientScript()}
     const currentIsValid = inventory.some((item) => item.id === select.value);
     if (document.activeElement === select && currentIsValid) return;
     select.innerHTML = inventory.length
-      ? inventory.map((item) => '<option value="' + esc(item.id) + '"' + (item.id === selectedId ? ' selected' : '') + '>' + esc(item.label) + '</option>').join('')
+      ? inventory.map((item) => '<option value="' + esc(item.id) + '"' + (item.id === selectedId ? ' selected' : '') + '>' + esc(item.label || item.name || item.id) + '</option>').join('')
       : '<option value="">' + esc(emptyLabel) + '</option>';
   }
   function inlineMarkdown(s) {
@@ -2302,8 +2567,10 @@ ${commandClientScript()}
   const modelBindingTag = document.getElementById('model-binding-tag');
   const modelSummaryDetail = document.getElementById('model-summary-detail');
   const modelSubscription = document.getElementById('model-subscription');
+  const modelSubscriptionField = document.getElementById('model-subscription-toolkit') || document.getElementById('model-subscription-legacy');
   const modelSource = document.getElementById('model-source');
   const modelResource = document.getElementById('model-resource');
+  const modelResourceField = document.getElementById('model-resource-field');
   const modelModel = document.getElementById('model-model');
   const modelRefresh = document.getElementById('model-refresh');
   const modelStatus = document.getElementById('model-status');
@@ -2459,6 +2726,8 @@ ${commandClientScript()}
     });
   }
   let triggerInputKey = '';
+  const localTriggerDrafts = new Map();
+  let localHttpDraft = null;
   let httpRequestInputKey = '';
   let httpDraftRevision = 0;
   let httpDraftRequest = 0;
@@ -2503,7 +2772,7 @@ ${commandClientScript()}
         const tag = fn.supportStatus === 'conditional'
           ? '<span class="nyi-tag">RBAC</span>'
           : fn.supportsInvoke ? '' : '<span class="nyi-tag">unsupported</span>';
-        return '<button class="trig' + on + unsupported + '" data-function="' + esc(fn.name) + '" title="' + esc(fn.hostedSkillNote + '. ' + fn.guidance) + '">' + esc(fn.name + ' \xB7 ' + fn.label) + tag + '</button>';
+        return '<button class="trig' + on + unsupported + '"${usageMetricsEnabled ? ' data-metric-id="trigger-option"' : ""} data-function="' + esc(fn.name) + '" title="' + esc(fn.hostedSkillNote + '. ' + fn.guidance) + '">' + esc(fn.name + ' \xB7 ' + fn.label) + tag + '</button>';
       }).join('') || '<span class="inline-note">Select an app to discover its deployed functions and trigger bindings.</span>';
       triggerBadge.textContent = selected ? ('Function: ' + selected.name + ' \xB7 ' + selected.label) : 'Trigger: none';
     } else {
@@ -2514,8 +2783,13 @@ ${commandClientScript()}
         const nyi = unavailable ? ' nyi' : '';
         const tag = unavailable ? '<span class="nyi-tag">NYI</span>' : '';
         const title = unavailable ? 'Not implemented in this canvas yet' : 'Manually invoke via ' + t.label;
-        return '<button class="trig' + on + nyi + '" data-id="' + t.id + '" title="' + title + '"' + (unavailable || !state.sourceWorkspace.materialized || state.azdOperation.active ? ' disabled' : '') + '>' + t.label + tag + '</button>';
+        return '<button type="button" role="tab" class="trig' + on + nyi + '"${usageMetricsEnabled ? ' data-metric-id="trigger-option"' : ""} data-id="' + t.id + '" aria-selected="' + String(t.id === state.trigger) + '" tabindex="' + (t.id === state.trigger ? '0' : '-1') + '" title="' + title + '"' + (unavailable || !state.sourceWorkspace.materialized || state.azdOperation.active ? ' disabled' : '') + '>' + t.label + tag + '</button>';
       }).join('');
+      if (triggerFocusId) {
+        const focusTarget = triggersEl.querySelector('[data-id="' + triggerFocusId + '"]:not(:disabled)');
+        triggerFocusId = '';
+        if (focusTarget) queueMicrotask(() => focusTarget.focus({ preventScroll: true }));
+      }
       triggerBadge.textContent = 'Trigger: ' + ((state.triggerTypes.find((t) => t.id === state.trigger) || {}).label || 'none');
     }
     const showTimerSchedule = state.trigger === 'timer' && state.target === 'local';
@@ -2583,13 +2857,21 @@ ${commandClientScript()}
   function renderModelBinding(state) {
     const binding = state.modelBinding || {};
     const readiness = binding.readiness || {};
-    const resources = binding.source === 'gateway' ? (binding.gateways || []) : (binding.foundry || []);
+    const source = binding.source || 'copilot';
+    const copilot = source === 'copilot';
+    const resources = source === 'gateway' ? (binding.gateways || []) : (binding.foundry || []);
     const resource = resources.find((item) => item.id === binding.resourceId) || resources[0];
-    const model = resource && (resource.models.find((item) => item.id === binding.modelId) || resource.models[0]);
+    const selectableModels = copilot ? (binding.copilotModels || []) : (resource?.models || []);
+    const model = selectableModels.find((item) => item.id === binding.modelId) || selectableModels[0];
     const activeResources = binding.activeSource === 'gateway' ? (binding.gateways || []) : (binding.foundry || []);
     const activeResource = activeResources.find((item) => item.id === binding.activeResourceId);
     const activeModel = activeResource && activeResource.models.find((item) => item.id === binding.activeModelId);
-    const activeModelName = activeModel ? (activeModel.label || activeModel.name || activeModel.id) : binding.activeModelId;
+    const activeCopilotModel = binding.activeSource === 'copilot'
+      ? (binding.copilotModels || []).find((item) => item.id === binding.activeModelId)
+      : null;
+    const activeModelName = activeCopilotModel
+      ? (activeCopilotModel.name || activeCopilotModel.id)
+      : activeModel ? (activeModel.label || activeModel.name || activeModel.id) : binding.activeModelId;
     const activeResourceName = activeResource
       ? (activeResource.name || activeResource.label)
       : String(binding.activeResourceId || '').split('/').filter(Boolean).pop();
@@ -2613,9 +2895,31 @@ ${commandClientScript()}
     if (!toolkitSubscriptionsEnabled && modelSubscription) {
       updateSubscriptionSelect(modelSubscription, state.azure.subscriptions, binding.subscription);
     }
-    modelSource.value = binding.source || 'foundry';
+    modelSource.value = source;
+    modelSubscriptionField.hidden = copilot;
+    if (copilot) modelSubscriptionField.style.setProperty('display', 'none', 'important');
+    else modelSubscriptionField.style.removeProperty('display');
+    modelSubscriptionField.setAttribute('aria-hidden', String(copilot));
+    if (modelSubscription) modelSubscription.required = !copilot;
+    document.getElementById('model-subscription-trigger')?.setAttribute('aria-required', String(!copilot));
+    modelResourceField.hidden = copilot;
+    if (copilot) modelResourceField.style.setProperty('display', 'none', 'important');
+    else modelResourceField.style.removeProperty('display');
     updateModelSelect(modelResource, resources, (resource || {}).id || '', 'No existing resources found');
-    updateModelSelect(modelModel, resource ? resource.models : [], (model || {}).id || '', 'No deployed models found');
+    updateModelSelect(
+      modelModel,
+      selectableModels,
+      (model || {}).id || '',
+      copilot ? 'No compatible Copilot models found' : 'No deployed models found'
+    );
+    if (modelModeCreate) {
+      if (copilot && modelCreateTabActive) {
+        const focused = document.activeElement === modelModeCreate;
+        setModelTab(false);
+        if (focused) modelModeExisting.focus();
+      }
+      modelModeCreate.hidden = copilot;
+    }
     modelBindingTag.textContent = binding.loading ? 'binding' : binding.configured ? 'ready' : (readiness.state || 'select model').replace(/-/g, ' ');
     modelBindingTag.className = 'tag' + (binding.configured ? ' ok' : '');
     modelStatus.textContent = binding.error || binding.gatewayActionError || binding.status || binding.activeLabel || readiness.message || '';
@@ -2629,17 +2933,34 @@ ${commandClientScript()}
   // stays purely a client-side view toggle.
   let modelCreateTabActive = false;
   function setModelTab(create) {
+    if (create && (modelModeCreate.hidden || modelModeCreate.disabled)) return;
     modelCreateTabActive = create;
     modelModeExisting.classList.toggle('on', !create);
     modelModeExisting.setAttribute('aria-selected', String(!create));
+    modelModeExisting.tabIndex = create ? -1 : 0;
     modelModeCreate.classList.toggle('on', create);
     modelModeCreate.setAttribute('aria-selected', String(create));
-    modelExistingView.style.display = create ? 'none' : '';
+    modelModeCreate.tabIndex = create ? 0 : -1;
+    modelExistingView.hidden = create;
     modelCreateView.hidden = !create;
     if (create) postJson('/models/create-plan');
   }
   modelModeExisting.addEventListener('click', () => setModelTab(false));
   modelModeCreate.addEventListener('click', () => setModelTab(true));
+  document.getElementById('model-mode-tabs').addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || event.target.getAttribute('role') !== 'tab') return;
+    const tabs = [...document.querySelectorAll('#model-mode-tabs [role="tab"]:not([hidden]):not(:disabled)')];
+    if (!tabs.length) return;
+    const current = Math.max(0, tabs.indexOf(document.activeElement));
+    const next = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+  });
 
   function renderModelCreate(state) {
     const create = state.modelCreate || {};
@@ -2755,7 +3076,7 @@ ${commandClientScript()}
     const modelSubscriptionTrigger = document.getElementById('model-subscription-trigger');
     if (modelSubscriptionTrigger) modelSubscriptionTrigger.disabled = attached || Boolean(state.modelBinding?.loading);
     modelSource.disabled = attached || Boolean(state.modelBinding?.loading);
-    modelResource.disabled = attached || Boolean(state.modelBinding?.loading);
+    modelResource.disabled = attached || Boolean(state.modelBinding?.loading) || state.modelBinding?.source === 'copilot';
     modelModel.disabled = attached || Boolean(state.modelBinding?.loading);
     const localControl = localRuntimeControlState(state);
     modelEndpointLabel.hidden = showAzure;
@@ -2905,7 +3226,7 @@ ${commandClientScript()}
     if (binding.loading) return { blocked: true, reason: 'Still binding the selected model - try again in a moment.', focus: null };
     if (!boundToActive) {
       const readiness = binding.readiness || {};
-      const reason = readiness.message || 'No model endpoint is bound yet. Pick Subscription/Provider/Project/Model above, or use Create Models.';
+      const reason = readiness.message || 'No model is selected yet. Pick Provider and Model above; Azure-backed providers also require Subscription and Project or gateway.';
       return { blocked: true, reason, focus: 'model' };
     }
     return { blocked: false };
@@ -2925,8 +3246,13 @@ ${commandClientScript()}
         : selectedAzure && selectedAzure.kind !== 'http' ? 'azure:' + selectedAzure.kind + ':' + selectedAzure.name : '';
     triggerTestInputWrap.hidden = !(queueInput || connectorInput || (selectedAzure && !httpInput));
     if (nextTriggerInputKey !== triggerInputKey) {
+      if (triggerInputKey === 'local:queue:local' || triggerInputKey === 'local:connector') {
+        localTriggerDrafts.set(triggerInputKey, triggerTestInput.value);
+      }
       triggerInputKey = nextTriggerInputKey;
-      triggerTestInput.value = queueInput
+      triggerTestInput.value = localTriggerDrafts.has(nextTriggerInputKey)
+        ? localTriggerDrafts.get(nextTriggerInputKey)
+        : queueInput
         ? (((state.triggerSupport || {}).queue || {}).message || '')
         : connectorInput
           ? (((state.triggerSupport || {}).connector || {}).payload || '')
@@ -2957,12 +3283,20 @@ ${commandClientScript()}
     httpRequestEditor.hidden = false;
     const draft = state.httpRequestDraft || {};
     if (nextHttpRequestInputKey !== httpRequestInputKey) {
+      if (httpRequestInputKey === 'local:http:local') {
+        localHttpDraft = { headersText: httpRequestHeaders.value, bodyText: httpRequestBody.value };
+      }
       clearTimeout(httpDraftTimer);
       httpDraftRevision++;
       editedHttpFields.clear();
       httpRequestInputKey = nextHttpRequestInputKey;
-      httpRequestHeaders.value = draft.headersText == null ? '{}' : draft.headersText;
-      httpRequestBody.value = draft.bodyText == null ? '' : draft.bodyText;
+      const restored = nextHttpRequestInputKey === 'local:http:local' && localHttpDraft ? localHttpDraft : draft;
+      httpRequestHeaders.value = restored.headersText == null ? '{}' : restored.headersText;
+      httpRequestBody.value = restored.bodyText == null ? '' : restored.bodyText;
+      if (restored === localHttpDraft) {
+        editedHttpFields.add(httpRequestHeaders);
+        editedHttpFields.add(httpRequestBody);
+      }
     } else {
       // State hydration must not take ownership back from a locally edited field on blur.
       if (!editedHttpFields.has(httpRequestHeaders) && draft.headersText != null &&
@@ -3056,7 +3390,7 @@ ${commandClientScript()}
       const ms = c.ms != null ? '<span class="cms">' + c.ms + 'ms</span>' : '';
       const note = c.note ? '<span class="cnote">' + esc(c.note) + '</span>' : '';
       const purpose = c.purpose ? '<div class="cpurpose">' + esc(c.purpose) + '</div>' : '';
-      return '<div class="cmd ' + c.status + '"><div class="chead"><span class="ckind ' + c.kind + '">' + badge + '</span><span class="ctitle">' + esc(c.title || '') + '</span>' + st + time + ms + note + '</div>' + purpose + '<div class="canvas-code-block"><button type="button" class="canvas-code-block-copy" aria-label="Copy command" aria-live="polite">Copy</button><pre class="ccmd">' + esc(c.cmd || '') + '</pre></div></div>';
+      return '<div class="cmd ' + c.status + '"><div class="chead"><span class="ckind ' + c.kind + '">' + badge + '</span><span class="ctitle">' + esc(c.title || '') + '</span>' + st + time + ms + note + '</div>' + purpose + '<div class="canvas-code-block"><button type="button" class="canvas-code-block-copy" data-metric-id="command-copy" aria-label="Copy command" aria-live="polite">Copy</button><pre class="ccmd">' + esc(c.cmd || '') + '</pre></div></div>';
     }).join('');
   }
 
@@ -3140,16 +3474,15 @@ ${commandClientScript()}
   setInterval(() => { if (latest) renderInvoke(latest); }, 500);
 
   async function selectTriggerOrFunction(e) {
-    const btn = e.target.closest('.trig');
+    const btn = e.target.closest('[data-id], [data-function]');
     if (!btn || btn.disabled) return;
     try {
       await saveInstructionsNow();
-      if (latest && latest.trigger === 'http') {
-        const saved = await saveHttpRequestDraftNow();
-        if (saved.superseded) throw new Error('Parameters changed while saving. Review them and select the trigger again.');
+      if (latest && latest.target === 'local' && (latest.trigger === 'http' || latest.trigger === 'timer')) {
+        saveHttpRequestDraftNow().catch((error) => setStatus(error.message));
       }
       if (latest && latest.target === 'local' && (latest.trigger === 'queue' || latest.trigger === 'connector')) {
-        await saveTriggerPayloadDraftNow(latest.trigger);
+        saveTriggerPayloadDraftNow(latest.trigger, triggerTestInput.value).catch((error) => setStatus(error.message));
       }
     } catch (error) {
       setStatus(error.message);
@@ -3161,6 +3494,22 @@ ${commandClientScript()}
     if (!result.ok) setStatus(result.message || 'The selected trigger is not available.');
   }
   triggersEl.addEventListener('click', selectTriggerOrFunction);
+  let triggerFocusId = '';
+  triggersEl.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [...triggersEl.querySelectorAll('[role="tab"]:not(:disabled)')];
+    if (!tabs.length) return;
+    const current = Math.max(0, tabs.indexOf(document.activeElement));
+    const next = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    triggerFocusId = tabs[next].dataset.id || '';
+    tabs[next].focus();
+    tabs[next].click();
+  });
   azureFunctionPicker.addEventListener('click', selectTriggerOrFunction);
   function timerSchedulePayload() {
     const cadence = timerCadence.value;
@@ -3428,8 +3777,7 @@ ${commandClientScript()}
   httpRequestHeaders.addEventListener('input', scheduleHttpRequestDraftSave);
   httpRequestBody.addEventListener('input', scheduleHttpRequestDraftSave);
 
-  function currentTriggerPayloadDraft(trigger) {
-    const value = triggerTestInput.value;
+  function currentTriggerPayloadDraft(trigger, value = triggerTestInput.value) {
     let payload;
     try { payload = JSON.parse(value); }
     catch (error) { throw new Error((trigger === 'queue' ? 'Queue message' : 'Microsoft 365 Inbox dry-run payload') + ' must be valid JSON. ' + error.message); }
@@ -3443,10 +3791,10 @@ ${commandClientScript()}
   }
 
   let triggerDraftTimer = null;
-  async function saveTriggerPayloadDraftNow(trigger) {
+  async function saveTriggerPayloadDraftNow(trigger, value = triggerTestInput.value) {
     clearTimeout(triggerDraftTimer);
     if (trigger !== 'queue' && trigger !== 'connector') return { ok: true };
-    const result = await postJson('/trigger-payload/draft', currentTriggerPayloadDraft(trigger));
+    const result = await postJson('/trigger-payload/draft', currentTriggerPayloadDraft(trigger, value));
     if (!result.ok) throw new Error(result.message || 'Trigger payload is invalid.');
     return result;
   }
@@ -3454,8 +3802,9 @@ ${commandClientScript()}
     clearTimeout(triggerDraftTimer);
     const trigger = latest && latest.target === 'local' ? latest.trigger : '';
     if (trigger !== 'queue' && trigger !== 'connector') return;
+    const value = triggerTestInput.value;
     triggerDraftTimer = setTimeout(() => {
-      saveTriggerPayloadDraftNow(trigger).catch((error) => setStatus(error.message));
+      saveTriggerPayloadDraftNow(trigger, value).catch((error) => setStatus(error.message));
     }, 250);
   }
   triggerTestInput.addEventListener('input', scheduleTriggerPayloadDraftSave);
@@ -3665,7 +4014,23 @@ ${commandClientScript()}
     const r = await postJson('/edit-instructions-vscode');
     setStatus(r.ok ? 'Opened agent instructions in VS Code.' : r.message);
   });
-</script>` : ""}${!withFullClient ? `<script>${retainedHostedSkillsClient()}</script>` : ""}
+</script>` : ""}${!withFullClient ? `<script>${retainedHostedSkillsClient()}</script>` : ""}${usageMetricsEnabled ? `
+<script>
+(() => {
+  const observer = (${observeCanvasUsage.toString()})({
+    root: document,
+    enabled: ${usageMetricsEnabled === true},
+    controls: ${JSON.stringify(FUNCTION_STUDIO_USAGE_CONTROLS)},
+    send: (payload) => fetch('/metrics/interaction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }),
+  });
+  window.addEventListener('pagehide', () => observer.dispose(), { once: true });
+})();
+</script>` : ""}
 </body>
 </html>`;
 }
@@ -3808,7 +4173,8 @@ var package_default = {
     "./arm-rest": "./src/arm-rest.mjs",
     "./http-request": "./src/http-request.mjs",
     "./runtime": "./src/function-app-runtime.mjs",
-    "./telemetry": "./src/application-insights.mjs"
+    "./telemetry": "./src/application-insights.mjs",
+    "./usage-contract": "./src/usage-contract.mjs"
   }
 };
 
@@ -3823,6 +4189,824 @@ function resolveFunctionStudioBuildInfo({ version, revision }) {
     revision
   });
 }
+
+// canvases/azure-functions-hosted-skills/src/copilot-sdk-bridge.mjs
+import { randomUUID } from "node:crypto";
+import { mkdir as mkdir2, readFile as readFile3, rm as rm2, stat as stat2 } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import path4 from "node:path";
+import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
+var DEFAULT_REQUEST_TIMEOUT_MS = 6e4;
+var DEFAULT_SESSION_TTL_MS = 15 * 6e4;
+var DEFAULT_MAX_SESSIONS = 8;
+var TOOL_BATCH_SETTLE_MS = 100;
+var MAX_PENDING_TOOL_CALLS = 32;
+var MAX_HANDLED_TOOL_CALLS = 256;
+var SESSION_KEY_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+var TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+var ALLOWED_ROLES = /* @__PURE__ */ new Set(["system", "developer", "user", "assistant", "tool"]);
+async function requireRegularFile(file, inspectFile = stat2) {
+  try {
+    if ((await inspectFile(file)).isFile()) return file;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  throw new CopilotSdkBridgeError(`GitHub Copilot CLI was not found at ${file}.`, 503);
+}
+async function resolveHostCopilotCliPath({
+  environment = process.env,
+  platform = process.platform,
+  homeDirectory = homedir3(),
+  readText = (file) => readFile3(file, "utf8"),
+  inspectFile = stat2
+} = {}) {
+  const pathApi = platform === "win32" ? path4.win32 : path4.posix;
+  const explicit = String(environment.COPILOT_CLI_PATH || "").trim();
+  if (explicit) {
+    if (!pathApi.isAbsolute(explicit)) {
+      throw new CopilotSdkBridgeError("COPILOT_CLI_PATH must be an absolute path.", 503);
+    }
+    return requireRegularFile(explicit, inspectFile);
+  }
+  const sdkRoot = String(environment.COPILOT_SDK_PATH || "").trim();
+  if (!sdkRoot) return "";
+  if (!pathApi.isAbsolute(sdkRoot)) {
+    throw new CopilotSdkBridgeError("COPILOT_SDK_PATH must be an absolute path.", 503);
+  }
+  let declaration;
+  try {
+    declaration = await readText(pathApi.join(sdkRoot, "cliVersion.d.ts"));
+  } catch (error) {
+    throw new CopilotSdkBridgeError(
+      `GitHub Copilot App did not expose its CLI version: ${error?.message || error}`,
+      503
+    );
+  }
+  const version = declaration.match(/COPILOT_CLI_VERSION\s*=\s*"([^"]+)"/)?.[1];
+  if (!version || !/^[0-9A-Za-z.-]+$/.test(version)) {
+    throw new CopilotSdkBridgeError("GitHub Copilot App exposed an invalid CLI version.", 503);
+  }
+  const cacheBase = platform === "win32" ? String(environment.LOCALAPPDATA || pathApi.join(homeDirectory, "AppData", "Local")) : platform === "darwin" ? pathApi.join(homeDirectory, "Library", "Caches") : String(environment.XDG_CACHE_HOME || pathApi.join(homeDirectory, ".cache"));
+  const executable = platform === "win32" ? "copilot.exe" : "copilot";
+  return requireRegularFile(
+    pathApi.join(cacheBase, "github-copilot-sdk", "cli", version, executable),
+    inspectFile
+  );
+}
+var CopilotSdkBridgeError = class extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.name = "CopilotSdkBridgeError";
+    this.statusCode = statusCode;
+  }
+};
+function deferred() {
+  let resolve;
+  let reject;
+  let settled = false;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(value);
+    };
+    reject = (error) => {
+      if (settled) return;
+      settled = true;
+      rejectPromise(error);
+    };
+  });
+  promise.catch(() => {
+  });
+  return { promise, resolve, reject, get settled() {
+    return settled;
+  } };
+}
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (!isPlainObject(value)) return JSON.stringify(value);
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+}
+function messageContentText(content) {
+  if (typeof content === "string") return content;
+  if (content === null || content === void 0) return "";
+  if (!Array.isArray(content)) {
+    throw new CopilotSdkBridgeError("GitHub Copilot local mode supports text message content only.");
+  }
+  const text = [];
+  for (const item of content) {
+    if (!isPlainObject(item) || item.type !== "text" || typeof item.text !== "string") {
+      throw new CopilotSdkBridgeError(
+        "GitHub Copilot local mode does not support image, audio, or other rich message content."
+      );
+    }
+    text.push(item.text);
+  }
+  return text.join("\n");
+}
+function normalizeMessages(payload) {
+  if (!Array.isArray(payload.messages) || !payload.messages.length) {
+    throw new CopilotSdkBridgeError("GitHub Copilot inference requires at least one chat message.");
+  }
+  return payload.messages.map((message, index) => {
+    if (!isPlainObject(message) || !ALLOWED_ROLES.has(message.role)) {
+      throw new CopilotSdkBridgeError(`Unsupported chat message role at index ${index}.`);
+    }
+    const normalized = {
+      role: message.role,
+      content: messageContentText(message.content)
+    };
+    if (message.role === "assistant" && message.tool_calls !== void 0) {
+      if (!Array.isArray(message.tool_calls)) {
+        throw new CopilotSdkBridgeError("Assistant tool_calls must be an array.");
+      }
+      normalized.toolCalls = message.tool_calls.map((call) => {
+        if (!isPlainObject(call) || typeof call.id !== "string" || call.type !== "function" || !isPlainObject(call.function) || typeof call.function.name !== "string" || typeof call.function.arguments !== "string") {
+          throw new CopilotSdkBridgeError("Only OpenAI function tool calls are supported.");
+        }
+        return {
+          id: call.id,
+          name: call.function.name,
+          arguments: call.function.arguments
+        };
+      });
+    }
+    if (message.role === "tool") {
+      if (typeof message.tool_call_id !== "string" || !message.tool_call_id) {
+        throw new CopilotSdkBridgeError("Tool result messages require tool_call_id.");
+      }
+      normalized.toolCallId = message.tool_call_id;
+    }
+    return normalized;
+  });
+}
+function normalizeTools(payload) {
+  if (payload.tools === void 0) return [];
+  if (!Array.isArray(payload.tools)) {
+    throw new CopilotSdkBridgeError("GitHub Copilot tools must be an array.");
+  }
+  const names = /* @__PURE__ */ new Set();
+  return payload.tools.map((tool) => {
+    if (!isPlainObject(tool) || tool.type !== "function" || !isPlainObject(tool.function) || typeof tool.function.name !== "string" || !TOOL_NAME_PATTERN.test(tool.function.name)) {
+      throw new CopilotSdkBridgeError("Only named OpenAI function tools are supported.");
+    }
+    if (names.has(tool.function.name)) {
+      throw new CopilotSdkBridgeError(`Duplicate tool definition: ${tool.function.name}.`);
+    }
+    names.add(tool.function.name);
+    const parameters = tool.function.parameters ?? { type: "object", properties: {} };
+    if (!isPlainObject(parameters) || parameters.type !== void 0 && parameters.type !== "object") {
+      throw new CopilotSdkBridgeError(`Tool ${tool.function.name} must use an object parameter schema.`);
+    }
+    return {
+      name: tool.function.name,
+      description: typeof tool.function.description === "string" ? tool.function.description : "",
+      parameters,
+      skipPermission: true,
+      defer: "never"
+    };
+  });
+}
+function normalizeToolChoice(payload, tools) {
+  const choice = payload.tool_choice;
+  if (choice === void 0 || choice === "auto") {
+    return {
+      tools,
+      availableToolNames: tools.map((tool) => tool.name),
+      instruction: "",
+      requiresToolCall: false,
+      requiredToolName: null
+    };
+  }
+  if (choice === "none") {
+    return {
+      tools,
+      availableToolNames: [],
+      instruction: "Do not call any function tools.",
+      requiresToolCall: false,
+      requiredToolName: null
+    };
+  }
+  if (choice === "required") {
+    if (!tools.length) throw new CopilotSdkBridgeError("tool_choice=required requires at least one tool.");
+    return {
+      tools,
+      availableToolNames: tools.map((tool) => tool.name),
+      instruction: "Call at least one available function tool before answering.",
+      requiresToolCall: true,
+      requiredToolName: null
+    };
+  }
+  if (isPlainObject(choice) && choice.type === "function" && isPlainObject(choice.function) && typeof choice.function.name === "string") {
+    if (!tools.some((tool) => tool.name === choice.function.name)) {
+      throw new CopilotSdkBridgeError(`Required tool is not declared: ${choice.function.name}.`);
+    }
+    return {
+      tools,
+      availableToolNames: [choice.function.name],
+      instruction: `Call the ${choice.function.name} function tool before answering.`,
+      requiresToolCall: true,
+      requiredToolName: choice.function.name
+    };
+  }
+  throw new CopilotSdkBridgeError("Unsupported tool_choice value.");
+}
+function transcriptPrompt(messages, toolInstruction) {
+  const lines = [
+    "Treat the following as the complete conversation transcript for this inference request.",
+    "Do not mention these role labels in the answer."
+  ];
+  for (const message of messages) {
+    if (message.content) lines.push(`${message.role.toUpperCase()}: ${message.content}`);
+    if (message.toolCalls?.length) {
+      for (const call of message.toolCalls) {
+        lines.push(`ASSISTANT TOOL CALL ${call.id}: ${call.name}(${call.arguments})`);
+      }
+    }
+    if (message.role === "tool") {
+      lines.push(`TOOL RESULT ${message.toolCallId}: ${message.content}`);
+    }
+  }
+  if (toolInstruction) lines.push(`TURN REQUIREMENT: ${toolInstruction}`);
+  return lines.join("\n\n");
+}
+function toolResultsForPending(messages, pending, handled) {
+  const pendingIds = new Set(pending.keys());
+  let assistantIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const calls = messages[index].toolCalls || [];
+    if (calls.some((call) => pendingIds.has(call.id))) {
+      assistantIndex = index;
+      break;
+    }
+  }
+  if (assistantIndex < 0) {
+    throw new CopilotSdkBridgeError("Tool results do not match the pending GitHub Copilot tool calls.", 409);
+  }
+  const assistantCalls = messages[assistantIndex].toolCalls || [];
+  if (assistantCalls.length !== pending.size || assistantCalls.some((call) => !pendingIds.has(call.id))) {
+    throw new CopilotSdkBridgeError("Assistant tool calls do not match the pending GitHub Copilot tool calls.", 409);
+  }
+  for (const call of assistantCalls) {
+    const expected = pending.get(call.id);
+    let parsedArguments;
+    try {
+      parsedArguments = JSON.parse(call.arguments);
+    } catch {
+      throw new CopilotSdkBridgeError(`Tool call arguments are invalid for ${call.id}.`, 409);
+    }
+    if (call.name !== expected.name || stableJson(parsedArguments) !== stableJson(expected.arguments)) {
+      throw new CopilotSdkBridgeError(`Tool call details do not match the pending request: ${call.id}.`, 409);
+    }
+  }
+  const results = /* @__PURE__ */ new Map();
+  for (const message of messages.slice(assistantIndex + 1)) {
+    if (message.role !== "tool") continue;
+    if (handled.has(message.toolCallId)) {
+      throw new CopilotSdkBridgeError(`Duplicate tool result: ${message.toolCallId}.`, 409);
+    }
+    if (!pendingIds.has(message.toolCallId)) {
+      throw new CopilotSdkBridgeError(`Unknown or mismatched tool result: ${message.toolCallId}.`, 409);
+    }
+    if (results.has(message.toolCallId)) {
+      throw new CopilotSdkBridgeError(`Duplicate tool result: ${message.toolCallId}.`, 409);
+    }
+    results.set(message.toolCallId, message.content);
+  }
+  for (const id of pendingIds) {
+    if (!results.has(id)) {
+      throw new CopilotSdkBridgeError(`Missing tool result: ${id}.`, 409);
+    }
+  }
+  return results;
+}
+function chatCompletion(modelId, message, finishReason) {
+  return {
+    id: `chatcmpl-${randomUUID()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1e3),
+    model: modelId,
+    choices: [{
+      index: 0,
+      message,
+      finish_reason: finishReason
+    }]
+  };
+}
+function waitForBoundary(boundary, { timeoutMs, signal, onCancel }) {
+  let timeout;
+  let abort;
+  return Promise.race([
+    boundary.promise,
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        onCancel();
+        reject(new CopilotSdkBridgeError("GitHub Copilot inference timed out.", 504));
+      }, timeoutMs);
+      timeout.unref?.();
+      if (signal) {
+        abort = () => {
+          onCancel();
+          reject(new CopilotSdkBridgeError("GitHub Copilot inference was cancelled.", 499));
+        };
+        signal.addEventListener("abort", abort, { once: true });
+      }
+    })
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+    if (signal && abort) signal.removeEventListener("abort", abort);
+  });
+}
+var CopilotSdkBridge = class {
+  constructor({
+    baseDirectory,
+    workingDirectory,
+    createClient = (options) => new CopilotClient(options),
+    resolveCliPath = resolveHostCopilotCliPath,
+    createConnection = (cliPath) => RuntimeConnection.forStdio({
+      path: cliPath,
+      args: ["--no-auto-update"]
+    }),
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    sessionTtlMs = DEFAULT_SESSION_TTL_MS,
+    maxSessions = DEFAULT_MAX_SESSIONS
+  } = {}) {
+    this.baseDirectory = baseDirectory;
+    this.workingDirectory = workingDirectory;
+    this.createClient = createClient;
+    this.resolveCliPath = resolveCliPath;
+    this.createConnection = createConnection;
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.sessionTtlMs = sessionTtlMs;
+    this.maxSessions = maxSessions;
+    this.client = null;
+    this.clientPromise = null;
+    this.contexts = /* @__PURE__ */ new Map();
+    this.contextCreations = /* @__PURE__ */ new Map();
+    this.preparedModelId = "";
+    this.closed = false;
+  }
+  async ensureClient({ force = false } = {}) {
+    if (this.closed) throw new CopilotSdkBridgeError("GitHub Copilot bridge is closed.", 409);
+    if (force) await this.closeClient();
+    if (this.client) return this.client;
+    if (!this.clientPromise) {
+      this.clientPromise = (async () => {
+        await mkdir2(this.baseDirectory, { recursive: true });
+        const cliPath = await this.resolveCliPath();
+        const options = {
+          mode: "empty",
+          baseDirectory: this.baseDirectory,
+          workingDirectory: this.workingDirectory,
+          useLoggedInUser: true,
+          logLevel: "error",
+          ...cliPath ? { connection: this.createConnection(cliPath) } : {}
+        };
+        const client = this.createClient(options);
+        try {
+          await client.start();
+          this.client = client;
+          return client;
+        } catch (error) {
+          try {
+            await client.forceStop?.();
+          } catch {
+          }
+          throw error;
+        }
+      })().finally(() => {
+        this.clientPromise = null;
+      });
+    }
+    return this.clientPromise;
+  }
+  async listModels({ force = false } = {}) {
+    return (await this.ensureClient({ force })).listModels();
+  }
+  async prepareModel(modelId) {
+    const normalized = String(modelId || "").trim();
+    if (!normalized) throw new CopilotSdkBridgeError("Choose a GitHub Copilot model.");
+    if (this.preparedModelId === normalized && this.client) return;
+    await this.closeContexts();
+    const client = await this.ensureClient();
+    const probe = await client.createSession(this.sessionConfig(normalized, []));
+    try {
+      await probe.disconnect();
+    } finally {
+      await client.deleteSession(probe.sessionId);
+    }
+    this.preparedModelId = normalized;
+  }
+  sessionConfig(modelId, tools, availableToolNames = tools.map((tool) => tool.name)) {
+    return {
+      clientName: "azure-functions-hosted-skills",
+      model: modelId,
+      workingDirectory: this.workingDirectory,
+      enableConfigDiscovery: false,
+      enableSkills: false,
+      enableSessionStore: false,
+      enableHostGitOperations: false,
+      requestCanvasRenderer: false,
+      requestExtensions: false,
+      tools,
+      availableTools: availableToolNames,
+      onPermissionRequest: async () => ({
+        kind: "reject",
+        feedback: "Permissions are disabled in the local Copilot bridge."
+      }),
+      systemMessage: {
+        mode: "replace",
+        content: "You are the inference engine for one local Azure Functions Hosted Skills request. Use only the supplied conversation and declared function tools. Do not inspect host files, repositories, sessions, extensions, canvases, skills, or network resources."
+      }
+    };
+  }
+  async pruneExpiredContexts() {
+    const expired = [...this.contexts.values()].filter((context) => Date.now() - context.updatedAt >= this.sessionTtlMs);
+    await Promise.all(expired.map((context) => this.destroyContext(context, "GitHub Copilot session expired.")));
+  }
+  async reserveContextSlot() {
+    await this.pruneExpiredContexts();
+    if (this.contexts.size + this.contextCreations.size <= this.maxSessions) return;
+    const idle = [...this.contexts.values()].filter((context) => !context.pending.size && !context.processing && !context.busy).sort((a, b) => a.updatedAt - b.updatedAt)[0];
+    if (!idle) {
+      throw new CopilotSdkBridgeError("Too many GitHub Copilot local inference sessions are active.", 429);
+    }
+    await this.destroyContext(idle, "GitHub Copilot session capacity was reclaimed.");
+  }
+  async createContext(key, modelId, tools, toolSignature, allowParallelToolCalls, availableToolNames) {
+    await this.reserveContextSlot();
+    const client = await this.ensureClient();
+    const session2 = await client.createSession(this.sessionConfig(modelId, tools, availableToolNames));
+    const context = {
+      key,
+      modelId,
+      toolSignature,
+      session: session2,
+      queue: Promise.resolve(),
+      processing: false,
+      busy: false,
+      pending: /* @__PURE__ */ new Map(),
+      handled: /* @__PURE__ */ new Map(),
+      toolNames: new Set(tools.map((tool) => tool.name)),
+      allowParallelToolCalls,
+      availableToolNames: [...availableToolNames],
+      requiredToolName: null,
+      exposedToolCallIds: /* @__PURE__ */ new Set(),
+      boundary: null,
+      batchTimer: null,
+      lastAssistant: null,
+      expectedToolCallIds: /* @__PURE__ */ new Set(),
+      updatedAt: Date.now(),
+      unsubscribe: null
+    };
+    context.unsubscribe = session2.on((event) => this.handleSessionEvent(context, event));
+    this.contexts.set(key, context);
+    return context;
+  }
+  async updateAvailableTools(context, availableToolNames) {
+    if (context.availableToolNames.length === availableToolNames.length && context.availableToolNames.every((name, index) => name === availableToolNames[index])) return;
+    const updated = await context.session.rpc.options.update({ availableTools: availableToolNames });
+    if (!updated?.success) {
+      throw new CopilotSdkBridgeError("GitHub Copilot could not update the available function tools.", 502);
+    }
+    context.availableToolNames = [...availableToolNames];
+  }
+  handleSessionEvent(context, event) {
+    if (event.type === "external_tool.requested") {
+      if (!this.contexts.has(context.key)) return;
+      if (!context.toolNames.has(event.data.toolName)) {
+        context.boundary?.reject(
+          new CopilotSdkBridgeError(`GitHub Copilot requested an undeclared tool: ${event.data.toolName}.`, 502)
+        );
+        return;
+      }
+      if (context.requiredToolName && event.data.toolName !== context.requiredToolName) {
+        context.boundary?.reject(
+          new CopilotSdkBridgeError(
+            `GitHub Copilot requested ${event.data.toolName} instead of the required ${context.requiredToolName} function tool.`,
+            502
+          )
+        );
+        return;
+      }
+      if (context.pending.size >= MAX_PENDING_TOOL_CALLS) {
+        context.boundary?.reject(
+          new CopilotSdkBridgeError("GitHub Copilot requested too many tools in one turn.", 502)
+        );
+        return;
+      }
+      if ([...context.pending.values()].some((pending) => pending.toolCallId === event.data.toolCallId) || typeof event.data.requestId !== "string" || !event.data.requestId || typeof event.data.toolCallId !== "string" || !event.data.toolCallId || event.data.arguments !== void 0 && !isPlainObject(event.data.arguments)) {
+        context.boundary?.reject(
+          new CopilotSdkBridgeError("GitHub Copilot returned an invalid or duplicate external tool request.", 502)
+        );
+        return;
+      }
+      const bridgeToolCallId = randomUUID();
+      context.pending.set(bridgeToolCallId, {
+        requestId: event.data.requestId,
+        toolCallId: event.data.toolCallId,
+        name: event.data.toolName,
+        arguments: event.data.arguments ?? {}
+      });
+      context.updatedAt = Date.now();
+      this.maybeResolveToolBoundary(context);
+      return;
+    }
+    if (event.type === "assistant.message") {
+      context.lastAssistant = event;
+      context.expectedToolCallIds = new Set(
+        (Array.isArray(event.data?.toolRequests) ? event.data.toolRequests : []).map((request) => String(request?.toolCallId || "")).filter(Boolean)
+      );
+      this.maybeResolveToolBoundary(context);
+      return;
+    }
+    if (event.type === "session.idle") {
+      if (context.pending.size) {
+        if (context.expectedToolCallIds.size > 0 && ![...context.expectedToolCallIds].every(
+          (toolCallId) => [...context.pending.values()].some((pending) => pending.toolCallId === toolCallId)
+        )) {
+          context.boundary?.reject(
+            new CopilotSdkBridgeError("GitHub Copilot did not emit every requested external tool call.", 502)
+          );
+          return;
+        }
+        this.resolveToolBoundary(context);
+        return;
+      }
+      context.boundary?.resolve({
+        type: "assistant",
+        content: String(context.lastAssistant?.data?.content || "")
+      });
+      return;
+    }
+    if (event.type === "session.error") {
+      context.boundary?.reject(
+        new CopilotSdkBridgeError(
+          `GitHub Copilot inference failed: ${String(event.data?.message || "unknown session error")}`,
+          502
+        )
+      );
+    }
+  }
+  maybeResolveToolBoundary(context) {
+    if (!context.boundary || context.boundary.settled || !context.pending.size) return;
+    if (context.expectedToolCallIds.size > 0 && [...context.expectedToolCallIds].every(
+      (toolCallId) => [...context.pending.values()].some((pending) => pending.toolCallId === toolCallId)
+    )) {
+      this.resolveToolBoundary(context);
+      return;
+    }
+    if (context.expectedToolCallIds.size > 0) return;
+    if (context.batchTimer) clearTimeout(context.batchTimer);
+    context.batchTimer = setTimeout(() => {
+      context.batchTimer = null;
+      this.resolveToolBoundary(context);
+    }, TOOL_BATCH_SETTLE_MS);
+    context.batchTimer.unref?.();
+  }
+  resolveToolBoundary(context) {
+    if (!context.boundary || context.boundary.settled || !context.pending.size) return;
+    if (context.batchTimer) clearTimeout(context.batchTimer);
+    context.batchTimer = null;
+    context.boundary.resolve({ type: "tool_calls" });
+  }
+  exposePendingToolCalls(context) {
+    const pending = [...context.pending.entries()];
+    const exposed = context.allowParallelToolCalls ? pending : pending.slice(0, 1);
+    context.exposedToolCallIds = new Set(exposed.map(([id]) => id));
+    return exposed.map(([id, tool]) => ({
+      id,
+      type: "function",
+      function: {
+        name: tool.name,
+        arguments: JSON.stringify(tool.arguments)
+      }
+    }));
+  }
+  async withContextQueue(context, operation) {
+    const run = context.queue.then(async () => {
+      context.processing = true;
+      try {
+        return await operation();
+      } finally {
+        context.processing = false;
+        context.updatedAt = Date.now();
+      }
+    });
+    context.queue = run.catch(() => {
+    });
+    return run;
+  }
+  async completeChat(payload, { modelId, signal } = {}) {
+    if (!isPlainObject(payload)) throw new CopilotSdkBridgeError("GitHub Copilot inference requires a JSON object.");
+    if (payload.stream === true) {
+      throw new CopilotSdkBridgeError("Streaming chat completions are not supported by the local Copilot bridge.");
+    }
+    const key = String(payload.user || "");
+    if (!SESSION_KEY_PATTERN.test(key)) {
+      throw new CopilotSdkBridgeError("GitHub Copilot inference requires an isolated local session identifier.");
+    }
+    const selectedModelId = String(modelId || "").trim();
+    if (!selectedModelId || payload.model && payload.model !== selectedModelId) {
+      throw new CopilotSdkBridgeError("The requested model does not match the selected GitHub Copilot model.", 409);
+    }
+    const messages = normalizeMessages(payload);
+    const declaredTools = normalizeTools(payload);
+    const {
+      tools,
+      availableToolNames,
+      instruction,
+      requiresToolCall,
+      requiredToolName
+    } = normalizeToolChoice(payload, declaredTools);
+    if (payload.parallel_tool_calls !== void 0 && typeof payload.parallel_tool_calls !== "boolean") {
+      throw new CopilotSdkBridgeError("parallel_tool_calls must be a boolean.");
+    }
+    const allowParallelToolCalls = payload.parallel_tool_calls !== false;
+    const toolSignature = stableJson({ tools, allowParallelToolCalls });
+    let context = this.contexts.get(key);
+    if (context && (context.modelId !== selectedModelId || context.toolSignature !== toolSignature)) {
+      if (context.pending.size) {
+        throw new CopilotSdkBridgeError(
+          "Cannot change the GitHub Copilot model or tools while tool calls are pending.",
+          409
+        );
+      }
+      await this.destroyContext(context, "GitHub Copilot session configuration changed.");
+      context = null;
+    }
+    if (!context) {
+      let creation = this.contextCreations.get(key);
+      if (!creation) {
+        creation = this.createContext(
+          key,
+          selectedModelId,
+          tools,
+          toolSignature,
+          allowParallelToolCalls,
+          availableToolNames
+        );
+        this.contextCreations.set(key, creation);
+      }
+      try {
+        context = await creation;
+      } finally {
+        if (this.contextCreations.get(key) === creation) this.contextCreations.delete(key);
+      }
+      if (context.modelId !== selectedModelId || context.toolSignature !== toolSignature) {
+        throw new CopilotSdkBridgeError(
+          "A concurrent GitHub Copilot request selected a different model or tool set.",
+          409
+        );
+      }
+    }
+    if (context.busy) {
+      throw new CopilotSdkBridgeError("A GitHub Copilot request is already active for this local session.", 409);
+    }
+    context.busy = true;
+    try {
+      return await this.withContextQueue(context, async () => {
+        try {
+          context.boundary = deferred();
+          context.lastAssistant = null;
+          context.expectedToolCallIds.clear();
+          context.requiredToolName = requiredToolName;
+          await this.updateAvailableTools(context, availableToolNames);
+          if (context.pending.size) {
+            const exposedPending = new Map(
+              [...context.exposedToolCallIds].map((toolCallId) => [toolCallId, context.pending.get(toolCallId)])
+            );
+            if (!exposedPending.size || [...exposedPending.values()].some((pending) => !pending)) {
+              throw new CopilotSdkBridgeError("No exposed GitHub Copilot tool call is awaiting a result.", 409);
+            }
+            const results = toolResultsForPending(messages, exposedPending, context.handled);
+            for (const [toolCallId, result] of results) {
+              const pending = context.pending.get(toolCallId);
+              context.pending.delete(toolCallId);
+              const handled = await context.session.rpc.tools.handlePendingToolCall({
+                requestId: pending.requestId,
+                result
+              });
+              if (!handled?.success) {
+                throw new CopilotSdkBridgeError(`GitHub Copilot rejected tool result: ${toolCallId}.`, 409);
+              }
+              context.handled.set(toolCallId, result);
+              if (context.handled.size > MAX_HANDLED_TOOL_CALLS) {
+                throw new CopilotSdkBridgeError(
+                  "The GitHub Copilot tool conversation exceeded the supported continuation limit.",
+                  409
+                );
+              }
+            }
+            context.exposedToolCallIds.clear();
+            if (context.pending.size) {
+              const toolCalls = this.exposePendingToolCalls(context);
+              return chatCompletion(selectedModelId, {
+                role: "assistant",
+                content: null,
+                tool_calls: toolCalls
+              }, "tool_calls");
+            }
+          } else {
+            if (messages.at(-1)?.role === "tool") {
+              throw new CopilotSdkBridgeError("No GitHub Copilot tool call is pending for this result.", 409);
+            }
+            await context.session.send({ prompt: transcriptPrompt(messages, instruction) });
+          }
+          const boundary = await waitForBoundary(context.boundary, {
+            timeoutMs: this.requestTimeoutMs,
+            signal,
+            onCancel: () => {
+              void context.session.abort().catch(() => {
+              });
+            }
+          });
+          if (boundary.type === "tool_calls") {
+            const toolCalls = this.exposePendingToolCalls(context);
+            return chatCompletion(selectedModelId, {
+              role: "assistant",
+              content: String(context.lastAssistant?.data?.content || "") || null,
+              tool_calls: toolCalls
+            }, "tool_calls");
+          }
+          if (requiresToolCall) {
+            throw new CopilotSdkBridgeError(
+              "GitHub Copilot completed without requesting the required function tool.",
+              502
+            );
+          }
+          const completion = chatCompletion(selectedModelId, {
+            role: "assistant",
+            content: boundary.content
+          }, "stop");
+          await this.destroyContext(context);
+          return completion;
+        } catch (error) {
+          await this.destroyContext(context, String(error?.message || error));
+          throw error;
+        } finally {
+          context.boundary = null;
+          context.requiredToolName = null;
+        }
+      });
+    } finally {
+      context.busy = false;
+    }
+  }
+  async destroyContext(context, reason = "GitHub Copilot session closed.") {
+    if (!context || !this.contexts.has(context.key)) return;
+    this.contexts.delete(context.key);
+    if (context.batchTimer) clearTimeout(context.batchTimer);
+    context.boundary?.reject(new CopilotSdkBridgeError(reason, 409));
+    context.unsubscribe?.();
+    try {
+      await context.session.abort();
+    } catch {
+    }
+    try {
+      await context.session.disconnect();
+    } finally {
+      try {
+        await this.client?.deleteSession(context.session.sessionId);
+      } catch {
+      }
+    }
+  }
+  async closeContexts() {
+    await Promise.all([...this.contexts.values()].map((context) => this.destroyContext(context)));
+  }
+  async closeClient() {
+    if (this.contextCreations.size) {
+      await Promise.allSettled([...this.contextCreations.values()]);
+    }
+    await this.closeContexts();
+    if (this.clientPromise) {
+      try {
+        await this.clientPromise;
+      } catch {
+      }
+    }
+    const client = this.client;
+    this.client = null;
+    this.preparedModelId = "";
+    if (client) await client.stop();
+  }
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    await this.closeClient();
+    await rm2(this.baseDirectory, { recursive: true, force: true });
+  }
+};
+var copilotSdkBridgeTestHooks = Object.freeze({
+  normalizeMessages,
+  normalizeTools,
+  transcriptPrompt,
+  toolResultsForPending
+});
 
 // canvases/azure-functions-hosted-skills/src/extension.mjs
 import {
@@ -3853,14 +5037,14 @@ var GATEWAY_PROVIDER_MARKER = "# Azure Functions Hosted Skills: model provider r
 var STABLE_HOSTED_SKILLS_NAME = "Azure Functions Hosted Skills";
 var ROUTING_MARKER_PATTERN = `# (?:Intelligent Function App Studio|${STABLE_HOSTED_SKILLS_NAME}(?: Preview| \\(preview-[^)]+\\))?): model provider routing v2`;
 var MANAGED_ROUTING_BLOCK = new RegExp(
-  `^${ROUTING_MARKER_PATTERN}\\r?\\nfrom ai_gateway_client_manager import AIGatewayClientManager, FoundryClientManager\\r?\\n\\r?\\nprovider = os\\.environ\\.get\\("AZURE_FUNCTIONS_AGENTS_PROVIDER"\\)\\r?\\nif provider == "ai_gateway":\\r?\\n[ \\t]+set_client_manager\\(AIGatewayClientManager\\(\\)\\)\\r?\\nelif provider == "foundry":\\r?\\n[ \\t]+set_client_manager\\(FoundryClientManager\\(\\)\\)\\r?\\n?`,
+  `^${ROUTING_MARKER_PATTERN}\\r?\\nfrom ai_gateway_client_manager import (?:AIGatewayClientManager, CopilotSessionClientManager, FoundryClientManager|AIGatewayClientManager, FoundryClientManager)\\r?\\n\\r?\\nprovider = os\\.environ\\.get\\("AZURE_FUNCTIONS_AGENTS_PROVIDER"\\)\\r?\\n(?:if provider == "copilot":\\r?\\n[ \\t]+set_client_manager\\(CopilotSessionClientManager\\(\\)\\)\\r?\\nel)?if provider == "ai_gateway":\\r?\\n[ \\t]+set_client_manager\\(AIGatewayClientManager\\(\\)\\)\\r?\\nelif provider == "foundry":\\r?\\n[ \\t]+set_client_manager\\(FoundryClientManager\\(\\)\\)\\r?\\n?`,
   "gm"
 );
 var LEGACY_ROUTING_BLOCK = /^# Intelligent Function App Studio: AI Gateway provider\r?\nif os\.environ\.get\("AZURE_FUNCTIONS_AGENTS_PROVIDER"\) == "ai_gateway":\r?\n[ \t]+from ai_gateway_client_manager import AIGatewayClientManager\r?\n\r?\n[ \t]+set_client_manager\(AIGatewayClientManager\(\)\)\r?\n?/gm;
 var AZURE_FUNCTIONS_IMPORT = /^from azure_functions_agents import ([^\r\n]+)\r?$/gm;
 var IMPORT_OS = /^import os\r?\n/gm;
 var APP_CREATION = /^app = create_function_app\(\)\r?$/m;
-function isPlainObject(value) {
+function isPlainObject2(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function hasOwn(value, key) {
@@ -3899,18 +5083,18 @@ function nestedResponseText(value, depth) {
     }
     return agentResponseText(value);
   }
-  if (!isPlainObject(value)) return "";
+  if (!isPlainObject2(value)) return "";
   const nested = expectedAgentResponse(value, depth + 1);
   if (nested) return nested;
   if (typeof value.content === "string") return agentResponseText(value.content);
   if (typeof value.text === "string") return agentResponseText(value.text);
   if (typeof value.message === "string") return agentResponseText(value.message);
-  if (isPlainObject(value.message)) return nestedResponseText(value.message, depth + 1);
+  if (isPlainObject2(value.message)) return nestedResponseText(value.message, depth + 1);
   if (hasOwn(value, "response")) return nestedResponseText(value.response, depth + 1);
   return "";
 }
 function expectedAgentResponse(value, depth = 0) {
-  if (depth > MAX_AGENT_ENVELOPE_DEPTH || !isPlainObject(value)) return "";
+  if (depth > MAX_AGENT_ENVELOPE_DEPTH || !isPlainObject2(value)) return "";
   const expectedEnvelope = hasOwn(value, "session_id") || hasOwn(value, "sessionId") || hasOwn(value, "tool_calls") || hasOwn(value, "toolCalls");
   if (!expectedEnvelope) return "";
   if (hasOwn(value, "response")) {
@@ -3997,10 +5181,12 @@ function installAgentResponseLogging(source) {
 function providerBlock() {
   return [
     GATEWAY_PROVIDER_MARKER,
-    "from ai_gateway_client_manager import AIGatewayClientManager, FoundryClientManager",
+    "from ai_gateway_client_manager import AIGatewayClientManager, CopilotSessionClientManager, FoundryClientManager",
     "",
     'provider = os.environ.get("AZURE_FUNCTIONS_AGENTS_PROVIDER")',
-    'if provider == "ai_gateway":',
+    'if provider == "copilot":',
+    "    set_client_manager(CopilotSessionClientManager())",
+    'elif provider == "ai_gateway":',
     "    set_client_manager(AIGatewayClientManager())",
     'elif provider == "foundry":',
     "    set_client_manager(FoundryClientManager())"
@@ -4168,8 +5354,8 @@ function requireGatewayCapability(capability) {
 function configuredModelBindingIsUsable(binding) {
   return Boolean(binding?.configured && binding?.activeSource && binding?.activeModelId);
 }
-function gatewayRuntimeUrls(endpoint, workspace = "default") {
-  const base = String(endpoint || "").trim().replace(/\/+$/, "");
+function gatewayRuntimeUrls(endpoint2, workspace = "default") {
+  const base = String(endpoint2 || "").trim().replace(/\/+$/, "");
   const scope = String(workspace || "").trim().replace(/^\/+|\/+$/g, "");
   if (!base || !scope) throw new Error("AI Gateway endpoint and workspace are required.");
   return {
@@ -4179,11 +5365,77 @@ function gatewayRuntimeUrls(endpoint, workspace = "default") {
 }
 
 // canvases/azure-functions-hosted-skills/src/model-discovery-state.mjs
-function selectionIdentity(binding) {
+var MODEL_PROVIDER_ORDER = Object.freeze(["copilot", "foundry", "gateway"]);
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+function normalizeModelProvider(value) {
+  const provider = normalizeText(value).toLowerCase();
+  return MODEL_PROVIDER_ORDER.includes(provider) ? provider : "copilot";
+}
+function normalizeCatalogIdentity(value) {
+  return normalizeText(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+function normalizeCopilotCatalogEntry(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = normalizeText(value.id);
+  if (!id || id === "auto" || id.includes("/")) return null;
+  if (normalizeText(value.policy?.state).toLowerCase() === "disabled") return null;
   return {
-    subscription: String(binding.subscription || ""),
-    source: binding.source === "gateway" ? "gateway" : "foundry",
-    resourceId: String(binding.resourceId || ""),
+    id,
+    name: normalizeText(value.name || value.displayName) || id
+  };
+}
+function normalizeCopilotModelCatalog(value) {
+  const models = Array.isArray(value) ? value : [];
+  const seen = /* @__PURE__ */ new Set();
+  const normalized = [];
+  for (const candidate of models) {
+    const model = normalizeCopilotCatalogEntry(candidate);
+    if (!model || seen.has(model.id)) continue;
+    seen.add(model.id);
+    normalized.push(model);
+  }
+  return normalized;
+}
+function copilotModelCatalogFromResponse(response) {
+  if (Array.isArray(response?.list)) return normalizeCopilotModelCatalog(response.list);
+  if (Array.isArray(response)) return normalizeCopilotModelCatalog(response);
+  return normalizeCopilotModelCatalog(response?.models);
+}
+function selectPreferredCopilotModel(models, preferredModelId = "") {
+  const catalog = normalizeCopilotModelCatalog(models);
+  if (!catalog.length) {
+    throw new Error("No compatible GitHub Copilot model is available in this session.");
+  }
+  const preferred = normalizeText(preferredModelId);
+  if (preferred) {
+    const persisted = catalog.find((model) => model.id === preferred);
+    if (persisted) return persisted;
+  }
+  const gpt5Mini = catalog.find(
+    (model) => normalizeCatalogIdentity(model.id) === "gpt5mini" || normalizeCatalogIdentity(model.name) === "gpt5mini"
+  );
+  return gpt5Mini || catalog[0];
+}
+function selectInitialModelProvider({
+  sourceMode = "managed",
+  persistedProvider = "",
+  selectedProvider = "",
+  selectionChanged = false,
+  configuredSource = ""
+} = {}) {
+  if (sourceMode === "attached" && configuredSource) return normalizeModelProvider(configuredSource);
+  if (persistedProvider) return normalizeModelProvider(persistedProvider);
+  if (selectionChanged) return normalizeModelProvider(selectedProvider);
+  return "copilot";
+}
+function selectionIdentity(binding) {
+  const source = normalizeModelProvider(binding.source);
+  return {
+    subscription: source === "copilot" ? "" : String(binding.subscription || ""),
+    source,
+    resourceId: source === "copilot" ? "" : String(binding.resourceId || ""),
     modelId: String(binding.modelId || ""),
     selectionGeneration: Number(binding.selectionGeneration || 0)
   };
@@ -4204,10 +5456,20 @@ function beginModelDiscovery(binding, subscription) {
   binding.discoveryRequest = request;
   return request;
 }
+function beginCopilotModelDiscovery(binding) {
+  const request = {
+    ...selectionIdentity(binding),
+    generation: Number(binding.copilotDiscoveryGeneration || 0) + 1
+  };
+  binding.copilotDiscoveryGeneration = request.generation;
+  binding.copilotDiscoveryRequest = request;
+  return request;
+}
 function markModelSelection(binding, { source, resourceId, modelId }) {
+  const nextSource = normalizeModelProvider(source);
   const next = {
-    source: source === "gateway" ? "gateway" : "foundry",
-    resourceId: String(resourceId || ""),
+    source: nextSource,
+    resourceId: nextSource === "copilot" ? "" : String(resourceId || ""),
     modelId: String(modelId || "")
   };
   const changed = binding.source !== next.source || binding.resourceId !== next.resourceId || binding.modelId !== next.modelId;
@@ -4217,7 +5479,9 @@ function markModelSelection(binding, { source, resourceId, modelId }) {
   if (changed) {
     binding.selectionGeneration = Number(binding.selectionGeneration || 0) + 1;
     binding.discoveryGeneration = Number(binding.discoveryGeneration || 0) + 1;
+    binding.copilotDiscoveryGeneration = Number(binding.copilotDiscoveryGeneration || 0) + 1;
     binding.discoveryRequest = null;
+    binding.copilotDiscoveryRequest = null;
   }
   return changed;
 }
@@ -4225,6 +5489,17 @@ function isModelDiscoveryCurrent(binding, request) {
   if (!request || binding.discoveryRequest?.generation !== request.generation) return false;
   const current = selectionIdentity(binding);
   return current.subscription === request.subscription && current.source === request.source && current.resourceId === request.resourceId && current.modelId === request.modelId && current.selectionGeneration === request.selectionGeneration;
+}
+function isCopilotModelDiscoveryCurrent(binding, request) {
+  if (!request || binding.copilotDiscoveryRequest?.generation !== request.generation) return false;
+  const current = selectionIdentity(binding);
+  return current.source === request.source && current.modelId === request.modelId && current.selectionGeneration === request.selectionGeneration;
+}
+
+// canvases/azure-functions-hosted-skills/src/doctor-workflow.mjs
+var AZURE_WORKFLOWS = /* @__PURE__ */ new Set(["create-models", "deploy"]);
+function doctorRequiresAzure({ target = "local", modelSource = "copilot" } = {}, workflow = "current") {
+  return AZURE_WORKFLOWS.has(String(workflow || "")) || target === "azure" || modelSource === "foundry" || modelSource === "gateway";
 }
 
 // packages/studio-runtime/src/ai-gateway-arm.mjs
@@ -4569,9 +5844,9 @@ function hydrateAzureSubscriptionInventory(azure, { force = false, loadApps = tr
 }
 
 // canvases/azure-functions-hosted-skills/src/python-environment.mjs
-import path4 from "node:path";
+import path5 from "node:path";
 function pythonVirtualEnvironment(agentDir, platform = process.platform) {
-  const pathApi = platform === "win32" ? path4.win32 : path4.posix;
+  const pathApi = platform === "win32" ? path5.win32 : path5.posix;
   const directory = pathApi.join(agentDir, ".venv");
   const binDirectory = pathApi.join(directory, platform === "win32" ? "Scripts" : "bin");
   return {
@@ -4728,24 +6003,24 @@ function defaultHttpRequestDraft() {
 }
 
 // canvases/azure-functions-hosted-skills/src/source-workspace.mjs
-import { createHash as createHash5, randomUUID as randomUUID3 } from "node:crypto";
-import { cp as cp2, link as link2, lstat as lstat5, mkdir as mkdir4, open as open3, readFile as readFile5, readdir as readdir3, readlink, realpath as realpath3, rename as rename4, rm as rm4, stat as stat2 } from "node:fs/promises";
-import path7 from "node:path";
+import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
+import { cp as cp2, link as link2, lstat as lstat5, mkdir as mkdir5, open as open3, readFile as readFile6, readdir as readdir3, readlink, realpath as realpath3, rename as rename4, rm as rm5, stat as stat3 } from "node:fs/promises";
+import path8 from "node:path";
 
 // canvases/azure-functions-hosted-skills/src/state-migration.mjs
-import { createHash as createHash4, randomUUID as randomUUID2 } from "node:crypto";
-import { link, lstat as lstat4, mkdir as mkdir3, open as open2, readFile as readFile4, realpath as realpath2, rename as rename3, rm as rm3 } from "node:fs/promises";
-import path6 from "node:path";
-import { homedir as homedir3, tmpdir } from "node:os";
+import { createHash as createHash4, randomUUID as randomUUID3 } from "node:crypto";
+import { link, lstat as lstat4, mkdir as mkdir4, open as open2, readFile as readFile5, realpath as realpath2, rename as rename3, rm as rm4 } from "node:fs/promises";
+import path7 from "node:path";
+import { homedir as homedir4, tmpdir } from "node:os";
 
 // canvases/azure-functions-hosted-skills/src/state-lock.mjs
-import { randomUUID } from "node:crypto";
-import { lstat as lstat3, mkdir as mkdir2, open, readFile as readFile3, rename as rename2, rm as rm2 } from "node:fs/promises";
-import path5 from "node:path";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { lstat as lstat3, mkdir as mkdir3, open, readFile as readFile4, rename as rename2, rm as rm3 } from "node:fs/promises";
+import path6 from "node:path";
 async function acquireStateLock(file, { timeoutMs = 12e4, pollMs = 50 } = {}) {
   const lockPath = `${file}.lock`;
-  await mkdir2(path5.dirname(lockPath), { recursive: true, mode: 448 });
-  const token = randomUUID();
+  await mkdir3(path6.dirname(lockPath), { recursive: true, mode: 448 });
+  const token = randomUUID2();
   const started = Date.now();
   let ownerClassification = "incomplete";
   while (true) {
@@ -4762,8 +6037,8 @@ async function acquireStateLock(file, { timeoutMs = 12e4, pollMs = 50 } = {}) {
       return async () => {
         if (released) return;
         released = true;
-        const current = JSON.parse(await readFile3(lockPath, "utf8"));
-        if (current.token === token) await rm2(lockPath);
+        const current = JSON.parse(await readFile4(lockPath, "utf8"));
+        if (current.token === token) await rm3(lockPath);
       };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
@@ -4777,7 +6052,7 @@ async function acquireStateLock(file, { timeoutMs = 12e4, pollMs = 50 } = {}) {
         ownerClassification = "incomplete";
         let owner;
         try {
-          owner = JSON.parse(await readFile3(lockPath, "utf8"));
+          owner = JSON.parse(await readFile4(lockPath, "utf8"));
         } catch (error2) {
           if (error2?.code === "ENOENT") throw error2;
         }
@@ -4789,7 +6064,7 @@ async function acquireStateLock(file, { timeoutMs = 12e4, pollMs = 50 } = {}) {
             if (error2?.code === "ESRCH") {
               const retiredPath = `${lockPath}.${token}.retired`;
               await rename2(lockPath, retiredPath);
-              await rm2(retiredPath);
+              await rm3(retiredPath);
               retired = true;
             } else ownerClassification = "live";
           }
@@ -4799,7 +6074,7 @@ async function acquireStateLock(file, { timeoutMs = 12e4, pollMs = 50 } = {}) {
       } finally {
         if (recovery) {
           await recovery.close();
-          await rm2(gate, { force: true });
+          await rm3(gate, { force: true });
         }
       }
       if (retired) continue;
@@ -4822,7 +6097,7 @@ var LEGACY_PREVIEW_STATE_COMPONENTS = Object.freeze([
   "azure-functions-hosted-skills-preview",
   "azure-functions-hosted-skills-preview-12"
 ]);
-function studioStateEnvironment({ env = process.env, homeDirectory = homedir3, pathApi = path6 } = {}) {
+function studioStateEnvironment({ env = process.env, homeDirectory = homedir4, pathApi = path7 } = {}) {
   const override = env.FUNCTION_STUDIO_STATE_HOME;
   if (override !== void 0 && (!override || !pathApi.isAbsolute(override))) {
     throw new Error("FUNCTION_STUDIO_STATE_HOME must be an absolute fixture/state home directory.");
@@ -4844,7 +6119,7 @@ function instanceStateSegment(instanceId) {
   if (safe === value && safe !== "." && safe !== ".." && !safe.endsWith(".") && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(safe)) return safe;
   return `instance-${stateDigest(value).slice(0, 32)}`;
 }
-function studioStatePaths({ home, copilotHome, instanceId, pathApi = path6 } = {}) {
+function studioStatePaths({ home, copilotHome, instanceId, pathApi = path7 } = {}) {
   if (home === void 0) {
     const environment = studioStateEnvironment({ pathApi });
     home = environment.home;
@@ -4874,17 +6149,17 @@ function studioStatePaths({ home, copilotHome, instanceId, pathApi = path6 } = {
   };
 }
 async function assertSafeStatePath(file, { trustedRoot } = {}) {
-  const resolved = path6.resolve(file);
+  const resolved = path7.resolve(file);
   const contains = (root) => {
-    const relative2 = path6.relative(root, resolved);
-    return !path6.isAbsolute(relative2) && relative2 !== ".." && !relative2.startsWith(`..${path6.sep}`);
+    const relative2 = path7.relative(root, resolved);
+    return !path7.isAbsolute(relative2) && relative2 !== ".." && !relative2.startsWith(`..${path7.sep}`);
   };
-  const base = trustedRoot ? path6.resolve(trustedRoot) : [
+  const base = trustedRoot ? path7.resolve(trustedRoot) : [
     studioStateEnvironment().home,
-    homedir3(),
+    homedir4(),
     tmpdir(),
     process.cwd()
-  ].map((root) => path6.resolve(root)).filter(contains).sort((a, b) => b.length - a.length)[0] || path6.parse(resolved).root;
+  ].map((root) => path7.resolve(root)).filter(contains).sort((a, b) => b.length - a.length)[0] || path7.parse(resolved).root;
   if (!contains(base)) throw new Error(`State path is outside its trusted base: ${file}`);
   let cursor;
   try {
@@ -4893,11 +6168,11 @@ async function assertSafeStatePath(file, { trustedRoot } = {}) {
     if (error?.code === "ENOENT") return;
     throw error;
   }
-  const relative = path6.relative(base, resolved);
-  const physicalFile = path6.join(cursor, relative);
-  const parts = relative ? relative.split(path6.sep) : [""];
+  const relative = path7.relative(base, resolved);
+  const physicalFile = path7.join(cursor, relative);
+  const parts = relative ? relative.split(path7.sep) : [""];
   for (const part of parts) {
-    cursor = path6.join(cursor, part);
+    cursor = path7.join(cursor, part);
     try {
       const item = await lstat4(cursor);
       if (item.isSymbolicLink()) throw new Error(`State ownership rejected a symbolic link: ${cursor}`);
@@ -4915,7 +6190,7 @@ async function readStateText(file) {
   try {
     const item = await lstat4(file);
     if (!item.isFile() || item.size > 8 * 1024 * 1024) throw new Error(`Invalid or oversized state file: ${file}`);
-    return await readFile4(file, "utf8");
+    return await readFile5(file, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -4923,8 +6198,8 @@ async function readStateText(file) {
 }
 async function atomicStateWrite(file, value, { exclusive = false } = {}) {
   await assertSafeStatePath(file);
-  await mkdir3(path6.dirname(file), { recursive: true, mode: 448 });
-  const temporary = `${file}.${randomUUID2()}.pending`;
+  await mkdir4(path7.dirname(file), { recursive: true, mode: 448 });
+  const temporary = `${file}.${randomUUID3()}.pending`;
   const handle = await open2(temporary, "wx", 384);
   try {
     await handle.writeFile(value);
@@ -4934,7 +6209,7 @@ async function atomicStateWrite(file, value, { exclusive = false } = {}) {
     else await rename3(temporary, file);
   } finally {
     await handle.close();
-    await rm3(temporary, { force: true });
+    await rm4(temporary, { force: true });
   }
 }
 async function withStateLock(file, callback) {
@@ -5042,16 +6317,16 @@ async function writeStateRecord({ destination, value, revision, validate }) {
 }
 
 // canvases/azure-functions-hosted-skills/src/source-workspace.mjs
-var DEFAULT_CURRENT_SUBDIR = path7.join("functions", "daily-repo-digest");
+var DEFAULT_CURRENT_SUBDIR = path8.join("functions", "daily-repo-digest");
 var MANIFEST_VERSION = 2;
 var SUPPORTED_MANIFEST_VERSIONS = /* @__PURE__ */ new Set([1, MANIFEST_VERSION]);
-var OWNERSHIP_MARKER_RELATIVE_PATH = path7.join(
+var OWNERSHIP_MARKER_RELATIVE_PATH = path8.join(
   `.${STATE_PRODUCT}`,
   "source-workspace-ownership.json"
 );
-var LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH = path7.join(`.${LEGACY_STATE_COMPONENT}`, "source-workspace-ownership.json");
+var LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH = path8.join(`.${LEGACY_STATE_COMPONENT}`, "source-workspace-ownership.json");
 var LEGACY_PREVIEW_OWNERSHIP_MARKER_RELATIVE_PATHS = LEGACY_PREVIEW_STATE_COMPONENTS.map(
-  (identity) => path7.join(`.${identity}`, "source-workspace-ownership.json")
+  (identity) => path8.join(`.${identity}`, "source-workspace-ownership.json")
 );
 var LEGACY_REMOVAL_MARKER = "Removed by the user. Create from the Studio to restore.\n";
 var REMOVAL_MARKER = "Removed by the user. Create from Azure Functions Hosted Skills to restore.\n";
@@ -5080,24 +6355,24 @@ async function pathExists(filePath) {
 }
 function normalizedRelativePath(relativePath) {
   const raw = String(relativePath || "").trim();
-  if (!raw || path7.isAbsolute(raw) || path7.win32.isAbsolute(raw) || /^[A-Za-z]:/.test(raw)) throw new Error("Choose a non-empty relative folder inside the current worktree.");
+  if (!raw || path8.isAbsolute(raw) || path8.win32.isAbsolute(raw) || /^[A-Za-z]:/.test(raw)) throw new Error("Choose a non-empty relative folder inside the current worktree.");
   if (raw.split(/[\\/]/).includes("..")) throw new Error("The generated app folder must stay inside the current worktree.");
-  const normalized = path7.normalize(raw);
+  const normalized = path8.normalize(raw);
   if (normalized === ".") throw new Error("The generated app folder must be a dedicated subfolder inside the current worktree.");
-  if (normalized === ".." || normalized.startsWith(`..${path7.sep}`)) {
+  if (normalized === ".." || normalized.startsWith(`..${path8.sep}`)) {
     throw new Error("The generated app folder must stay inside the current worktree.");
   }
   return normalized;
 }
 function resolveCurrentWorkspaceDestination(workingDirectory, relativePath = DEFAULT_CURRENT_SUBDIR) {
-  if (!workingDirectory || !path7.isAbsolute(workingDirectory)) {
+  if (!workingDirectory || !path8.isAbsolute(workingDirectory)) {
     throw new Error("The current chat does not expose an absolute worktree path. Use an isolated workspace instead.");
   }
-  const root = path7.resolve(workingDirectory);
+  const root = path8.resolve(workingDirectory);
   const relative = normalizedRelativePath(relativePath);
-  const destination = path7.resolve(root, relative);
-  const fromRoot = path7.relative(root, destination);
-  if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${path7.sep}`) || path7.isAbsolute(fromRoot)) {
+  const destination = path8.resolve(root, relative);
+  const fromRoot = path8.relative(root, destination);
+  if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${path8.sep}`) || path8.isAbsolute(fromRoot)) {
     throw new Error("The generated app folder must be a dedicated subfolder inside the current worktree.");
   }
   return { root, relative, destination };
@@ -5105,21 +6380,21 @@ function resolveCurrentWorkspaceDestination(workingDirectory, relativePath = DEF
 function attachedInputPath(inputPath, workingDirectory) {
   const raw = String(inputPath || "").trim();
   if (!raw) throw new Error("Enter an existing app folder path.");
-  if (path7.isAbsolute(raw) || path7.win32.isAbsolute(raw)) return path7.resolve(raw);
-  if (!workingDirectory || !path7.isAbsolute(workingDirectory)) {
+  if (path8.isAbsolute(raw) || path8.win32.isAbsolute(raw)) return path8.resolve(raw);
+  if (!workingDirectory || !path8.isAbsolute(workingDirectory)) {
     throw new Error("Relative existing-app paths require a current worktree.");
   }
-  const root = path7.resolve(workingDirectory);
-  const resolved = path7.resolve(root, raw);
-  const relative = path7.relative(root, resolved);
-  if (relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
+  const root = path8.resolve(workingDirectory);
+  const resolved = path8.resolve(root, raw);
+  const relative = path8.relative(root, resolved);
+  if (relative === ".." || relative.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative)) {
     throw new Error("Relative existing-app paths must stay inside the current worktree.");
   }
   return resolved;
 }
 async function attachedAppShape(root) {
-  const directHost = path7.join(root, "host.json");
-  const nestedHost = path7.join(root, "src", "host.json");
+  const directHost = path8.join(root, "host.json");
+  const nestedHost = path8.join(root, "src", "host.json");
   const isFile = async (file) => {
     try {
       return (await lstat5(file)).isFile();
@@ -5128,25 +6403,25 @@ async function attachedAppShape(root) {
       throw error;
     }
   };
-  const sourceDirectory = await isFile(directHost) ? root : await isFile(nestedHost) ? path7.join(root, "src") : "";
+  const sourceDirectory = await isFile(directHost) ? root : await isFile(nestedHost) ? path8.join(root, "src") : "";
   if (!sourceDirectory) return null;
   const children = await readdir3(sourceDirectory, { withFileTypes: true });
-  const agentFiles = children.filter((child) => child.isFile() && child.name.endsWith(".agent.md")).map((child) => path7.join(sourceDirectory, child.name));
+  const agentFiles = children.filter((child) => child.isFile() && child.name.endsWith(".agent.md")).map((child) => path8.join(sourceDirectory, child.name));
   const validAgentFiles = [];
   for (const agentFile of agentFiles) {
-    const source = await readFile5(agentFile, "utf8");
+    const source = await readFile6(agentFile, "utf8");
     if (/^\s*---\r?\n[\s\S]*?^\s*type:\s*(?:timer_trigger|http_trigger|queue_trigger|connector_trigger)\s*$[\s\S]*?^\s*---/m.test(source)) {
       validAgentFiles.push(agentFile);
     }
   }
   if (!validAgentFiles.length) return null;
-  return { root, sourceDirectory, hostJson: path7.join(sourceDirectory, "host.json"), agentFiles: validAgentFiles };
+  return { root, sourceDirectory, hostJson: path8.join(sourceDirectory, "host.json"), agentFiles: validAgentFiles };
 }
 async function resolveAttachedAppRoot(inputPath, { workingDirectory } = {}) {
   const selected = attachedInputPath(inputPath, workingDirectory);
   let selectedStat;
   try {
-    selectedStat = await stat2(selected);
+    selectedStat = await stat3(selected);
   } catch (error) {
     if (error?.code === "ENOENT") throw new Error(`Existing app folder does not exist: ${selected}`);
     throw error;
@@ -5162,7 +6437,7 @@ async function resolveAttachedAppRoot(inputPath, { workingDirectory } = {}) {
     children.sort((a, b) => a.name.localeCompare(b.name));
     for (const child of children) {
       if (!child.isDirectory() || RUNTIME_DIRS.has(child.name) || child.name === "node_modules") continue;
-      const childPath = path7.join(directory, child.name);
+      const childPath = path8.join(directory, child.name);
       const shape = await attachedAppShape(childPath);
       if (shape) candidates.push(shape);
       else await scan(childPath, depth + 1);
@@ -5183,14 +6458,14 @@ async function resolveAttachedAppRoot(inputPath, { workingDirectory } = {}) {
 async function assertCurrentWorkspaceDestinationSafe(workingDirectory, relativePath = DEFAULT_CURRENT_SUBDIR) {
   const selected = resolveCurrentWorkspaceDestination(workingDirectory, relativePath);
   let cursor = selected.root;
-  for (const segment2 of selected.relative.split(path7.sep)) {
-    cursor = path7.join(cursor, segment2);
+  for (const segment2 of selected.relative.split(path8.sep)) {
+    cursor = path8.join(cursor, segment2);
     try {
-      const stat3 = await lstat5(cursor);
-      if (stat3.isSymbolicLink()) {
+      const stat4 = await lstat5(cursor);
+      if (stat4.isSymbolicLink()) {
         throw new Error(`The generated app path cannot traverse a symbolic link: ${cursor}`);
       }
-      if (cursor !== selected.destination && !stat3.isDirectory()) {
+      if (cursor !== selected.destination && !stat4.isDirectory()) {
         throw new Error(`The generated app parent path is not a directory: ${cursor}`);
       }
     } catch (error) {
@@ -5200,27 +6475,27 @@ async function assertCurrentWorkspaceDestinationSafe(workingDirectory, relativeP
   }
   return selected;
 }
-function sourceManifestPath(copilotHome, sessionId, instanceId, { legacy = false, identity, pathApi = path7 } = {}) {
+function sourceManifestPath(copilotHome, sessionId, instanceId, { legacy = false, identity, pathApi = path8 } = {}) {
   const key = createHash5("sha256").update(`${String(sessionId || "unknown")}\0${String(instanceId || "unknown")}`).digest("hex").slice(0, 24);
   const component = identity || (legacy ? LEGACY_STATE_COMPONENT : STATE_COMPONENT);
   return pathApi.join(copilotHome, "extensions", component, "artifacts", "source-workspaces", `${key}.json`);
 }
 function ignoredRuntimePath(relativePath) {
-  const parts = relativePath.split(path7.sep);
+  const parts = relativePath.split(path8.sep);
   const base = parts.at(-1) || "";
   return parts.some((part) => RUNTIME_DIRS.has(part)) || base === ".DS_Store" || base === "local.settings.json" || base === ".foundry-token.json" || base.endsWith(".pyc");
 }
 async function fileDigest(filePath) {
-  const bytes = await readFile5(filePath);
+  const bytes = await readFile6(filePath);
   return createHash5("sha256").update(bytes).digest("hex");
 }
 async function readWorkspaceIdentityMarker(root, relativePath = OWNERSHIP_MARKER_RELATIVE_PATH) {
-  const resolvedRoot = path7.resolve(root);
-  const markerPath = path7.join(resolvedRoot, relativePath);
+  const resolvedRoot = path8.resolve(root);
+  const markerPath = path8.join(resolvedRoot, relativePath);
   await assertSafeStatePath(markerPath);
   let cursor = resolvedRoot;
-  for (const part of relativePath.split(path7.sep)) {
-    cursor = path7.join(cursor, part);
+  for (const part of relativePath.split(path8.sep)) {
+    cursor = path8.join(cursor, part);
     let item;
     try {
       item = await lstat5(cursor);
@@ -5232,14 +6507,14 @@ async function readWorkspaceIdentityMarker(root, relativePath = OWNERSHIP_MARKER
       throw new Error("Generated workspace ownership marker cannot traverse a symbolic link.");
     }
   }
-  const marker = JSON.parse(await readFile5(markerPath, "utf8"));
+  const marker = JSON.parse(await readFile6(markerPath, "utf8"));
   if (marker?.version !== 1 || typeof marker.templateId !== "string" || !marker.templateId || typeof marker.generationId !== "string" || !marker.generationId || relativePath === OWNERSHIP_MARKER_RELATIVE_PATH && marker.component !== STATE_COMPONENT) {
     throw new Error("Generated workspace ownership marker is invalid.");
   }
   return marker;
 }
 async function writeWorkspaceIdentityMarker(root, { templateId, generationId }, relativePath = OWNERSHIP_MARKER_RELATIVE_PATH) {
-  const resolvedRoot = path7.resolve(root);
+  const resolvedRoot = path8.resolve(root);
   const existing = await readWorkspaceIdentityMarker(root, relativePath);
   if (existing) {
     if (existing.templateId !== templateId || existing.generationId !== generationId) {
@@ -5247,7 +6522,7 @@ async function writeWorkspaceIdentityMarker(root, { templateId, generationId }, 
     }
     return existing;
   }
-  const markerDir = path7.join(resolvedRoot, path7.dirname(relativePath));
+  const markerDir = path8.join(resolvedRoot, path8.dirname(relativePath));
   try {
     const item = await lstat5(markerDir);
     if (item.isSymbolicLink() || !item.isDirectory()) {
@@ -5255,9 +6530,9 @@ async function writeWorkspaceIdentityMarker(root, { templateId, generationId }, 
     }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
-    await mkdir4(markerDir, { recursive: true, mode: 448 });
+    await mkdir5(markerDir, { recursive: true, mode: 448 });
   }
-  const markerPath = path7.join(resolvedRoot, relativePath);
+  const markerPath = path8.join(resolvedRoot, relativePath);
   const marker = {
     version: 1,
     ...relativePath === OWNERSHIP_MARKER_RELATIVE_PATH ? { component: STATE_COMPONENT } : {},
@@ -5304,22 +6579,22 @@ async function assertWorkspaceIdentity(root, manifest, { upgrade = true } = {}) 
   return marker;
 }
 async function snapshotWorkspaceTree(root, { ignoreRuntime = true } = {}) {
-  const absoluteRoot = path7.resolve(root);
+  const absoluteRoot = path8.resolve(root);
   const entries = [];
   async function visit(directory, relativeDirectory = "") {
     const children = await readdir3(directory, { withFileTypes: true });
     children.sort((a, b) => a.name.localeCompare(b.name));
     for (const child of children) {
-      const relativePath = path7.join(relativeDirectory, child.name);
+      const relativePath = path8.join(relativeDirectory, child.name);
       if (ignoreRuntime && ignoredRuntimePath(relativePath)) continue;
-      const absolutePath = path7.join(directory, child.name);
+      const absolutePath = path8.join(directory, child.name);
       if (child.isDirectory()) {
         await visit(absolutePath, relativePath);
       } else if (child.isSymbolicLink()) {
         entries.push({ path: relativePath, type: "symlink", target: await readlink(absolutePath) });
       } else if (child.isFile()) {
-        const stat3 = await lstat5(absolutePath);
-        entries.push({ path: relativePath, type: "file", size: stat3.size, sha256: await fileDigest(absolutePath) });
+        const stat4 = await lstat5(absolutePath);
+        entries.push({ path: relativePath, type: "file", size: stat4.size, sha256: await fileDigest(absolutePath) });
       } else {
         throw new Error(`Unsupported generated workspace entry: ${relativePath}`);
       }
@@ -5338,10 +6613,10 @@ async function createOwnershipManifest({
   baselineRoot = root,
   removalPolicy = "baseline",
   state = "ready",
-  generationId = randomUUID3()
+  generationId = randomUUID4()
 }) {
-  const resolvedRoot = path7.resolve(root);
-  const resolvedWorkspace = path7.resolve(workspaceRoot);
+  const resolvedRoot = path8.resolve(root);
+  const resolvedWorkspace = path8.resolve(workspaceRoot);
   const safe = resolveCurrentWorkspaceDestination(resolvedWorkspace, relativePath);
   if (safe.destination !== resolvedRoot) throw new Error("Generated workspace ownership does not match its declared worktree path.");
   if (!["baseline", "preserve"].includes(removalPolicy)) {
@@ -5355,11 +6630,11 @@ async function createOwnershipManifest({
   if (!normalizedTemplateId || !normalizedGenerationId) {
     throw new Error("Generated workspace ownership requires a template and generation.");
   }
-  await writeWorkspaceIdentityMarker(path7.resolve(baselineRoot), {
+  await writeWorkspaceIdentityMarker(path8.resolve(baselineRoot), {
     templateId: normalizedTemplateId,
     generationId: normalizedGenerationId
   });
-  await writeWorkspaceIdentityMarker(path7.resolve(baselineRoot), {
+  await writeWorkspaceIdentityMarker(path8.resolve(baselineRoot), {
     templateId: normalizedTemplateId,
     generationId: normalizedGenerationId
   }, LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH);
@@ -5375,7 +6650,7 @@ async function createOwnershipManifest({
     removalPolicy,
     state,
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    baseline: await snapshotWorkspaceTree(path7.resolve(baselineRoot))
+    baseline: await snapshotWorkspaceTree(path8.resolve(baselineRoot))
   };
 }
 async function writeOwnershipManifest(filePath, manifest) {
@@ -5385,7 +6660,7 @@ async function writeOwnershipManifest(filePath, manifest) {
 async function readOwnershipManifest(filePath) {
   try {
     await assertSafeStatePath(filePath);
-    const manifest = JSON.parse(await readFile5(filePath, "utf8"));
+    const manifest = JSON.parse(await readFile6(filePath, "utf8"));
     return validateOwnershipManifest(manifest);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
@@ -5404,7 +6679,7 @@ function validateOwnershipManifest(manifest) {
     throw new Error("Generated workspace ownership manifest is invalid.");
   }
   const selected = resolveCurrentWorkspaceDestination(manifest.workspaceRoot, manifest.relativePath);
-  if (!path7.isAbsolute(manifest.root) || selected.destination !== path7.resolve(manifest.root)) {
+  if (!path8.isAbsolute(manifest.root) || selected.destination !== path8.resolve(manifest.root)) {
     throw new Error("Generated workspace ownership does not match its worktree path.");
   }
   for (const entry of manifest.baseline) {
@@ -5424,9 +6699,9 @@ async function migrateSourceOwnership({
   templateId,
   lockHeld = false
 }) {
-  const owner = workspaceRoot ? { component: STATE_COMPONENT, workspaceRoot: path7.resolve(workspaceRoot) } : { component: STATE_COMPONENT, sessionId: String(sessionId || ""), instanceId: String(instanceId || "") };
-  const allowedDirectories = new Set(sources.map((file) => path7.dirname(file)));
-  const isSourceAllowed = (file) => typeof file === "string" && allowedDirectories.has(path7.dirname(file)) && /^[a-f0-9]{24}\.json$/.test(path7.basename(file));
+  const owner = workspaceRoot ? { component: STATE_COMPONENT, workspaceRoot: path8.resolve(workspaceRoot) } : { component: STATE_COMPONENT, sessionId: String(sessionId || ""), instanceId: String(instanceId || "") };
+  const allowedDirectories = new Set(sources.map((file) => path8.dirname(file)));
+  const isSourceAllowed = (file) => typeof file === "string" && allowedDirectories.has(path8.dirname(file)) && /^[a-f0-9]{24}\.json$/.test(path8.basename(file));
   const removed = await migrateStateRecord({
     destination: `${destination}.removed`,
     sources: sources.map((file) => `${file}.removed`),
@@ -5452,7 +6727,7 @@ async function migrateSourceOwnership({
     isSourceAllowed,
     async validate(value, { canonical }) {
       const manifest = validateOwnershipManifest(value);
-      if (workspaceRoot && path7.resolve(manifest.workspaceRoot) !== path7.resolve(workspaceRoot) || !workspaceRoot && (manifest.sessionId !== sessionId || manifest.instanceId !== instanceId) || manifest.templateId && manifest.templateId !== templateId) {
+      if (workspaceRoot && path8.resolve(manifest.workspaceRoot) !== path8.resolve(workspaceRoot) || !workspaceRoot && (manifest.sessionId !== sessionId || manifest.instanceId !== instanceId) || manifest.templateId && manifest.templateId !== templateId) {
         throw new Error("Legacy source manifest ownership does not match this worktree, instance, or template.");
       }
       if (!canonical) {
@@ -5488,23 +6763,23 @@ async function validateRuntimeWorkspace(root, recoverySignatures, templateId) {
     await assertRecoverySignature(root, signature);
   }
   if (templateId) {
-    const identity = { templateId, generationId: randomUUID3() };
+    const identity = { templateId, generationId: randomUUID4() };
     await writeWorkspaceIdentityMarker(root, identity);
     await writeWorkspaceIdentityMarker(root, identity, LEGACY_OWNERSHIP_MARKER_RELATIVE_PATH);
   }
 }
 async function assertRecoverySignature(root, signature) {
   const relative = normalizedRelativePath(signature?.path);
-  const resolvedRoot = path7.resolve(root);
-  const absolute = path7.resolve(resolvedRoot, relative);
-  const fromRoot = path7.relative(resolvedRoot, absolute);
-  if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${path7.sep}`) || path7.isAbsolute(fromRoot)) {
+  const resolvedRoot = path8.resolve(root);
+  const absolute = path8.resolve(resolvedRoot, relative);
+  const fromRoot = path8.relative(resolvedRoot, absolute);
+  if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${path8.sep}`) || path8.isAbsolute(fromRoot)) {
     throw new Error("Generated workspace recovery signatures must stay inside the destination.");
   }
   let cursor = resolvedRoot;
-  const parts = relative.split(path7.sep);
+  const parts = relative.split(path8.sep);
   for (const [index, part] of parts.entries()) {
-    cursor = path7.join(cursor, part);
+    cursor = path8.join(cursor, part);
     let item;
     try {
       item = await lstat5(cursor);
@@ -5526,7 +6801,7 @@ async function assertRecoverySignature(root, signature) {
   }
   let content;
   try {
-    content = await readFile5(absolute, "utf8");
+    content = await readFile6(absolute, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new Error(`The existing destination is not a verified generated workspace: missing ${relative}.`);
@@ -5549,21 +6824,21 @@ async function reenterOwnedWorkspace({
   recoverySignatures = []
 }) {
   const selected = await assertCurrentWorkspaceDestinationSafe(workspaceRoot, relativePath);
-  let stat3;
+  let stat4;
   try {
-    stat3 = await lstat5(selected.destination);
+    stat4 = await lstat5(selected.destination);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
-  if (!stat3.isDirectory()) {
+  if (!stat4.isDirectory()) {
     throw new Error(`The current-worktree destination is not a directory: ${selected.destination}`);
   }
   if (manifest) {
     if (manifest.state === "moving") {
       throw new Error("The generated workspace has an unfinished move that must be reconciled before reentry.");
     }
-    if (path7.resolve(manifest.root) !== selected.destination || path7.resolve(manifest.workspaceRoot) !== selected.root || path7.normalize(manifest.relativePath) !== selected.relative) {
+    if (path8.resolve(manifest.root) !== selected.destination || path8.resolve(manifest.workspaceRoot) !== selected.root || path8.normalize(manifest.relativePath) !== selected.relative) {
       throw new Error("Generated workspace ownership does not match the selected worktree destination.");
     }
     if (manifest.templateId && manifest.templateId !== templateId) {
@@ -5581,7 +6856,7 @@ async function reenterOwnedWorkspace({
     if (previousIdentity && previousIdentity.templateId !== templateId) {
       throw new Error("Legacy workspace identity belongs to another template.");
     }
-    const generationId = manifest.generationId || previousIdentity?.generationId || randomUUID3();
+    const generationId = manifest.generationId || previousIdentity?.generationId || randomUUID4();
     const upgraded = {
       ...manifest,
       version: MANIFEST_VERSION,
@@ -5629,9 +6904,9 @@ async function acquireOwnershipLock(manifestPath, { timeoutMs = 12e4, pollMs = 5
   const lockPath = `${manifestPath}.lock`;
   await assertSafeStatePath(manifestPath);
   await assertSafeStatePath(lockPath);
-  await mkdir4(path7.dirname(lockPath), { recursive: true, mode: 448 });
+  await mkdir5(path8.dirname(lockPath), { recursive: true, mode: 448 });
   const started = Date.now();
-  const token = randomUUID3();
+  const token = randomUUID4();
   while (true) {
     try {
       const handle = await open3(lockPath, "wx", 384);
@@ -5644,20 +6919,20 @@ async function acquireOwnershipLock(manifestPath, { timeoutMs = 12e4, pollMs = 5
         await handle.close();
         let current = null;
         try {
-          current = JSON.parse(await readFile5(lockPath, "utf8"));
+          current = JSON.parse(await readFile6(lockPath, "utf8"));
         } catch (error) {
           if (error?.code !== "ENOENT") throw error;
         }
-        if (current?.token === token) await rm4(lockPath, { force: true });
+        if (current?.token === token) await rm5(lockPath, { force: true });
       };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       try {
-        const lockStat = await stat2(lockPath);
+        const lockStat = await stat3(lockPath);
         let currentRaw = "";
         let current = null;
         try {
-          currentRaw = await readFile5(lockPath, "utf8");
+          currentRaw = await readFile6(lockPath, "utf8");
           current = JSON.parse(currentRaw);
         } catch {
         }
@@ -5678,14 +6953,14 @@ async function acquireOwnershipLock(manifestPath, { timeoutMs = 12e4, pollMs = 5
           const takeoverPath = `${lockPath}.takeover-${observedHash}-${token}`;
           try {
             await link2(lockPath, takeoverPath);
-            const [latestLockStat, takeoverStat] = await Promise.all([stat2(lockPath), stat2(takeoverPath)]);
+            const [latestLockStat, takeoverStat] = await Promise.all([stat3(lockPath), stat3(takeoverPath)]);
             if (lockStat.dev === takeoverStat.dev && lockStat.ino === takeoverStat.ino && latestLockStat.dev === takeoverStat.dev && latestLockStat.ino === takeoverStat.ino) {
-              await rm4(lockPath, { force: true });
+              await rm5(lockPath, { force: true });
             }
           } catch (takeoverError) {
             if (!["EEXIST", "ENOENT"].includes(takeoverError?.code)) throw takeoverError;
           } finally {
-            await rm4(takeoverPath, { force: true });
+            await rm5(takeoverPath, { force: true });
           }
         }
       } catch (statError) {
@@ -5699,8 +6974,8 @@ async function acquireOwnershipLock(manifestPath, { timeoutMs = 12e4, pollMs = 5
   }
 }
 async function verifyOwnedWorkspace(root, manifest) {
-  const resolvedRoot = path7.resolve(root);
-  if (path7.resolve(manifest?.root || "") !== resolvedRoot) {
+  const resolvedRoot = path8.resolve(root);
+  if (path8.resolve(manifest?.root || "") !== resolvedRoot) {
     throw new Error("Generated workspace ownership manifest does not match this folder.");
   }
   const baseline = new Map(manifest.baseline.map((entry) => [entry.path, entry]));
@@ -5721,9 +6996,9 @@ async function verifyOwnedWorkspace(root, manifest) {
   return conflicts;
 }
 async function removeOwnedWorkspace(root, manifest) {
-  const resolvedRoot = path7.resolve(root);
+  const resolvedRoot = path8.resolve(root);
   const safe = resolveCurrentWorkspaceDestination(manifest.workspaceRoot, manifest.relativePath);
-  if (safe.destination !== resolvedRoot || path7.resolve(manifest.root) !== resolvedRoot) {
+  if (safe.destination !== resolvedRoot || path8.resolve(manifest.root) !== resolvedRoot) {
     throw new Error("Refusing to remove a folder outside the recorded generated workspace.");
   }
   if (manifest.removalPolicy === "preserve") {
@@ -5739,15 +7014,15 @@ async function removeOwnedWorkspace(root, manifest) {
       `Generated files changed after creation, so nothing was removed. Move the app to an isolated session or review: ${summary}${conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : ""}.`
     );
   }
-  await rm4(resolvedRoot, { recursive: true, force: false });
+  await rm5(resolvedRoot, { recursive: true, force: false });
 }
 async function moveWorkspaceDirectory(source, destination) {
-  const resolvedSource = path7.resolve(source);
-  const resolvedDestination = path7.resolve(destination);
+  const resolvedSource = path8.resolve(source);
+  const resolvedDestination = path8.resolve(destination);
   if (resolvedSource === resolvedDestination) return;
   if (!await pathExists(resolvedSource)) throw new Error("The generated workspace no longer exists.");
   if (await pathExists(resolvedDestination)) throw new Error(`The isolated destination already exists: ${resolvedDestination}`);
-  await mkdir4(path7.dirname(resolvedDestination), { recursive: true });
+  await mkdir5(path8.dirname(resolvedDestination), { recursive: true });
   try {
     await rename4(resolvedSource, resolvedDestination);
   } catch (error) {
@@ -5756,22 +7031,22 @@ async function moveWorkspaceDirectory(source, destination) {
     await cp2(resolvedSource, resolvedDestination, { recursive: true, errorOnExist: true, force: false });
     const after = await snapshotWorkspaceTree(resolvedDestination, { ignoreRuntime: false });
     if (JSON.stringify(after) !== JSON.stringify(before)) {
-      await rm4(resolvedDestination, { recursive: true, force: true });
+      await rm5(resolvedDestination, { recursive: true, force: true });
       throw new Error("The isolated copy could not be verified, so the current-worktree source was left unchanged.");
     }
-    await rm4(resolvedSource, { recursive: true, force: false });
+    await rm5(resolvedSource, { recursive: true, force: false });
   }
 }
 async function deleteOwnershipManifest(filePath) {
-  await rm4(filePath, { force: true });
+  await rm5(filePath, { force: true });
 }
 
 // canvases/azure-functions-hosted-skills/src/studio-state.mjs
 import { lstat as lstat6, readdir as readdir4 } from "node:fs/promises";
-import path8 from "node:path";
+import path9 from "node:path";
 
 // canvases/azure-functions-hosted-skills/src/trigger-drafts.mjs
-import { readFile as readFile6 } from "node:fs/promises";
+import { readFile as readFile7 } from "node:fs/promises";
 
 // canvases/azure-functions-hosted-skills/src/connector-trigger.mjs
 var M365_INBOX_CONNECTOR = Object.freeze({
@@ -6034,7 +7309,7 @@ async function loadTriggerPayloadDrafts(file, { read } = {}) {
   const drafts = defaultTriggerPayloadDrafts();
   if (read) return { ...drafts, ...await read() };
   try {
-    const parsed = JSON.parse(await readFile6(file, "utf8"));
+    const parsed = JSON.parse(await readFile7(file, "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return drafts;
     for (const trigger of ["queue", "connector"]) {
       if (!Object.prototype.hasOwnProperty.call(parsed, trigger)) continue;
@@ -6079,7 +7354,7 @@ function validateSourceModeState(value) {
   }
   if (!["managed", "attached"].includes(value.sourceMode)) invalid("source mode");
   if (typeof value.attachedRoot !== "string" || value.attachedRoot.includes("\0")) invalid("source mode");
-  if (value.sourceMode === "attached" && !path8.isAbsolute(value.attachedRoot)) invalid("source mode");
+  if (value.sourceMode === "attached" && !path9.isAbsolute(value.attachedRoot)) invalid("source mode");
   return { sourceMode: value.sourceMode, attachedRoot: value.attachedRoot };
 }
 function validateCommittedSubscriptionScope(value) {
@@ -6105,6 +7380,19 @@ function validateSubscriptionScopeState(value) {
   return {
     model: validateCommittedSubscriptionScope(value.model ?? null),
     azure: validateCommittedSubscriptionScope(value.azure ?? null)
+  };
+}
+function validateModelProviderState(value) {
+  if (!object(value) || Object.keys(value).some((key) => !["provider", "copilotModelId"].includes(key))) {
+    invalid("model provider");
+  }
+  if (!["copilot", "foundry", "gateway"].includes(value.provider)) invalid("model provider");
+  if (typeof value.copilotModelId !== "string" || value.copilotModelId.length > 500 || value.copilotModelId.includes("\0")) {
+    invalid("model provider");
+  }
+  return {
+    provider: value.provider,
+    copilotModelId: value.copilotModelId
   };
 }
 var TEXT_FIELDS = ["time", "phase", "target", "trigger", "origin", "executionId", "functionName", "sessionId", "operationId", "invokedAt", "note", "response"];
@@ -6149,7 +7437,8 @@ var SCHEMAS = {
   "http-request-drafts.json": { schema: "studio.http-request-drafts.v1", validate: validateHttpDraftState },
   "trigger-payload-drafts.json": { schema: "studio.trigger-payload-drafts.v1", validate: validateTriggerDraftState },
   "source-mode.json": { schema: "studio.source-mode.v1", validate: validateSourceModeState },
-  "subscription-scopes.json": { schema: "studio.subscription-scopes.v1", validate: validateSubscriptionScopeState }
+  "subscription-scopes.json": { schema: "studio.subscription-scopes.v1", validate: validateSubscriptionScopeState },
+  "model-provider.json": { schema: "studio.model-provider.v1", validate: validateModelProviderState }
 };
 var StudioState = class {
   constructor(options = {}) {
@@ -6166,7 +7455,7 @@ var StudioState = class {
         if (error?.code !== "ENOENT") throw error;
       }
     }
-    const file = path8.join(this.paths.root, "owner.json");
+    const file = path9.join(this.paths.root, "owner.json");
     await withStateLock(file, async () => {
       const raw = await readStateText(file);
       const expected = { version: 1, ...this.paths.owner };
@@ -6187,15 +7476,15 @@ var StudioState = class {
   }
   file(name) {
     if (!SCHEMAS[name]) throw new Error(`Unsupported canvas state component: ${name}`);
-    return path8.join(this.paths.root, name);
+    return path9.join(this.paths.root, name);
   }
   async load(name) {
-    const contract = SCHEMAS[name];
+    const contract2 = SCHEMAS[name];
     const result = await migrateStateRecord({
       destination: this.file(name),
-      sources: this.paths.legacyRoots.map((root) => path8.join(root, name)),
+      sources: this.paths.legacyRoots.map((root) => path9.join(root, name)),
       owner: this.paths.owner,
-      ...contract
+      ...contract2
     });
     this.revisions.set(name, result?.revision ?? null);
     return result?.value ?? null;
@@ -6219,9 +7508,9 @@ var StudioState = class {
   // Only a validated location reference is persisted, never copied wholesale.
   async runtimeDirectory(name, validate) {
     if (!["template", "deployment"].includes(name)) throw new Error("Unsupported runtime directory.");
-    const canonical = path8.join(this.paths.root, name);
-    const reference = path8.join(this.paths.root, `${name}.location.json`);
-    const legacy = this.paths.legacyRoots.map((root) => path8.join(root, name));
+    const canonical = path9.join(this.paths.root, name);
+    const reference = path9.join(this.paths.root, `${name}.location.json`);
+    const legacy = this.paths.legacyRoots.map((root) => path9.join(root, name));
     const present = async (dir) => {
       await assertSafeStatePath(dir);
       try {
@@ -6235,14 +7524,14 @@ var StudioState = class {
     return withStateLock(reference, async () => {
       const saved = await readStateText(reference);
       if (saved !== null) {
-        const record = JSON.parse(saved);
-        if (record.version !== 1 || record.component !== STATE_COMPONENT || record.instanceId !== this.paths.owner.instanceId || record.schema !== `studio.${name}-location.v1` || record.destination !== canonical || !legacy.includes(record.source) || record.mode !== "reference") {
+        const record2 = JSON.parse(saved);
+        if (record2.version !== 1 || record2.component !== STATE_COMPONENT || record2.instanceId !== this.paths.owner.instanceId || record2.schema !== `studio.${name}-location.v1` || record2.destination !== canonical || !legacy.includes(record2.source) || record2.mode !== "reference") {
           throw new Error(`Invalid runtime location ownership: ${reference}`);
         }
         if (await present(canonical)) throw new Error(`Canonical and retained runtime locations conflict: ${canonical}`);
-        if (!await present(record.source)) throw new Error(`Retained runtime location is missing: ${record.source}`);
-        await validate(record.source);
-        return record.source;
+        if (!await present(record2.source)) throw new Error(`Retained runtime location is missing: ${record2.source}`);
+        await validate(record2.source);
+        return record2.source;
       }
       if (await present(canonical)) {
         await validate(canonical);
@@ -6271,7 +7560,7 @@ var StudioState = class {
 // canvases/azure-functions-hosted-skills/src/timer-schedule.mjs
 var TIMER_CADENCES = ["daily", "weekly", "hourly"];
 var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-var DEFAULT_SCHEDULE = Object.freeze({
+var DEFAULT_TIMER_SCHEDULE = Object.freeze({
   cadence: "daily",
   localTime: "09:00",
   weekday: 1,
@@ -6291,11 +7580,11 @@ function normalizeOffset(offsetMinutes) {
   return value;
 }
 function normalizeTimerSchedule(input = {}) {
-  const cadence = String(input.cadence || DEFAULT_SCHEDULE.cadence).toLowerCase();
+  const cadence = String(input.cadence || DEFAULT_TIMER_SCHEDULE.cadence).toLowerCase();
   if (!TIMER_CADENCES.includes(cadence)) throw new Error("Choose Daily, Weekly, or Hourly.");
-  const localTime = String(input.localTime || DEFAULT_SCHEDULE.localTime);
-  const weekday = Number(input.weekday ?? DEFAULT_SCHEDULE.weekday);
-  const hourlyMinute = Number(input.hourlyMinute ?? DEFAULT_SCHEDULE.hourlyMinute);
+  const localTime = String(input.localTime || DEFAULT_TIMER_SCHEDULE.localTime);
+  const weekday = Number(input.weekday ?? DEFAULT_TIMER_SCHEDULE.weekday);
+  const hourlyMinute = Number(input.hourlyMinute ?? DEFAULT_TIMER_SCHEDULE.hourlyMinute);
   if (cadence === "daily" || cadence === "weekly") parseLocalTime(localTime);
   if (cadence === "weekly" && (!Number.isInteger(weekday) || weekday < 0 || weekday > 6)) {
     throw new Error("Choose a valid weekday.");
@@ -6353,6 +7642,12 @@ function replaceTimerScheduleExpression(source, expression) {
   const pattern = /^(\s*)schedule:\s*["']?[^"'\r\n]+["']?\s*$/m;
   if (!pattern.test(source)) throw new Error("The Timer agent does not contain a schedule setting.");
   return source.replace(pattern, `$1schedule: "${expression}"`);
+}
+function applyDefaultTimerSchedule(source, offsetMinutes = (/* @__PURE__ */ new Date()).getTimezoneOffset()) {
+  return replaceTimerScheduleExpression(
+    source,
+    timerExpressionFromSchedule(DEFAULT_TIMER_SCHEDULE, offsetMinutes)
+  );
 }
 
 // canvases/azure-functions-hosted-skills/src/deployment-ui-state.mjs
@@ -6509,8 +7804,8 @@ function appendBoundedDeploymentOutput(deployment, event, { maxLines = 800, maxC
 }
 
 // canvases/azure-functions-hosted-skills/src/deployment-template-policy.mjs
-import { readFile as readFile7, writeFile as writeFile2 } from "node:fs/promises";
-import path9 from "node:path";
+import { readFile as readFile8, rm as rm6, writeFile as writeFile2 } from "node:fs/promises";
+import path10 from "node:path";
 
 // canvases/azure-functions-hosted-skills/src/model-deployment-contract.mjs
 var CREATE_MODELS_BICEP_MARKER = "// Managed by Azure Functions Hosted Skills Create Models.";
@@ -6743,13 +8038,157 @@ function foundryDeploymentLabel(deployment = DEFAULT_FOUNDRY_MODEL_DEPLOYMENT) {
 }
 
 // canvases/azure-functions-hosted-skills/src/deployment-template-policy.mjs
+var COGNITIVE_SERVICES_USER_ROLE_ID = "a97b65f3-24c7-4388-baec-2e87135dc908";
+var COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd";
+var FOUNDRY_USER_ROLE_ID = "53ca6127-db72-4b80-b1b0-d745d6d5456d";
+var PROVIDER_APP_SETTING_KEYS = /* @__PURE__ */ new Set([
+  "AZURE_FUNCTIONS_AGENTS_PROVIDER",
+  "FOUNDRY_PROJECT_ENDPOINT",
+  "FOUNDRY_MODEL",
+  "AZURE_FUNCTIONS_AGENTS_MODEL",
+  "AZURE_AI_GATEWAY_OPENAI_BASE_URL",
+  "AZURE_AI_GATEWAY_MCP_URL",
+  "AZURE_AI_GATEWAY_API_KEY"
+]);
+var PROVIDER_PARAMETER_NAMES = [
+  "foundryModel",
+  "foundryModelName",
+  "foundryModelVersion",
+  "foundryDeploymentCapacity",
+  "existingFoundrySubscriptionId",
+  "existingFoundryResourceGroup",
+  "existingFoundryAccountName",
+  "existingFoundryProjectName",
+  "existingFoundryProjectEndpoint",
+  "existingFoundryModel",
+  "aiGatewayOpenAiBaseUrl",
+  "aiGatewayMcpUrl",
+  "aiGatewayApiKey",
+  "aiGatewayModel"
+];
 async function readOptionalFile(file) {
   try {
-    return await readFile7(file, "utf8");
+    return await readFile8(file, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
+}
+function requiredString(value, label) {
+  const result = String(value || "").trim();
+  if (!result) throw new Error(`${label} is required for deployment.`);
+  return result;
+}
+function resourceIdParts(resourceId) {
+  const id = requiredString(resourceId, "Selected Azure resource ID");
+  const parts = id.split("/").filter(Boolean);
+  const valueAfter = (segment2) => {
+    const index = parts.findIndex((part) => part.toLowerCase() === segment2.toLowerCase());
+    return index >= 0 ? parts[index + 1] || "" : "";
+  };
+  return {
+    id,
+    subscription: valueAfter("subscriptions"),
+    resourceGroup: valueAfter("resourceGroups"),
+    accountName: valueAfter("accounts"),
+    projectName: valueAfter("projects")
+  };
+}
+function freezeIntent(intent) {
+  return Object.freeze({
+    ...intent,
+    resource: intent.resource ? Object.freeze({ ...intent.resource }) : null,
+    model: Object.freeze({ ...intent.model })
+  });
+}
+function snapshotDeploymentProviderIntent(modelBinding) {
+  const provider = requiredString(modelBinding?.activeSource, "Active model provider");
+  const modelId = requiredString(modelBinding?.activeModelId, "Active model");
+  const subscription = String(modelBinding?.subscription || "").trim();
+  if (provider === "copilot") {
+    const model2 = (modelBinding?.copilotModels || []).find((candidate) => candidate.id === modelId);
+    return freezeIntent({
+      provider,
+      subscription,
+      resource: null,
+      model: {
+        id: modelId,
+        label: String(model2?.name || model2?.label || modelBinding?.activeLabel || modelId),
+        version: ""
+      },
+      label: String(modelBinding?.activeLabel || `${modelId} via GitHub Copilot`),
+      provisionsModelResources: true
+    });
+  }
+  if (provider !== "foundry" && provider !== "gateway") {
+    throw new Error(`Unsupported deployment provider "${provider}".`);
+  }
+  const resources = provider === "gateway" ? modelBinding?.gateways : modelBinding?.foundry;
+  const resource = (resources || []).find((candidate) => candidate.id === modelBinding?.activeResourceId);
+  if (!resource) throw new Error("The active model resource is no longer available. Refresh and select it again.");
+  const model = (resource.models || []).find((candidate) => candidate.id === modelId);
+  if (!model) throw new Error("The active model is no longer available. Refresh and select it again.");
+  const parsed = resourceIdParts(resource.id);
+  if (!parsed.subscription || !parsed.resourceGroup) {
+    throw new Error("The selected Azure resource ID does not contain a subscription and resource group.");
+  }
+  if (subscription && parsed.subscription.toLowerCase() !== subscription.toLowerCase()) {
+    throw new Error("The selected model resource is not in the active model subscription.");
+  }
+  if (provider === "foundry" && (!parsed.accountName || !parsed.projectName)) {
+    throw new Error("The selected Microsoft Foundry project ID is incomplete.");
+  }
+  const endpoint2 = requiredString(resource.endpoint, `Selected ${provider === "foundry" ? "Foundry project" : "AI Gateway"} endpoint`);
+  return freezeIntent({
+    provider,
+    subscription: parsed.subscription,
+    resource: {
+      id: parsed.id,
+      name: String(resource.name || (provider === "foundry" ? parsed.projectName : "") || parsed.id.split("/").at(-1)),
+      resourceGroup: parsed.resourceGroup,
+      accountName: parsed.accountName,
+      projectName: parsed.projectName,
+      location: String(resource.location || ""),
+      endpoint: endpoint2
+    },
+    model: {
+      id: modelId,
+      label: String(model.label || model.name || modelId),
+      version: String(model.version || ""),
+      provider: String(model.provider || "")
+    },
+    label: String(
+      modelBinding?.activeLabel || `${model.label || modelId} via ${provider === "foundry" ? "Microsoft Foundry" : "AI Gateway"}`
+    ),
+    provisionsModelResources: false
+  });
+}
+function deploymentProviderConfirmation(intent, confirmation) {
+  if (intent.provider !== "copilot") return null;
+  const expected = {
+    selectedSource: intent.provider,
+    selectedModelId: intent.model.id,
+    selectedResourceId: "",
+    effectiveDeploymentName: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.deploymentName
+  };
+  if (confirmation && Object.entries(expected).every(([name, value]) => String(confirmation[name] || "") === value)) {
+    return null;
+  }
+  return {
+    ok: false,
+    confirmationRequired: true,
+    confirmation: expected,
+    message: `${intent.label} is local-only and its credentials and bridge settings cannot be deployed. Deploy to Azure will instead create a new Foundry account and provision ${foundryDeploymentLabel()} in ${FOUNDRY_DEPLOYMENT_LOCATION}. Automatic model fallback is disabled. Continue with that Azure deployment model?`
+  };
+}
+function deploymentIntentSummary(intent) {
+  if (intent.provider === "foundry") {
+    return `Existing Microsoft Foundry project ${intent.resource.name} in ${intent.resource.resourceGroup}, model deployment ${intent.model.id}. No replacement Foundry account, project, or model will be provisioned.`;
+  }
+  if (intent.provider === "gateway") {
+    return `Existing Azure AI Gateway ${intent.resource.name} in ${intent.resource.resourceGroup}, model ${intent.model.id}. The Function will use the gateway runtime api-key; the gateway keeps its managed-identity connection to the Foundry backend.`;
+  }
+  return `GitHub Copilot model ${intent.model.id} remains local-only. Azure deployment will provision ${foundryDeploymentLabel()} in a new Foundry account.`;
 }
 function replaceCanonicalModelValues(source) {
   const parameterReplacements = [
@@ -6775,83 +8214,328 @@ function replaceCanonicalModelValues(source) {
   }
   return next;
 }
-async function enforceIdentityOnlyDeploymentTemplate(projectDir) {
-  const mainFile = path9.join(projectDir, "infra", "main.bicep");
-  const parametersFile = path9.join(projectDir, "infra", "main.parameters.json");
-  const apiFile = path9.join(projectDir, "infra", "app", "api.bicep");
-  const foundryFile = path9.join(projectDir, "infra", "app", "foundry.bicep");
-  const [mainSource, parametersSource, apiSource, foundrySource] = await Promise.all([
-    readFile7(mainFile, "utf8"),
-    readOptionalFile(parametersFile),
-    readFile7(apiFile, "utf8"),
-    readFile7(foundryFile, "utf8")
-  ]);
-  const mainNext = (() => {
-    let next = replaceCanonicalModelValues(mainSource);
-    if (!/allowSharedKeyAccess:\s*false\b/.test(next)) {
-      if (!/allowSharedKeyAccess:\s*true\b/.test(next)) {
-        throw new Error("Deployment template does not declare the Storage shared-key policy; refusing to guess.");
+function disableStorageSharedKey(source) {
+  if (/allowSharedKeyAccess:\s*false\b/.test(source)) return source;
+  if (!/allowSharedKeyAccess:\s*true\b/.test(source)) {
+    throw new Error("Deployment template does not declare the Storage shared-key policy; refusing to guess.");
+  }
+  return source.replace(/allowSharedKeyAccess:\s*true\b/, "allowSharedKeyAccess: false");
+}
+function providerSettings(source, settings) {
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/);
+  const providerIndex = lines.findIndex((line) => /^\s*AZURE_FUNCTIONS_AGENTS_PROVIDER\s*:/.test(line));
+  if (providerIndex < 0) {
+    throw new Error("Deployment template does not expose the model provider app setting; refusing to guess.");
+  }
+  const indent = lines[providerIndex].match(/^\s*/)?.[0] || "";
+  let insertionIndex = providerIndex;
+  const retained = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const key = lines[index].trim().split(":")[0];
+    if (PROVIDER_APP_SETTING_KEYS.has(key)) {
+      if (index < providerIndex) insertionIndex -= 1;
+      continue;
+    }
+    retained.push(lines[index]);
+  }
+  retained.splice(
+    insertionIndex,
+    0,
+    ...Object.entries(settings).map(([name, value]) => `${indent}${name}: ${value}`)
+  );
+  return retained.join(eol);
+}
+function replaceNamedBlock(source, pattern, replacement) {
+  const match = pattern.exec(source);
+  if (!match) throw new Error("Deployment template does not expose the expected Foundry module; refusing to guess.");
+  const start = match.index;
+  const open4 = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = open4; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const end = source[index + 1] === "\r" && source[index + 2] === "\n" ? index + 3 : source[index + 1] === "\n" ? index + 2 : index + 1;
+        return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
       }
-      next = next.replace(/allowSharedKeyAccess:\s*true\b/, "allowSharedKeyAccess: false");
     }
-    if (/AZURE_FUNCTIONS_AGENTS_PROVIDER:\s*'foundry'/.test(next)) {
-      const foundrySetting = /^(\s*)FOUNDRY_MODEL:\s*[^\r\n]*(\r?\n|$)/m;
-      const hostedAgentSetting = /^(\s*)AZURE_FUNCTIONS_AGENTS_MODEL:\s*[^\r\n]*(\r?\n|$)/m;
-      if (!foundrySetting.test(next)) {
-        throw new Error("Deployment template does not expose the Foundry model setting; refusing to guess.");
-      }
-      next = next.replace(
-        foundrySetting,
-        (_match, indent, eol) => `${indent}FOUNDRY_MODEL: foundry.outputs.modelDeploymentName${eol}`
-      );
-      if (hostedAgentSetting.test(next)) {
-        next = next.replace(
-          hostedAgentSetting,
-          (_match, indent, eol) => `${indent}AZURE_FUNCTIONS_AGENTS_MODEL: foundry.outputs.modelDeploymentName${eol}`
-        );
-      } else {
-        next = next.replace(
-          foundrySetting,
-          (_match, indent, eol) => `${indent}FOUNDRY_MODEL: foundry.outputs.modelDeploymentName${eol}${indent}AZURE_FUNCTIONS_AGENTS_MODEL: foundry.outputs.modelDeploymentName${eol}`
-        );
-      }
-    }
-    return next;
-  })();
-  const parametersNext = (() => {
-    if (parametersSource == null) return null;
-    let parsed;
-    try {
-      parsed = JSON.parse(parametersSource);
-    } catch (error) {
-      throw new Error(`Deployment template has invalid infra/main.parameters.json: ${error.message}`);
-    }
-    const parameters = parsed?.parameters;
-    if (!parameters || typeof parameters !== "object") return parametersSource;
-    const expected = {
-      foundryModel: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.deploymentName,
-      foundryModelName: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.modelName,
-      foundryModelVersion: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.modelVersion,
-      foundryDeploymentCapacity: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.capacity
-    };
-    const present = Object.keys(expected).filter((name) => parameters[name]);
-    if (!present.length) return parametersSource;
-    if (present.length !== Object.keys(expected).length) {
-      throw new Error("Deployment template exposes an incomplete Foundry model parameter set; refusing to guess.");
-    }
-    for (const [name, value] of Object.entries(expected)) parameters[name] = { value };
-    return `${JSON.stringify(parsed, null, 2)}
+  }
+  throw new Error("Deployment template has an unterminated Foundry module; refusing to guess.");
+}
+function insertBeforeVariables(source, text) {
+  const marker = /^var (?:abbrs|resourceToken)\b/m;
+  if (!marker.test(source)) {
+    throw new Error("Deployment template does not expose the expected parameter insertion point; refusing to guess.");
+  }
+  return source.replace(marker, (match) => `${text}
+
+${match}`);
+}
+function removeProvisionedFoundryInputs(source) {
+  let next = source;
+  for (const name of [
+    "foundryModel",
+    "foundryModelName",
+    "foundryModelVersion",
+    "foundryDeploymentCapacity"
+  ]) {
+    next = next.replace(
+      new RegExp(`^@description\\([^\\r\\n]*\\)\\r?\\nparam ${name}\\b[^\\r\\n]*\\r?\\n`, "m"),
+      ""
+    );
+    next = next.replace(new RegExp(`^param ${name}\\b[^\\r\\n]*\\r?\\n`, "m"), "");
+  }
+  return next.replace(/^var foundryAccountName\s*=.*\r?\n/m, "").replace(/^var foundryProjectName\s*=.*\r?\n/m, "");
+}
+function replaceProviderOutputs(source, outputs) {
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/).filter((line) => !/^output (?:FOUNDRY_PROJECT_ENDPOINT|FOUNDRY_MODEL|AZURE_AI_GATEWAY_OPENAI_BASE_URL|AZURE_AI_GATEWAY_MCP_URL|AZURE_AI_GATEWAY_MODEL)\b/.test(line));
+  while (lines.length && !lines.at(-1)) lines.pop();
+  return `${lines.join(eol)}${eol}${outputs.join(eol)}${eol}`;
+}
+function updateParameters(parametersSource, values) {
+  if (parametersSource == null) {
+    throw new Error("Deployment template does not expose infra/main.parameters.json; refusing to guess.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(parametersSource);
+  } catch (error) {
+    throw new Error(`Deployment template has invalid infra/main.parameters.json: ${error.message}`);
+  }
+  const parameters = parsed?.parameters;
+  if (!parameters || typeof parameters !== "object") {
+    throw new Error("Deployment template does not expose a parameters object; refusing to guess.");
+  }
+  for (const name of PROVIDER_PARAMETER_NAMES) delete parameters[name];
+  for (const [name, value] of Object.entries(values)) parameters[name] = { value };
+  return `${JSON.stringify(parsed, null, 2)}
 `;
-  })();
-  const apiNext = (() => {
-    const directOptionalEndpoints = /^\s*AzureWebJobsStorage__(?:queue|table|file)ServiceUri:\s*stg\.properties\.primaryEndpoints\.(?:queue|table|file)\s*$/gm;
-    const next = apiSource.replace(directOptionalEndpoints, "");
-    if (/AzureWebJobsStorage__(?:queue|table|file)ServiceUri/.test(next) && !(/param enableQueue bool = false/.test(next) && /param enableTable bool = false/.test(next) && /param enableFile bool = false/.test(next))) {
-      throw new Error("Deployment template exposes unrecognized optional host-storage settings; refusing to guess.");
+}
+function identityOnlyApiTemplate(apiSource) {
+  const directOptionalEndpoints = /^\s*AzureWebJobsStorage__(?:queue|table|file)ServiceUri:\s*stg\.properties\.primaryEndpoints\.(?:queue|table|file)\s*$/gm;
+  const next = apiSource.replace(directOptionalEndpoints, "");
+  if (/AzureWebJobsStorage__(?:queue|table|file)ServiceUri/.test(next) && !(/param enableQueue bool = false/.test(next) && /param enableTable bool = false/.test(next) && /param enableFile bool = false/.test(next))) {
+    throw new Error("Deployment template exposes unrecognized optional host-storage settings; refusing to guess.");
+  }
+  if (!/AzureWebJobsStorage__credential:\s*'managedidentity'/.test(next)) {
+    throw new Error("Deployment template does not use managed identity for host storage; refusing to guess.");
+  }
+  return next;
+}
+function existingFoundryBicep(eol = "\n") {
+  return `param accountName string
+param projectName string
+param projectEndpoint string
+param modelDeploymentName string
+param managedIdentityPrincipalId string
+
+var cognitiveServicesUserRoleId = '${COGNITIVE_SERVICES_USER_ROLE_ID}'
+var cognitiveServicesOpenAiUserRoleId = '${COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID}'
+var foundryUserRoleId = '${FOUNDRY_USER_ROLE_ID}'
+
+resource foundryAccount 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' existing = {
+  name: accountName
+}
+
+resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-10-01-preview' existing = {
+  parent: foundryAccount
+  name: projectName
+}
+
+resource foundryCognitiveServicesUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryAccount.id, managedIdentityPrincipalId, cognitiveServicesUserRoleId)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
+    principalId: managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource foundryOpenAiUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryAccount.id, managedIdentityPrincipalId, cognitiveServicesOpenAiUserRoleId)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAiUserRoleId)
+    principalId: managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource foundryUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryProject.id, managedIdentityPrincipalId, foundryUserRoleId)
+  scope: foundryProject
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
+    principalId: managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+output projectEndpoint string = projectEndpoint
+output modelDeploymentName string = modelDeploymentName
+`.replace(/\n/g, eol);
+}
+function foundryIntentTransform(mainSource, parametersSource, intent) {
+  const eol = mainSource.includes("\r\n") ? "\r\n" : "\n";
+  const params = `@description('Subscription containing the selected existing Microsoft Foundry project.')
+param existingFoundrySubscriptionId string
+param existingFoundryResourceGroup string
+param existingFoundryAccountName string
+param existingFoundryProjectName string
+param existingFoundryProjectEndpoint string
+param existingFoundryModel string`.replace(/\n/g, eol);
+  const module = `module foundry './app/foundry-existing.bicep' = {
+  name: 'foundry-existing'
+  scope: resourceGroup(existingFoundrySubscriptionId, existingFoundryResourceGroup)
+  params: {
+    accountName: existingFoundryAccountName
+    projectName: existingFoundryProjectName
+    projectEndpoint: existingFoundryProjectEndpoint
+    modelDeploymentName: existingFoundryModel
+    managedIdentityPrincipalId: apiUserAssignedIdentity.outputs.principalId
+  }
+}
+`.replace(/\n/g, eol);
+  let next = replaceNamedBlock(mainSource, /^module foundry\b[^{]*\{/m, module);
+  next = removeProvisionedFoundryInputs(next);
+  next = insertBeforeVariables(next, params);
+  next = providerSettings(next, {
+    AZURE_FUNCTIONS_AGENTS_PROVIDER: "'foundry'",
+    FOUNDRY_PROJECT_ENDPOINT: "foundry.outputs.projectEndpoint",
+    FOUNDRY_MODEL: "foundry.outputs.modelDeploymentName",
+    AZURE_FUNCTIONS_AGENTS_MODEL: "foundry.outputs.modelDeploymentName"
+  });
+  next = replaceProviderOutputs(next, [
+    "output FOUNDRY_PROJECT_ENDPOINT string = foundry.outputs.projectEndpoint",
+    "output FOUNDRY_MODEL string = foundry.outputs.modelDeploymentName"
+  ]);
+  return {
+    main: next,
+    parameters: updateParameters(parametersSource, {
+      existingFoundrySubscriptionId: "${EXISTING_FOUNDRY_SUBSCRIPTION_ID}",
+      existingFoundryResourceGroup: "${EXISTING_FOUNDRY_RESOURCE_GROUP}",
+      existingFoundryAccountName: "${EXISTING_FOUNDRY_ACCOUNT_NAME}",
+      existingFoundryProjectName: "${EXISTING_FOUNDRY_PROJECT_NAME}",
+      existingFoundryProjectEndpoint: "${EXISTING_FOUNDRY_PROJECT_ENDPOINT}",
+      existingFoundryModel: "${EXISTING_FOUNDRY_MODEL}"
+    }),
+    foundry: existingFoundryBicep(eol),
+    environment: {
+      EXISTING_FOUNDRY_SUBSCRIPTION_ID: intent.subscription,
+      EXISTING_FOUNDRY_RESOURCE_GROUP: intent.resource.resourceGroup,
+      EXISTING_FOUNDRY_ACCOUNT_NAME: intent.resource.accountName,
+      EXISTING_FOUNDRY_PROJECT_NAME: intent.resource.projectName,
+      EXISTING_FOUNDRY_PROJECT_ENDPOINT: intent.resource.endpoint,
+      EXISTING_FOUNDRY_MODEL: intent.model.id
     }
-    return next;
-  })();
-  const foundryNext = (() => {
+  };
+}
+function gatewayIntentTransform(mainSource, parametersSource) {
+  const eol = mainSource.includes("\r\n") ? "\r\n" : "\n";
+  const params = `param aiGatewayOpenAiBaseUrl string
+param aiGatewayMcpUrl string
+@secure()
+param aiGatewayApiKey string
+param aiGatewayModel string`.replace(/\n/g, eol);
+  let next = replaceNamedBlock(mainSource, /^module foundry\b[^{]*\{/m, "");
+  next = removeProvisionedFoundryInputs(next);
+  next = insertBeforeVariables(next, params);
+  next = providerSettings(next, {
+    AZURE_FUNCTIONS_AGENTS_PROVIDER: "'ai_gateway'",
+    AZURE_AI_GATEWAY_OPENAI_BASE_URL: "aiGatewayOpenAiBaseUrl",
+    AZURE_AI_GATEWAY_MCP_URL: "aiGatewayMcpUrl",
+    AZURE_AI_GATEWAY_API_KEY: "aiGatewayApiKey",
+    AZURE_FUNCTIONS_AGENTS_MODEL: "aiGatewayModel"
+  });
+  next = replaceProviderOutputs(next, [
+    "output AZURE_AI_GATEWAY_OPENAI_BASE_URL string = aiGatewayOpenAiBaseUrl",
+    "output AZURE_AI_GATEWAY_MCP_URL string = aiGatewayMcpUrl",
+    "output AZURE_AI_GATEWAY_MODEL string = aiGatewayModel"
+  ]);
+  return {
+    main: next,
+    parameters: updateParameters(parametersSource, {
+      aiGatewayOpenAiBaseUrl: "${AZURE_AI_GATEWAY_OPENAI_BASE_URL}",
+      aiGatewayMcpUrl: "${AZURE_AI_GATEWAY_MCP_URL}",
+      aiGatewayApiKey: "${AZURE_AI_GATEWAY_API_KEY}",
+      aiGatewayModel: "${AZURE_AI_GATEWAY_MODEL}"
+    })
+  };
+}
+async function enforceIdentityOnlyDeploymentTemplate(projectDir, intent = null) {
+  const provider = intent?.provider || "copilot";
+  const mainFile = path10.join(projectDir, "infra", "main.bicep");
+  const parametersFile = path10.join(projectDir, "infra", "main.parameters.json");
+  const apiFile = path10.join(projectDir, "infra", "app", "api.bicep");
+  const foundryFile = path10.join(projectDir, "infra", "app", "foundry.bicep");
+  const existingFoundryFile = path10.join(projectDir, "infra", "app", "foundry-existing.bicep");
+  const [mainSource, parametersSource, apiSource, foundrySource] = await Promise.all([
+    readFile8(mainFile, "utf8"),
+    readOptionalFile(parametersFile),
+    readFile8(apiFile, "utf8"),
+    readOptionalFile(foundryFile)
+  ]);
+  const identityOnlyMain = disableStorageSharedKey(mainSource);
+  const apiNext = identityOnlyApiTemplate(apiSource);
+  let mainNext;
+  let parametersNext;
+  let foundryNext = null;
+  let environment = {};
+  if (provider === "foundry") {
+    if (!intent?.resource?.accountName || !intent?.resource?.projectName) {
+      throw new Error("The Microsoft Foundry deployment snapshot is incomplete.");
+    }
+    const transformed = foundryIntentTransform(identityOnlyMain, parametersSource, intent);
+    mainNext = transformed.main;
+    parametersNext = transformed.parameters;
+    foundryNext = transformed.foundry;
+    environment = transformed.environment;
+  } else if (provider === "gateway") {
+    const transformed = gatewayIntentTransform(identityOnlyMain, parametersSource);
+    mainNext = transformed.main;
+    parametersNext = transformed.parameters;
+  } else if (provider === "copilot") {
+    if (foundrySource == null) {
+      throw new Error("Deployment template does not expose the Foundry module; refusing to guess.");
+    }
+    mainNext = replaceCanonicalModelValues(identityOnlyMain);
+    if (/AZURE_FUNCTIONS_AGENTS_PROVIDER:\s*'foundry'/.test(mainNext)) {
+      mainNext = providerSettings(mainNext, {
+        AZURE_FUNCTIONS_AGENTS_PROVIDER: "'foundry'",
+        FOUNDRY_PROJECT_ENDPOINT: "foundry.outputs.projectEndpoint",
+        FOUNDRY_MODEL: "foundry.outputs.modelDeploymentName",
+        AZURE_FUNCTIONS_AGENTS_MODEL: "foundry.outputs.modelDeploymentName"
+      });
+    }
+    parametersNext = (() => {
+      if (parametersSource == null) return null;
+      let parsed;
+      try {
+        parsed = JSON.parse(parametersSource);
+      } catch (error) {
+        throw new Error(`Deployment template has invalid infra/main.parameters.json: ${error.message}`);
+      }
+      const parameters = parsed?.parameters;
+      if (!parameters || typeof parameters !== "object") return parametersSource;
+      const expected = {
+        foundryModel: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.deploymentName,
+        foundryModelName: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.modelName,
+        foundryModelVersion: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.modelVersion,
+        foundryDeploymentCapacity: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.capacity
+      };
+      const present = Object.keys(expected).filter((name) => parameters[name]);
+      if (!present.length) return parametersSource;
+      if (present.length !== Object.keys(expected).length) {
+        throw new Error("Deployment template exposes an incomplete Foundry model parameter set; refusing to guess.");
+      }
+      for (const [name, value] of Object.entries(expected)) parameters[name] = { value };
+      return `${JSON.stringify(parsed, null, 2)}
+`;
+    })();
     const accountProperties = /(resource\s+foundryAccount\s+'Microsoft\.CognitiveServices\/accounts@[^'\r\n]+'\s*=\s*\{[\s\S]*?\r?\n)([ \t]*properties:\s*\{)(\r?\n)/;
     const supportedAccount = accountProperties.test(foundrySource) && /kind:\s*'AIServices'/.test(foundrySource) && /allowProjectManagement:\s*true\b/.test(foundrySource) && /customSubDomainName:\s*accountName\b/.test(foundrySource);
     const supportedModel = /resource\s+foundryModelDeployments?\s+'Microsoft\.CognitiveServices\/accounts\/deployments@[^'\r\n]+'/.test(
@@ -6862,24 +8546,70 @@ async function enforceIdentityOnlyDeploymentTemplate(projectDir) {
     if (!supportedAccount || !supportedModel) {
       throw new Error("Deployment template does not expose Foundry account properties; refusing to guess.");
     }
-    return foundrySource.includes("\r\n") ? DEPLOYMENT_FOUNDRY_BICEP.replace(/\n/g, "\r\n") : DEPLOYMENT_FOUNDRY_BICEP;
-  })();
+    foundryNext = foundrySource.includes("\r\n") ? DEPLOYMENT_FOUNDRY_BICEP.replace(/\n/g, "\r\n") : DEPLOYMENT_FOUNDRY_BICEP;
+  } else {
+    throw new Error(`Unsupported deployment provider "${provider}".`);
+  }
   await Promise.all([
     mainNext === mainSource ? void 0 : writeFile2(mainFile, mainNext),
     parametersNext == null || parametersNext === parametersSource ? void 0 : writeFile2(parametersFile, parametersNext),
     apiNext === apiSource ? void 0 : writeFile2(apiFile, apiNext),
-    foundryNext === foundrySource ? void 0 : writeFile2(foundryFile, foundryNext)
+    provider === "foundry" ? writeFile2(existingFoundryFile, foundryNext) : rm6(existingFoundryFile, { force: true }),
+    provider === "copilot" ? foundryNext === foundrySource ? void 0 : writeFile2(foundryFile, foundryNext) : rm6(foundryFile, { force: true })
   ]);
+  if (provider === "foundry") {
+    return {
+      provider,
+      location: FOUNDRY_DEPLOYMENT_LOCATION,
+      model: {
+        deploymentName: intent.model.id,
+        modelName: intent.model.label,
+        modelVersion: intent.model.version
+      },
+      resourceId: intent.resource.id,
+      label: deploymentIntentSummary(intent),
+      environment,
+      roles: [
+        { scope: intent.resource.id.split(/\/projects\//i)[0], roleId: COGNITIVE_SERVICES_USER_ROLE_ID },
+        { scope: intent.resource.id.split(/\/projects\//i)[0], roleId: COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID },
+        { scope: intent.resource.id, roleId: FOUNDRY_USER_ROLE_ID }
+      ],
+      automaticFallback: false,
+      provisionsModelResources: false
+    };
+  }
+  if (provider === "gateway") {
+    return {
+      provider,
+      location: FOUNDRY_DEPLOYMENT_LOCATION,
+      model: {
+        deploymentName: intent.model.id,
+        modelName: intent.model.label,
+        modelVersion: intent.model.version
+      },
+      resourceId: intent.resource.id,
+      label: deploymentIntentSummary(intent),
+      environment,
+      roles: [],
+      automaticFallback: false,
+      provisionsModelResources: false
+    };
+  }
   return {
+    provider,
     location: FOUNDRY_DEPLOYMENT_LOCATION,
     model: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT,
+    resourceId: "",
     label: foundryDeploymentLabel(),
-    automaticFallback: false
+    environment,
+    roles: [],
+    automaticFallback: false,
+    provisionsModelResources: true
   };
 }
 
 // packages/function-app-core/src/function-app-runtime.mjs
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 
 // packages/function-app-core/src/arm-rest.mjs
 var ARM_RESOURCE2 = "https://management.azure.com/";
@@ -7406,7 +9136,7 @@ function adminRequest(app, fn, input, key) {
     }
   };
 }
-function queueRequest(target, input, token, now = () => /* @__PURE__ */ new Date(), requestId = () => randomUUID4()) {
+function queueRequest(target, input, token, now = () => /* @__PURE__ */ new Date(), requestId = () => randomUUID5()) {
   const normalized = normalizeInput(input);
   const message = normalized == null ? "" : String(normalized);
   const encoded = target.messageEncoding === "none" ? message : Buffer.from(message, "utf8").toString("base64");
@@ -7509,8 +9239,8 @@ async function invokeFunction({
 
 // canvases/azure-functions-hosted-skills/src/hosted-skill-workspace.mjs
 import { createHash as createHash7 } from "node:crypto";
-import { readdir as readdir5, readFile as readFile8, rename as rename5, rm as rm5, writeFile as writeFile3 } from "node:fs/promises";
-import path10 from "node:path";
+import { readdir as readdir5, readFile as readFile9, rename as rename5, rm as rm7, writeFile as writeFile3 } from "node:fs/promises";
+import path11 from "node:path";
 var TRIGGER_KINDS = /* @__PURE__ */ new Map([
   ["timer_trigger", "timer"],
   ["http_trigger", "http"],
@@ -7518,7 +9248,7 @@ var TRIGGER_KINDS = /* @__PURE__ */ new Map([
   ["connector_trigger", "connector"]
 ]);
 function normalizedRelativePath2(value) {
-  return String(value || "").split(path10.sep).join("/");
+  return String(value || "").split(path11.sep).join("/");
 }
 function yamlScalar(value) {
   const raw = String(value || "").trim();
@@ -7563,14 +9293,14 @@ function agentDocument(text, relativePath = "") {
   const relPath = normalizedRelativePath2(relativePath);
   return {
     relativePath: relPath,
-    fileName: path10.posix.basename(relPath),
+    fileName: path11.posix.basename(relPath),
     name,
     description,
     trigger,
     triggerType,
     triggerArgs,
     route,
-    functionName: path10.posix.basename(relPath, ".agent.md").replace(/-/g, "_"),
+    functionName: path11.posix.basename(relPath, ".agent.md").replace(/-/g, "_"),
     revision: createHash7("sha256").update(source).digest("hex"),
     frontmatter,
     body
@@ -7584,7 +9314,7 @@ function completeAgentDocument(text, relativePath = "") {
   return parsed;
 }
 async function discoverHostedSkills(root) {
-  const nestedSourceDir = path10.join(root, "src");
+  const nestedSourceDir = path11.join(root, "src");
   const sourceDir = await readdir5(nestedSourceDir, { withFileTypes: true }).then(() => nestedSourceDir).catch((error) => {
     if (error?.code === "ENOENT") return root;
     throw error;
@@ -7593,8 +9323,8 @@ async function discoverHostedSkills(root) {
   const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".agent.md")).map((entry) => entry.name).sort((a, b) => a.localeCompare(b));
   const skills = [];
   for (const fileName of files) {
-    const relativePath = normalizedRelativePath2(path10.relative(root, path10.join(sourceDir, fileName)));
-    const source = await readFile8(path10.join(sourceDir, fileName), "utf8");
+    const relativePath = normalizedRelativePath2(path11.relative(root, path11.join(sourceDir, fileName)));
+    const source = await readFile9(path11.join(sourceDir, fileName), "utf8");
     const skill = agentDocument(source, relativePath);
     if (skill.trigger) skills.push(skill);
   }
@@ -7629,7 +9359,7 @@ ${String(bodyText).trim()}
 `;
 }
 async function writeAgentDocumentIfRevision(filePath, nextSource, expectedRevision) {
-  const source = await readFile8(filePath, "utf8");
+  const source = await readFile9(filePath, "utf8");
   const currentRevision = createHash7("sha256").update(source).digest("hex");
   if (!expectedRevision || currentRevision !== expectedRevision) {
     throw new Error(
@@ -7639,7 +9369,7 @@ async function writeAgentDocumentIfRevision(filePath, nextSource, expectedRevisi
   const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
     await writeFile3(temporary, String(nextSource));
-    const beforeReplace = await readFile8(filePath, "utf8");
+    const beforeReplace = await readFile9(filePath, "utf8");
     if (createHash7("sha256").update(beforeReplace).digest("hex") !== currentRevision) {
       throw new Error(
         "Skill instructions changed on disk while saving. Your text remains in the editor; refresh after preserving or reconciling it."
@@ -7647,14 +9377,592 @@ async function writeAgentDocumentIfRevision(filePath, nextSource, expectedRevisi
     }
     await rename5(temporary, filePath);
   } catch (error) {
-    await rm5(temporary, { force: true }).catch(() => {
+    await rm7(temporary, { force: true }).catch(() => {
     });
     throw error;
   }
 }
 async function writeAgentBodyIfRevision(filePath, bodyText, expectedRevision) {
-  const source = await readFile8(filePath, "utf8");
+  const source = await readFile9(filePath, "utf8");
   return writeAgentDocumentIfRevision(filePath, replaceAgentBody(source, bodyText), expectedRevision);
+}
+
+// packages/canvas-toolkit/src/telemetry.mjs
+import { randomUUID as randomUUID6 } from "node:crypto";
+import { execFile as execFile2 } from "node:child_process";
+var ID = /^[a-z][a-z0-9_.-]{0,79}$/;
+var VERSION = /^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,39}$/;
+var SOURCES = /* @__PURE__ */ new Set(["model", "panel", "system", "unknown"]);
+var CONTROL_TYPES = /* @__PURE__ */ new Set(["button", "link", "select", "input", "textarea", "details", "other"]);
+var INTERACTIONS = /* @__PURE__ */ new Set(["click", "change", "submit"]);
+var FAILURE_CODES = Object.freeze({
+  succeeded: "",
+  failed: "action_error",
+  rejected: "action_rejected",
+  cancelled: "action_cancelled"
+});
+var RESERVED = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+var USAGE_ENVELOPE_SCHEMA_VERSION = 2;
+var DEFAULT_REQUEST_TIMEOUT_MS2 = 1e4;
+var PUBLIC_CANVAS_USAGE_SERVICE = Object.freeze({
+  serviceId: "public-canvas-product-usage",
+  schemaVersion: USAGE_ENVELOPE_SCHEMA_VERSION,
+  dataClassification: "pseudonymous_product_usage",
+  endpoint: "https://canvas-metrics-pilot-0b8944-add3hsghhddcbxe9.b01.azurefd.net/api/events"
+});
+var PUBLIC_CANVAS_USAGE_ENDPOINT = PUBLIC_CANVAS_USAGE_SERVICE.endpoint;
+var GITHUB_USER_ID = /^[1-9][0-9]{0,19}$/;
+function githubCliEnvironment(source) {
+  const env = { ...source };
+  for (const key of Object.keys(env)) {
+    if (["GH_TOKEN", "GITHUB_TOKEN"].includes(key.toUpperCase())) delete env[key];
+  }
+  return env;
+}
+function runFile(command, args, options, execFileImpl) {
+  return new Promise((resolve, reject) => {
+    execFileImpl(command, args, options, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
+async function resolveGitHubCliUserId({
+  signal,
+  env = process.env,
+  execFileImpl = execFile2
+} = {}) {
+  if (typeof execFileImpl !== "function") throw new TypeError("GitHub CLI executor must be a function.");
+  let stdout;
+  try {
+    stdout = await runFile("gh", ["api", "--hostname", "github.com", "user", "--jq", ".id"], {
+      env: githubCliEnvironment(env),
+      signal,
+      timeout: 5e3,
+      maxBuffer: 1024,
+      windowsHide: true
+    }, execFileImpl);
+  } catch {
+    throw new Error("GitHub identity is unavailable.");
+  }
+  const githubUserId = String(stdout).trim();
+  if (!GITHUB_USER_ID.test(githubUserId)) throw new Error("GitHub identity is unavailable.");
+  return githubUserId;
+}
+function identifier(value, label, pattern = ID) {
+  if (typeof value !== "string" || !pattern.test(value) || RESERVED.has(value)) {
+    throw new TypeError(`${label} must be a bounded, code-defined identifier.`);
+  }
+  return value;
+}
+function record(value, label) {
+  if (!value || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError(`${label} must be a plain record.`);
+  }
+  return value;
+}
+function integer(value, min, max, label) {
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new TypeError(`${label} must be an integer from ${min} to ${max}.`);
+  }
+  return value;
+}
+function endpoint(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash) return url.href;
+  } catch {
+  }
+  throw new TypeError("Telemetry endpoint must be credential-free HTTPS without a query or fragment.");
+}
+function createCanvasUsageMetrics(options = {}) {
+  const {
+    contract: contract2,
+    canvasVersion,
+    releaseChannel = "development",
+    enabled = false,
+    endpoint: destination,
+    audience,
+    getAccessToken,
+    transport,
+    fetchImpl = globalThis.fetch,
+    getGitHubUserId,
+    now = Date.now,
+    randomId = randomUUID6,
+    onDiagnostic,
+    batchSize = 20,
+    maxQueueSize = 100,
+    flushIntervalMs = 1e3,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS2,
+    closeTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS2
+  } = options;
+  if (contract2 !== void 0) {
+    record(contract2, "contract");
+    if (["canvasId", "host", "actionUsage", "controls"].some((key) => Object.hasOwn(options, key))) {
+      throw new TypeError("Contract identity and registries cannot be overridden.");
+    }
+  }
+  const canvasId = contract2?.canvasId ?? options.canvasId;
+  const host = contract2?.host ?? options.host ?? "copilot_app";
+  const actionUsage = contract2?.actions ?? options.actionUsage ?? {};
+  const controls = contract2?.controls ?? options.controls ?? {};
+  identifier(canvasId, "canvasId");
+  identifier(canvasVersion, "canvasVersion", VERSION);
+  if (!["copilot_app", "mcp_app"].includes(host)) throw new TypeError("Unsupported telemetry host.");
+  if (contract2 !== void 0) {
+    if (!Array.isArray(contract2.versions) || !contract2.versions.length || contract2.versions.some((version) => typeof version !== "string" || !VERSION.test(version))) {
+      throw new TypeError("Contract versions must be bounded version identifiers.");
+    }
+    if (!contract2.versions.includes(canvasVersion)) {
+      throw new TypeError("Canvas version is not registered by the telemetry contract.");
+    }
+  }
+  if (!["development", "internal", "preview", "stable"].includes(releaseChannel)) {
+    throw new TypeError("Unsupported telemetry release channel.");
+  }
+  if (typeof enabled !== "boolean") throw new TypeError("enabled must be a boolean.");
+  const url = destination === void 0 && (!enabled || transport !== void 0) ? void 0 : endpoint(destination);
+  for (const [name, fn] of Object.entries({ now, randomId })) {
+    if (typeof fn !== "function") throw new TypeError(`${name} must be a function.`);
+  }
+  if (transport !== void 0 && typeof transport !== "function") throw new TypeError("transport must be a function.");
+  if (getAccessToken !== void 0 && typeof getAccessToken !== "function") throw new TypeError("getAccessToken must be a function.");
+  if (enabled && !transport && typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function.");
+  if (getGitHubUserId !== void 0 && typeof getGitHubUserId !== "function") {
+    throw new TypeError("getGitHubUserId must be a function.");
+  }
+  if (audience !== void 0 && (typeof audience !== "string" || !audience.trim() || audience.length > 512 || /[\r\n]/.test(audience))) throw new TypeError("audience must be a bounded nonempty string.");
+  if (onDiagnostic !== void 0 && typeof onDiagnostic !== "function") throw new TypeError("onDiagnostic must be a function.");
+  integer(batchSize, 1, 100, "batchSize");
+  integer(maxQueueSize, batchSize, 1e3, "maxQueueSize");
+  integer(flushIntervalMs, 10, 6e4, "flushIntervalMs");
+  integer(requestTimeoutMs, 10, 3e4, "requestTimeoutMs");
+  integer(closeTimeoutMs, 10, 3e4, "closeTimeoutMs");
+  const actions = new Map(Object.entries(record(actionUsage, "actionUsage")).map(([name, entry]) => {
+    identifier(name, "action name");
+    record(entry, "action usage");
+    identifier(entry.featureId, "featureId");
+    identifier(entry.featureArea, "featureArea");
+    if (!["intentional", "automatic", "excluded"].includes(entry.usageClass) || typeof entry.mutates !== "boolean") {
+      throw new TypeError("Action usage requires a supported usageClass and boolean mutates.");
+    }
+    return [name, Object.freeze({
+      featureId: entry.featureId,
+      featureArea: entry.featureArea,
+      usageClass: entry.usageClass,
+      mutates: entry.mutates
+    })];
+  }));
+  const controlRegistry = new Map(Object.entries(record(controls, "controls")).map(([id, type]) => {
+    identifier(id, "control ID");
+    if (!CONTROL_TYPES.has(type)) throw new TypeError("Unsupported telemetry control type.");
+    return [id, type];
+  }));
+  const queue = [];
+  const stats = { delivered: 0, dropped: 0, invalid: 0 };
+  const reported = /* @__PURE__ */ new Set();
+  const shutdown = new AbortController();
+  let timer, activeFlush, activeController, closePromise;
+  let inFlight = 0, closing = false;
+  let resolvedGitHubUserId;
+  function diagnose(code) {
+    if (reported.has(code)) return;
+    reported.add(code);
+    const warn = (message) => {
+      try {
+        process.emitWarning(message, { code: "CANVAS_USAGE_METRICS" });
+      } catch {
+      }
+    };
+    if (onDiagnostic) {
+      const reportFailure = () => warn("Canvas telemetry diagnostic callback failed.");
+      try {
+        Promise.resolve(onDiagnostic(Object.freeze({ code }))).catch(reportFailure);
+      } catch {
+        reportFailure();
+      }
+    } else {
+      warn(`Canvas telemetry: ${code}.`);
+    }
+  }
+  function invalid2() {
+    stats.invalid += 1;
+    diagnose("invalid_event");
+    return false;
+  }
+  async function githubIdentity(signal) {
+    if (resolvedGitHubUserId) return resolvedGitHubUserId;
+    try {
+      const value = await getGitHubUserId(signal);
+      if (signal.aborted) return;
+      if (typeof value === "string" && GITHUB_USER_ID.test(value)) {
+        resolvedGitHubUserId = value;
+        return value;
+      }
+    } catch {
+    }
+    diagnose("identity_unavailable");
+  }
+  function schedule() {
+    if (closing || timer || activeFlush || !queue.length) return;
+    timer = setTimeout(() => {
+      timer = void 0;
+      void flush();
+    }, queue.length >= batchSize ? 0 : flushIntervalMs);
+    timer.unref?.();
+  }
+  function enqueue(eventName, fields = {}) {
+    if (!enabled || closing) return false;
+    try {
+      const eventId = randomId();
+      if (typeof eventId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) {
+        return invalid2();
+      }
+      const event = Object.freeze({
+        schemaVersion: 1,
+        canvasId,
+        canvasVersion,
+        host,
+        releaseChannel,
+        timestamp: new Date(now()).toISOString(),
+        eventId,
+        eventName,
+        invocationSource: "unknown",
+        ...fields
+      });
+      const overflow = queue.length === maxQueueSize;
+      if (overflow) {
+        queue.shift();
+        stats.dropped += 1;
+      }
+      queue.push(event);
+      if (overflow) diagnose("queue_overflow");
+      if (queue.length >= batchSize && !activeFlush) void flush();
+      else schedule();
+      return true;
+    } catch {
+      stats.dropped += 1;
+      diagnose("event_construction_failed");
+      return false;
+    }
+  }
+  async function deliver(batch) {
+    const controller = new AbortController();
+    activeController = controller;
+    const stop = () => controller.abort(shutdown.signal.reason);
+    const deadline = setTimeout(() => controller.abort("delivery_timeout"), requestTimeoutMs);
+    deadline.unref?.();
+    shutdown.signal.addEventListener("abort", stop, { once: true });
+    if (shutdown.signal.aborted) stop();
+    let onAbort;
+    const aborted = new Promise((resolve) => {
+      onAbort = () => resolve(controller.signal.reason);
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      if (controller.signal.aborted) onAbort();
+    });
+    const request = Promise.resolve().then(async () => {
+      if (controller.signal.aborted) return controller.signal.reason;
+      if (transport) {
+        await transport(Object.freeze(batch), { signal: controller.signal });
+        return;
+      }
+      const headers = { "Content-Type": "application/json" };
+      if (getAccessToken) {
+        const credential = await getAccessToken(audience, controller.signal);
+        if (controller.signal.aborted) return controller.signal.reason;
+        const token = typeof credential === "string" ? credential : credential?.accessToken;
+        if (typeof token !== "string" || !token.trim() || /[\r\n]/.test(token)) return "delivery_failed";
+        headers.Authorization = `Bearer ${token}`;
+      }
+      const githubUserId = getGitHubUserId ? await githubIdentity(controller.signal) : void 0;
+      if (getGitHubUserId) {
+        if (controller.signal.aborted) return controller.signal.reason;
+      }
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: USAGE_ENVELOPE_SCHEMA_VERSION,
+          ...githubUserId ? { githubUserId } : {},
+          events: batch
+        }),
+        signal: controller.signal,
+        redirect: "error",
+        credentials: "omit"
+      });
+      const accepted = response?.ok;
+      await response?.body?.cancel();
+      return accepted ? void 0 : "delivery_rejected";
+    }).catch(() => "delivery_failed");
+    try {
+      const failure = await Promise.race([request, aborted]);
+      if (failure) diagnose(failure);
+      return { delivered: failure ? 0 : batch.length, dropped: failure ? batch.length : 0 };
+    } finally {
+      clearTimeout(deadline);
+      shutdown.signal.removeEventListener("abort", stop);
+      controller.signal.removeEventListener("abort", onAbort);
+      if (activeController === controller) activeController = void 0;
+    }
+  }
+  function flush() {
+    if (activeFlush) return activeFlush;
+    clearTimeout(timer);
+    timer = void 0;
+    if (!queue.length) return Promise.resolve({ delivered: 0, dropped: 0 });
+    const batch = queue.splice(0, batchSize);
+    inFlight = batch.length;
+    activeFlush = deliver(batch).then((result) => {
+      stats.delivered += result.delivered;
+      stats.dropped += result.dropped;
+      return result;
+    }).finally(() => {
+      inFlight = 0;
+      activeFlush = void 0;
+      schedule();
+    });
+    return activeFlush;
+  }
+  function feature(actionName, invocationSource) {
+    const usage2 = actions.get(actionName);
+    if (!usage2 || !SOURCES.has(invocationSource)) return invalid2();
+    if (usage2.usageClass === "excluded") return false;
+    return { ...usage2, actionName, invocationSource };
+  }
+  function cancelPending() {
+    activeController?.abort("delivery_cancelled");
+  }
+  function close({ flush: drain = true } = {}) {
+    if (!drain) {
+      closing = true;
+      stats.dropped += queue.length;
+      queue.length = 0;
+      shutdown.abort("delivery_cancelled");
+      cancelPending();
+    }
+    if (closePromise) return closePromise;
+    closing = true;
+    clearTimeout(timer);
+    timer = void 0;
+    closePromise = (async () => {
+      const deadline = setTimeout(() => shutdown.abort("shutdown_timeout"), closeTimeoutMs);
+      deadline.unref?.();
+      try {
+        while ((queue.length || activeFlush) && !shutdown.signal.aborted) await flush();
+        if (activeFlush) await activeFlush;
+        stats.dropped += queue.length;
+        queue.length = 0;
+        return { delivered: stats.delivered, dropped: stats.dropped };
+      } finally {
+        clearTimeout(deadline);
+      }
+    })();
+    return closePromise;
+  }
+  return Object.freeze({
+    get enabled() {
+      return enabled && !closing;
+    },
+    hasAction: (name) => actions.has(name),
+    getStats: () => Object.freeze({ ...stats, queued: queue.length, inFlight, closed: closing }),
+    flush,
+    close,
+    cancelPending,
+    trackCanvasOpened(invocationSource = "unknown") {
+      if (!enabled || closing) return false;
+      if (!SOURCES.has(invocationSource)) return invalid2();
+      return enqueue("canvas_opened", { invocationSource });
+    },
+    trackUiInteraction(input = {}) {
+      if (!enabled || closing) return false;
+      if (!input || !INTERACTIONS.has(input.interactionType) || !controlRegistry.has(input.controlId) || controlRegistry.get(input.controlId) !== input.controlType) return invalid2();
+      return enqueue("ui_interaction", {
+        invocationSource: "panel",
+        interactionType: input.interactionType,
+        controlId: input.controlId,
+        controlType: input.controlType
+      });
+    },
+    trackFeatureInvoked(actionName, invocationSource = "unknown") {
+      if (!enabled || closing) return false;
+      const fields = feature(actionName, invocationSource);
+      return fields ? enqueue("feature_invoked", fields) : false;
+    },
+    trackFeatureCompleted(actionName, { outcome, durationMs, invocationSource = "unknown", failureCode } = {}) {
+      if (!enabled || closing) return false;
+      const fields = feature(actionName, invocationSource);
+      if (!fields) return false;
+      if (typeof outcome !== "string" || !Object.hasOwn(FAILURE_CODES, outcome) || !Number.isFinite(durationMs) || failureCode !== void 0 && failureCode !== FAILURE_CODES[outcome]) return invalid2();
+      return enqueue("feature_completed", {
+        ...fields,
+        outcome,
+        durationMs: Math.max(0, Math.min(Math.round(durationMs), 36e5)),
+        failureCode: FAILURE_CODES[outcome]
+      });
+    }
+  });
+}
+function createPublicCanvasUsageMetrics(options = {}) {
+  for (const key of ["enabled", "endpoint", "audience", "getAccessToken", "transport", "now", "randomId"]) {
+    if (Object.hasOwn(options, key)) throw new TypeError(`Public canvas telemetry does not accept ${key}.`);
+  }
+  return createCanvasUsageMetrics({
+    ...options,
+    enabled: true,
+    endpoint: PUBLIC_CANVAS_USAGE_SERVICE.endpoint,
+    getGitHubUserId: options.getGitHubUserId ?? resolveGitHubCliUserId
+  });
+}
+function capture(callback, fallback) {
+  try {
+    const result = callback();
+    Promise.resolve(result).catch(() => {
+    });
+    return result;
+  } catch {
+    return fallback;
+  }
+}
+function dataProperty(value, key, inherited = false) {
+  try {
+    for (let depth = 0; value != null && depth < (inherited ? 8 : 1); depth++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor) return descriptor.value;
+      value = Object.getPrototypeOf(value);
+    }
+  } catch {
+  }
+}
+function completionFromResult(result) {
+  if (dataProperty(result, "cancelled") === true || dataProperty(result, "canceled") === true) return "cancelled";
+  if (dataProperty(result, "ok") === false || dataProperty(result, "isError") === true) return "rejected";
+  return "succeeded";
+}
+function isAbortError(error) {
+  if (dataProperty(error, "name", true) === "AbortError") return true;
+  try {
+    return Object.getOwnPropertyDescriptor(DOMException.prototype, "name").get.call(error) === "AbortError";
+  } catch {
+    return false;
+  }
+}
+function sourceFrom(resolver, args) {
+  const source = typeof resolver === "function" ? capture(() => resolver(...args), "unknown") : resolver;
+  return SOURCES.has(source) ? source : "unknown";
+}
+async function measure(metrics, name, invocationSource, run, opened, now) {
+  const start = capture(now, 0);
+  if (opened) capture(() => metrics.trackCanvasOpened(invocationSource));
+  capture(() => metrics.trackFeatureInvoked(name, invocationSource));
+  try {
+    const result = await run();
+    capture(() => metrics.trackFeatureCompleted(name, {
+      outcome: completionFromResult(result),
+      invocationSource,
+      durationMs: capture(now, start) - start
+    }));
+    return result;
+  } catch (error) {
+    capture(() => metrics.trackFeatureCompleted(name, {
+      outcome: isAbortError(error) ? "cancelled" : "failed",
+      invocationSource,
+      durationMs: capture(now, start) - start
+    }));
+    throw error;
+  }
+}
+function instrumentCanvasActions(actions, metrics, {
+  invocationSource = "model",
+  openedActions = [],
+  now = () => performance.now()
+} = {}) {
+  if (!SOURCES.has(invocationSource) && typeof invocationSource !== "function") throw new TypeError("Unsupported invocation source.");
+  const opened = new Set(openedActions);
+  for (const action of actions) {
+    if (typeof action.handler !== "function" || !capture(() => metrics.hasAction(action.name), true)) {
+      throw new TypeError("Every canvas action requires a handler and registered usage metadata.");
+    }
+  }
+  if (capture(() => metrics.enabled, true) === false) return actions;
+  return actions.map((action) => ({
+    ...action,
+    handler(...args) {
+      return measure(
+        metrics,
+        action.name,
+        sourceFrom(invocationSource, [args[0], action]),
+        () => action.handler.apply(this, args),
+        opened.has(action.name),
+        now
+      );
+    }
+  }));
+}
+
+// canvases/azure-functions-hosted-skills/src/usage-metrics.mjs
+function createHostedSkillsUsageMetrics({
+  env = process.env,
+  canvasVersion,
+  fetchImpl,
+  getGitHubUserId,
+  fixture,
+  onDiagnostic = ({ code }) => console.warn(`[canvas-usage] ${code}`)
+}) {
+  if (fixture && (env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof fixture.fetchImpl !== "function")) {
+    throw new Error("Usage metrics fixtures require test mode and an explicit fake transport.");
+  }
+  const config = {
+    contract: FUNCTION_STUDIO_USAGE_CONTRACT,
+    canvasVersion,
+    releaseChannel: "preview",
+    onDiagnostic,
+    ...fixture ? {
+      fetchImpl: fixture.fetchImpl,
+      ...fixture.getGitHubUserId ? { getGitHubUserId: fixture.getGitHubUserId } : {}
+    } : fetchImpl ? { fetchImpl } : {},
+    ...!fixture && getGitHubUserId ? { getGitHubUserId } : {}
+  };
+  try {
+    if (env.FUNCTION_STUDIO_TEST_MODE === "1" && !fixture) {
+      return createCanvasUsageMetrics({
+        contract: FUNCTION_STUDIO_USAGE_CONTRACT,
+        canvasVersion,
+        releaseChannel: "development",
+        enabled: false
+      });
+    }
+    return createPublicCanvasUsageMetrics(config);
+  } catch {
+    const reportFailure = () => console.warn("[canvas-usage] diagnostic_callback_failed");
+    try {
+      Promise.resolve(onDiagnostic({ code: "invalid_configuration" })).catch(reportFailure);
+    } catch {
+      reportFailure();
+    }
+    return createCanvasUsageMetrics({
+      contract: FUNCTION_STUDIO_USAGE_CONTRACT,
+      canvasVersion,
+      enabled: false,
+      releaseChannel: "development"
+    });
+  }
+}
+function instrumentHostedSkillsActions(actions, resolveMetrics) {
+  const coverage = createCanvasUsageMetrics({
+    contract: FUNCTION_STUDIO_USAGE_CONTRACT,
+    canvasVersion: FUNCTION_STUDIO_USAGE_CONTRACT.versions[0],
+    releaseChannel: "development",
+    enabled: false
+  });
+  instrumentCanvasActions(actions, coverage);
+  return actions.map((action) => ({
+    ...action,
+    handler(...args) {
+      const ctx = args[0];
+      const metrics = ctx?.instanceId ? resolveMetrics(ctx.instanceId) : coverage;
+      return instrumentCanvasActions([action], metrics, { invocationSource: "model" })[0].handler.apply(this, args);
+    }
+  }));
 }
 
 // canvases/azure-functions-hosted-skills/src/extension.mjs
@@ -7664,6 +9972,10 @@ var hostedSkillsAssets = new Map([
   ...canvasUiAssets,
   ["assets/Function-Apps.svg", [new URL("./assets/Function-Apps.svg", import.meta.url), "image/svg+xml"]]
 ]);
+var COPILOT_PROXY_ROUTE = "/copilot/v1/chat/completions";
+var COPILOT_PROXY_REQUEST_MAX_BYTES = 1024 * 1024;
+var COPILOT_PROXY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+var COPILOT_PROXY_TIMEOUT_MS = 6e4;
 var AZD_DEPLOYMENT_ENVIRONMENT = "deployment";
 var AZD_DEPLOYMENT_LOCATION = FOUNDRY_DEPLOYMENT_LOCATION;
 var AZURITE_VERSION = "3.37.0";
@@ -7687,7 +9999,7 @@ var CANONICAL_RENDERER_PROFILE = createHostedSkillsRendererProfile({
   visualProfile: COREAI_AZURE_VISUAL_PROFILE.id,
   features: FULL_HOSTED_SKILLS_FEATURE_PROFILE
 });
-var renderHtml = () => renderHostedSkillsHtml(CANONICAL_RENDERER_PROFILE);
+var renderHtml = (options) => renderHostedSkillsHtml(CANONICAL_RENDERER_PROFILE, options);
 var RUNTIME_VERSION = "0.1.0b11";
 var UV_DOCS_URL = "https://docs.astral.sh/uv/getting-started/installation/";
 var PYTHON_DOCS_URL = "https://www.python.org/downloads/";
@@ -7790,12 +10102,20 @@ function githubCliCredentialEnvironment(env = process.env) {
   delete clean.GITHUB_TOKEN;
   return clean;
 }
-function githubFunctionEnvironment(values = {}) {
+function githubFunctionEnvironment(values = {}, authorization = "") {
   const env = {};
-  for (const key of ["GITHUB_MCP_AUTHORIZATION", "GITHUB_REPOSITORY"]) {
-    if (values[key]) env[key] = values[key];
-  }
+  if (authorization) env.GITHUB_MCP_AUTHORIZATION = authorization;
+  if (values.GITHUB_REPOSITORY) env.GITHUB_REPOSITORY = values.GITHUB_REPOSITORY;
   return env;
+}
+async function resolveGithubFunctionEnvironment(entry, values = {}) {
+  let authorization = "";
+  if (githubRequirement(entry) && entry.modelBinding.activeSource === "copilot") {
+    authorization = await githubAuthHeader(entry);
+  } else if (githubRequirement(entry) && entry.modelBinding.activeSource === "foundry") {
+    authorization = values.GITHUB_MCP_AUTHORIZATION || "";
+  }
+  return githubFunctionEnvironment(values, authorization);
 }
 async function validateGithubMcpAuthorization(authorization, { fetchImpl = fetch } = {}) {
   const commonHeaders = {
@@ -8074,6 +10394,11 @@ var azureAuth = createHostedSkillsAzureProvider({
   ...process.env.FUNCTION_STUDIO_TEST_MODE === "1" && resolveHostedSkillsAzureAuthProvider() === "toolkit" ? { auth: createFixtureAzureAuthSession() } : {}
 });
 var armClient = azureAuth.armClient;
+function createEntryUsageMetrics() {
+  return createHostedSkillsUsageMetrics({
+    canvasVersion: STUDIO_VERSION
+  });
+}
 async function checkAzureLogin(force = false) {
   return azureAuth.loginStatus(force);
 }
@@ -8096,7 +10421,7 @@ function projectNameFromProject(project) {
   const projectIndex = parts.findIndex((part) => part.toLowerCase() === "projects");
   return projectIndex >= 0 ? parts[projectIndex + 1] || "" : String(project.name || "").split("/").at(-1);
 }
-async function waitForFoundryProjectReady(endpoint, subscription, timeoutMs = 12e4) {
+async function waitForFoundryProjectReady(endpoint2, subscription, timeoutMs = 12e4) {
   const deadline = Date.now() + timeoutMs;
   let lastFailure = "The project data plane is not ready yet.";
   let forceTokenRefresh = false;
@@ -8105,7 +10430,7 @@ async function waitForFoundryProjectReady(endpoint, subscription, timeoutMs = 12
     try {
       const token = await azureAuth.accessToken(subscription, "https://ai.azure.com", forceTokenRefresh);
       forceTokenRefresh = false;
-      response = await fetch(`${String(endpoint).replace(/\/+$/, "")}/connections?api-version=v1`, {
+      response = await fetch(`${String(endpoint2).replace(/\/+$/, "")}/connections?api-version=v1`, {
         headers: { Authorization: `Bearer ${token.accessToken}` },
         signal: AbortSignal.timeout(15e3)
       });
@@ -8226,6 +10551,23 @@ async function fetchGatewayKey(entry, gateway) {
   }
   throw lastMissing || new Error(`Could not retrieve an API key for ${gateway.name}.`);
 }
+async function fetchDeploymentGatewayKey(intent) {
+  const subscription = intent.subscription;
+  const gateway = intent.resource;
+  const keys = await listRuntimeKeys(armClient, subscription, gateway.id);
+  const names = ["default", "master", ...keys.map((item) => String(item?.name || "")).filter(Boolean)].filter((name, index, all) => all.indexOf(name) === index);
+  if (!names.length) throw new Error(`AI Gateway ${gateway.name} has no runtime access keys.`);
+  let lastMissing = null;
+  for (const keyName of names) {
+    try {
+      return await retrieveRuntimeKey(armClient, subscription, gateway.id, keyName);
+    } catch (error) {
+      if (error?.status !== 404) throw error;
+      lastMissing = error;
+    }
+  }
+  throw lastMissing || new Error(`Could not retrieve an API key for ${gateway.name}.`);
+}
 function portListening(port) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ port, host: "127.0.0.1" });
@@ -8292,12 +10634,12 @@ function parameterContractOf(text) {
   } : null;
   return { schema, defaults: parameterDefaults(schema), github };
 }
-function validateParameters(contract, value) {
+function validateParameters(contract2, value) {
   const parameters = value == null ? {} : value;
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
     throw new Error("Parameters must be a JSON object.");
   }
-  const schema = contract?.schema;
+  const schema = contract2?.schema;
   if (!schema) return structuredClone(parameters);
   const properties = schema.properties || {};
   const normalized = schema.additionalProperties === true ? structuredClone(parameters) : Object.fromEntries(
@@ -8345,13 +10687,13 @@ function skillNameOf(text) {
   return unquoted || "Untitled skill";
 }
 function hostedSkillSelectionPath(entry) {
-  return path11.join(requireTemplateDir(entry), `.${STATE_PRODUCT}`, "hosted-skill-selection.json");
+  return path12.join(requireTemplateDir(entry), `.${STATE_PRODUCT}`, "hosted-skill-selection.json");
 }
 function legacyHostedSkillSelectionPaths(entry) {
-  return LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) => path11.join(requireTemplateDir(entry), `.${identity}`, "hosted-skill-selection.json"));
+  return LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) => path12.join(requireTemplateDir(entry), `.${identity}`, "hosted-skill-selection.json"));
 }
 function hostedSkillWorkspaceIdentity(entry) {
-  return entry.sourceWorkspace.manifest?.generationId || createHash8("sha256").update(path11.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24);
+  return entry.sourceWorkspace.manifest?.generationId || createHash8("sha256").update(path12.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24);
 }
 function validatedHostedSkillSelections(value, entry) {
   if (value?.version !== 1 || value.workspaceIdentity !== hostedSkillWorkspaceIdentity(entry) || !value.selections || typeof value.selections !== "object" || Array.isArray(value.selections)) {
@@ -8363,7 +10705,7 @@ function validatedHostedSkillSelections(value, entry) {
 }
 async function readHostedSkillSelections(file, entry) {
   try {
-    const value = JSON.parse(await readFile9(file, "utf8"));
+    const value = JSON.parse(await readFile10(file, "utf8"));
     return { exists: true, selections: validatedHostedSkillSelections(value, entry) };
   } catch (error) {
     if (error?.code === "ENOENT") return { exists: false, selections: null };
@@ -8391,8 +10733,8 @@ async function loadHostedSkillSelections(entry) {
 async function persistHostedSkillSelections(entry) {
   if (entry.sourceWorkspace.sourceMode === "attached") return;
   const file = hostedSkillSelectionPath(entry);
-  await mkdir5(path11.dirname(file), { recursive: true, mode: 448 });
-  const temporary = `${file}.${process.pid}.${randomUUID5()}.tmp`;
+  await mkdir6(path12.dirname(file), { recursive: true, mode: 448 });
+  const temporary = `${file}.${process.pid}.${randomUUID7()}.tmp`;
   const value = {
     version: 1,
     workspaceIdentity: hostedSkillWorkspaceIdentity(entry),
@@ -8423,6 +10765,50 @@ ${skill.body}`) : {
     entry.hero.agentFile = skill.relativePath;
   }
 }
+function selectLocalTrigger(entry, id) {
+  const choice = chooseHostedSkill(entry.hostedSkills, id, entry.hostedSkillSelections[id]);
+  if (!choice.selected && entry.sourceWorkspace.sourceMode === "attached") {
+    throw new Error(`The selected existing app has no ${id} Hosted Skill in its .agent.md files.`);
+  }
+  let selected = choice.selected;
+  entry.pendingTrigger = "";
+  if (!selected && entry.sourceWorkspace.materialized && entry.sourceWorkspace.sourceMode === "managed" && (id === "queue" || id === "connector")) {
+    const canonical = entry.hostedSkills.find((skill) => skill.relativePath === HERO_TEMPLATE.timerAgentRelPath) || entry.selectedHostedSkill;
+    const body = canonical?.body || entry.prompt;
+    const name = canonical?.name || entry.hero?.title || "Hosted skill";
+    const relativePath = id === "queue" ? HERO_TEMPLATE.queueAgentRelPath : HERO_TEMPLATE.connectorAgentRelPath;
+    const content = id === "queue" ? queueAgentContent(body, name, entry.queueName || queueNameForWorkspace(requireTemplateDir(entry))) : m365InboxAgentContent(body, name);
+    selected = agentDocument(content, relativePath);
+    entry.pendingTrigger = id;
+  }
+  entry.trigger = id;
+  entry.triggerSelectionRevision = (entry.triggerSelectionRevision || 0) + 1;
+  applySelectedHostedSkill(entry, selected, selected ? "" : `No ${id} hosted skill was found in src/*.agent.md.`);
+  if (id === "timer" && selected) {
+    const parsed = timerScheduleFromExpression(String(selected.triggerArgs?.schedule || ""));
+    if (parsed) entry.timerSchedule = parsed;
+  }
+  broadcast(entry, "state", snapshot(entry));
+}
+async function materializePendingTrigger(entry, { restartIfRunning = true } = {}) {
+  const trigger = entry.pendingTrigger;
+  const revision = entry.triggerSelectionRevision;
+  if (!trigger) return;
+  if (entry.trigger !== trigger) throw new Error("Trigger selection changed. Review the selected trigger and retry.");
+  assertWorkspaceMutationAllowed(entry, "Preparing the selected trigger");
+  const canonical = entry.hostedSkills.find((skill) => skill.relativePath === HERO_TEMPLATE.timerAgentRelPath);
+  await syncGeneratedTriggerFiles(entry, canonical?.body || entry.prompt, canonical?.name || entry.hero?.title || "Hosted skill", {
+    expectedSelection: {
+      trigger,
+      revision,
+      expectedCanonical: canonical ? { relativePath: canonical.relativePath, revision: canonical.revision } : null
+    }
+  });
+  if (entry.trigger !== trigger || entry.triggerSelectionRevision !== revision) {
+    throw new Error("Trigger selection changed. Review the selected trigger and retry.");
+  }
+  await refreshWorkspaceFromDisk(entry, { restartIfRunning, followSelectedFileTrigger: false });
+}
 async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, followSelectedFileTrigger = false } = {}) {
   let skills = await discoverHostedSkills(requireTemplateDir(entry));
   if (!Object.keys(entry.hostedSkillSelections).length) {
@@ -8434,7 +10820,7 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, foll
   let recoveryNotice = "";
   if (selectedOnDisk && nestedImport && entry.sourceWorkspace.sourceMode === "managed") {
     await writeAgentDocumentIfRevision(
-      path11.join(requireTemplateDir(entry), selectedOnDisk.relativePath),
+      path12.join(requireTemplateDir(entry), selectedOnDisk.relativePath),
       selectedOnDisk.body,
       selectedOnDisk.revision
     );
@@ -8444,7 +10830,7 @@ async function refreshHostedSkillsFromDiskUnlocked(entry, { persist = true, foll
         const importedContract = parameterContractOf(`${nestedImport.frontmatter}
 ${nestedImport.body}`);
         await writeAgentDocumentIfRevision(
-          path11.join(requireTemplateDir(entry), twin.relativePath),
+          path12.join(requireTemplateDir(entry), twin.relativePath),
           httpTwinContent(nestedImport.body, nestedImport.name, importedContract.schema),
           twin.revision
         );
@@ -8466,9 +10852,11 @@ ${nestedImport.body}`);
   const choice = chooseHostedSkill(skills, entry.trigger, preferredPath);
   entry.hostedSkills = skills;
   if (!choice.selected) {
+    if (entry.pendingTrigger === entry.trigger && entry.selectedHostedSkill?.trigger === entry.trigger) return { changed: false, restarted: false };
     applySelectedHostedSkill(entry, null, `No ${entry.trigger} hosted skill was found in src/*.agent.md.`);
     return { changed: false, restarted: false };
   }
+  entry.pendingTrigger = "";
   entry.hostedSkillSelections[entry.trigger] = choice.selected.relativePath;
   const notice = choice.fallback ? `${choice.missingPath} is no longer available; selected ${choice.selected.relativePath}.` : recoveryNotice;
   applySelectedHostedSkill(entry, choice.selected, notice);
@@ -8476,7 +10864,7 @@ ${nestedImport.body}`);
     const httpSkill = skills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
     if (entry.sourceWorkspace.sourceMode === "managed" && httpSkill && httpSkill.body.trim() !== choice.selected.body.trim()) {
       await writeAgentBodyIfRevision(
-        path11.join(requireTemplateDir(entry), httpSkill.relativePath),
+        path12.join(requireTemplateDir(entry), httpSkill.relativePath),
         choice.selected.body,
         httpSkill.revision
       );
@@ -8516,13 +10904,30 @@ async function refreshWorkspaceFromDisk(entry, { restartIfRunning = true, persis
 async function listTemplateFiles(dir) {
   try {
     const entries = await readdir6(dir, { recursive: true, withFileTypes: true });
-    return entries.filter((e) => e.isFile()).map((e) => path11.relative(dir, path11.join(e.parentPath ?? e.path ?? dir, e.name))).filter((rel) => rel && !rel.startsWith(".git" + path11.sep) && !rel.startsWith(".venv" + path11.sep)).sort().slice(0, 60);
+    return entries.filter((e) => e.isFile()).map((e) => path12.relative(dir, path12.join(e.parentPath ?? e.path ?? dir, e.name))).filter((rel) => rel && !rel.startsWith(".git" + path12.sep) && !rel.startsWith(".venv" + path12.sep)).sort().slice(0, 60);
   } catch {
     return [];
   }
 }
 var instances = /* @__PURE__ */ new Map();
 var session;
+var copilotClientFactory;
+function copilotBridgeForEntry(entry) {
+  if (entry.copilotBridge) return entry.copilotBridge;
+  const root = runtimeStatePaths(entry).root;
+  entry.copilotBridge = new CopilotSdkBridge({
+    baseDirectory: path12.join(root, "copilot-sdk-runtime"),
+    workingDirectory: entry.agentDir || entry.sourceWorkspace.workingDirectory || root,
+    ...copilotClientFactory ? { createClient: copilotClientFactory } : {},
+    requestTimeoutMs: COPILOT_PROXY_TIMEOUT_MS
+  });
+  return entry.copilotBridge;
+}
+async function closeCopilotBridge(entry) {
+  const bridge = entry.copilotBridge;
+  entry.copilotBridge = null;
+  if (bridge) await bridge.close();
+}
 async function loadedInstructionContents() {
   const result = session?.instructions?.getSources ? await session.instructions.getSources() : { sources: [] };
   return [
@@ -8603,7 +11008,7 @@ function runtimeStatePaths(entry) {
   return entry.runtimeState?.paths || studioStatePaths({ ...studioStateEnvironment(), instanceId: entry.instanceId });
 }
 function deploymentWorkspaceDir(entry) {
-  return entry.runtimeDirectories?.deployment || path11.join(runtimeStatePaths(entry).root, "deployment");
+  return entry.runtimeDirectories?.deployment || path12.join(runtimeStatePaths(entry).root, "deployment");
 }
 function deploymentSummary(deployment) {
   if (!deployment || deployment.status === "idle") return "";
@@ -8683,6 +11088,7 @@ function resetRuntimeStateLoaders(entry) {
   entry.httpRequestDraftsLoaded = false;
   entry.triggerPayloadDraftsLoaded = false;
   entry.subscriptionScopesLoaded = false;
+  entry.modelProviderStateLoaded = false;
 }
 async function initializeEntryRuntimeState(entry) {
   if (entry.runtimeStateReady) return entry.runtimeStateReady;
@@ -8691,13 +11097,14 @@ async function initializeEntryRuntimeState(entry) {
       ...studioStateEnvironment(),
       instanceId: entry.instanceId
     }).initialize();
-    const release = await acquireStateLock(path11.join(state.paths.root, "runtime-owner"), { timeoutMs: 250, pollMs: 25 });
+    const release = await acquireStateLock(path12.join(state.paths.root, "runtime-owner"), { timeoutMs: 250, pollMs: 25 });
     try {
       entry.runtimeState = state;
       await loadInvocationHistory(entry);
       await loadHttpRequestDrafts(entry);
       await loadEntryTriggerPayloadDrafts(entry);
       await loadSubscriptionScopes(entry);
+      await loadModelProviderState(entry);
       entry.releaseRuntimeOwner = release;
     } catch (error) {
       resetRuntimeStateLoaders(entry);
@@ -8789,8 +11196,8 @@ async function saveHttpRequestDraft(entry, draft) {
   const key = httpRequestDraftKey(entry);
   if (!key) throw new Error("Select an invokable HTTP endpoint or local Timer test before saving parameters.");
   const parsed = parseHttpRequestDraft(draft);
-  const contract = entry.target === "local" ? entry.parameterContract : { schema: null, defaults: {}, github: null };
-  const parameters = validateParameters(contract, parsed.body);
+  const contract2 = entry.target === "local" ? entry.parameterContract : { schema: null, defaults: {}, github: null };
+  const parameters = validateParameters(contract2, parsed.body);
   if (entry.target === "local" && githubRequirement(entry)) {
     await initializeGithubContext(entry, {
       force: true,
@@ -8799,7 +11206,7 @@ async function saveHttpRequestDraft(entry, draft) {
   }
   const normalizedDraft = {
     headersText: String(draft?.headersText ?? ""),
-    bodyText: contract.schema ? JSON.stringify(parameters, null, 2) : String(draft?.bodyText ?? "")
+    bodyText: contract2.schema ? JSON.stringify(parameters, null, 2) : String(draft?.bodyText ?? "")
   };
   entry.httpRequestError = "";
   if (parsed.persistable) {
@@ -8860,6 +11267,26 @@ async function loadSubscriptionScopes(entry) {
   entry.azure.tenantId = saved?.azure?.tenantId || "";
   entry.subscriptionScopesLoaded = true;
 }
+async function persistModelProviderState(entry) {
+  await entry.runtimeState.save("model-provider.json", {
+    provider: normalizeModelProvider(entry.modelBinding.source),
+    copilotModelId: normalizeModelProvider(entry.modelBinding.source) === "copilot" ? String(entry.modelBinding.modelId || "") : String(entry.modelBinding.persistedCopilotModelId || "")
+  });
+}
+async function loadModelProviderState(entry) {
+  if (entry.modelProviderStateLoaded) return;
+  const saved = await entry.runtimeState.load("model-provider.json");
+  entry.modelBinding.providerPreferencePresent = Boolean(saved);
+  if (saved) {
+    entry.modelBinding.source = saved.provider;
+    entry.modelBinding.persistedCopilotModelId = saved.copilotModelId;
+    if (saved.provider === "copilot") {
+      entry.modelBinding.modelId = saved.copilotModelId;
+      entry.modelBinding.resourceId = "";
+    }
+  }
+  entry.modelProviderStateLoaded = true;
+}
 function activeLocalInvocation(entry) {
   const running = [...entry.local.executions.values()].filter((event) => event.phase === "running");
   return running.length === 1 ? running[0] : null;
@@ -8890,7 +11317,11 @@ function hasRequiredGithubDigestEvidence(invocation, requiredTools = [...REQUIRE
       return [normalized, normalized.startsWith("github_") ? normalized.slice(7) : `github_${normalized}`];
     })
   );
-  return invocation.tools.some((tool) => tool.ok && acceptedNames.has(sourceMcpToolName(tool.name)));
+  return invocation.tools.some(
+    (tool) => tool.ok && acceptedNames.has(sourceMcpToolName(tool.name)) && (invocation.payloads || []).some(
+      (payload) => payload.validated === true && sourceMcpToolName(payload.tool) === sourceMcpToolName(tool.name)
+    )
+  );
 }
 function invocationTrigger(entry, functionName2) {
   return entry.local.functions.find((fn) => fn.name === functionName2)?.kind || (functionName2.endsWith("_http") ? "http" : functionName2.endsWith("_queue") ? "queue" : functionName2.endsWith("_m365_inbox") ? "connector" : "timer");
@@ -8906,6 +11337,13 @@ function refreshInvocationNote(event) {
   } else if (event.ok) {
     event.note = `${event.origin === "scheduled" ? "Scheduled" : "Manual"} ${event.trigger} completed.${activity ? ` ${activity}` : ""}`;
   }
+}
+function finalizeLocalHttpInvocationNote(invocation, { accepted, status, requiresGithubEvidence }) {
+  if (!accepted) {
+    invocation.note = status === 200 && requiresGithubEvidence ? "The function returned HTTP 200 without a successful required GitHub MCP call; the plausible digest was rejected." : `The function returned HTTP ${status}; the run failed. Check the local host log.`;
+    return;
+  }
+  if (invocation.response) invocation.note = `${invocation.note} Agent digest is available below.`;
 }
 function processLocalInvocationLog(entry, line, sequence) {
   const started = line.match(/Executing 'Functions\.([^']+)' \(Reason='([^']*)', Id=([^)]+)\)/);
@@ -8959,16 +11397,22 @@ function processLocalInvocationLog(entry, line, sequence) {
     const toolCompleted = sourceMcpToolName(line.match(/Function ([^\s]+) succeeded\./)?.[1]);
     if (isRequiredGithubDigestTool(toolCompleted)) {
       const tool = event.tools.find((item) => item.name === toolCompleted);
-      if (tool) tool.ok = true;
-      else event.tools.push({ name: toolCompleted, ok: true });
-      refreshInvocationNote(event);
+      if (tool) tool.completed = true;
+      else event.tools.push({ name: toolCompleted, ok: false, completed: true });
     }
-    const compacted = line.match(/Compacted GitHub MCP result for ([^:]+): (\d+) to (\d+) bytes\./);
+    const compacted = line.match(
+      /GitHub MCP middleware validated ([^\s]+) payload and compacted from (\d+) to (\d+) bytes\./
+    );
     if (compacted) {
+      const toolName = sourceMcpToolName(compacted[1]);
+      const tool = event.tools.find((item) => item.name === toolName);
+      if (tool) tool.ok = true;
+      else event.tools.push({ name: toolName, ok: true, completed: true });
       event.payloads.push({
-        tool: compacted[1],
+        tool: toolName,
         inputBytes: Number(compacted[2]),
-        outputBytes: Number(compacted[3])
+        outputBytes: Number(compacted[3]),
+        validated: true
       });
       refreshInvocationNote(event);
     }
@@ -9011,13 +11455,30 @@ function processLocalInvocationLog(entry, line, sequence) {
   scheduleInvocationHistoryWrite(entry);
 }
 async function ensureAgentResponseLogging(entry) {
-  const functionAppPath = path11.join(requireTemplateDir(entry), "src", "function_app.py");
-  const source = await readFile9(functionAppPath, "utf8");
+  const functionAppPath = path12.join(requireTemplateDir(entry), "src", "function_app.py");
+  const source = await readFile10(functionAppPath, "utf8");
   const updated = canonicalizeModelProviderRouting(installAgentResponseLogging(source));
   if (updated !== source) await writeFile4(functionAppPath, updated);
 }
 function computeModelReadiness(entry) {
   const mb = entry.modelBinding;
+  if (mb.source === "copilot") {
+    if (mb.loading) return { state: "discovering", message: mb.status || "Loading GitHub Copilot models..." };
+    if (mb.error) return { state: "error", message: mb.error };
+    if (!mb.copilotModels.length) {
+      return {
+        state: "no-model",
+        message: "No compatible GitHub Copilot model is available in this session."
+      };
+    }
+    if (!mb.copilotModels.some((model) => model.id === mb.modelId)) {
+      return { state: "select", message: "Choose an available GitHub Copilot model." };
+    }
+    return {
+      state: "ready",
+      message: mb.status || `${mb.activeLabel || mb.modelId} is selected`
+    };
+  }
   if (configuredModelBindingIsUsable(mb) && mb.activeSource === "gateway" && !mb.loading) {
     return { state: "ready", message: mb.status || `${mb.activeLabel} is ready` };
   }
@@ -9074,7 +11535,7 @@ function snapshot(entry) {
     hero: entry.hero,
     fetchError: entry.fetchError || "",
     prompt: entry.prompt,
-    hostedSkills: entry.hostedSkills.map(({ relativePath, fileName, name, description, trigger, triggerArgs, route, functionName: functionName2 }) => ({
+    hostedSkills: [...entry.hostedSkills, ...entry.pendingTrigger && entry.selectedHostedSkill ? [entry.selectedHostedSkill] : []].map(({ relativePath, fileName, name, description, trigger, triggerArgs, route, functionName: functionName2 }) => ({
       relativePath,
       fileName,
       name,
@@ -9201,6 +11662,8 @@ function snapshot(entry) {
       status: entry.modelBinding.status,
       configured: entry.modelBinding.configured,
       source: entry.modelBinding.source,
+      copilotModels: entry.modelBinding.copilotModels,
+      copilotCompatibilityFailures: entry.modelBinding.copilotCompatibilityFailures,
       subscription: entry.modelBinding.subscription,
       subscriptionScope: entry.modelBinding.subscriptionScope,
       foundry: entry.modelBinding.foundry,
@@ -9265,13 +11728,20 @@ function snapshot(entry) {
 }
 function ensureEntry(instanceId) {
   let entry = instances.get(instanceId);
-  if (entry) return entry;
+  if (entry) {
+    entry.usageMetrics ||= createEntryUsageMetrics();
+    return entry;
+  }
   entry = {
     instanceId,
+    usageMetrics: createEntryUsageMetrics(),
     sessionId: "",
     clients: /* @__PURE__ */ new Set(),
     server: null,
+    closePromise: null,
     url: "",
+    copilotBridgeToken: randomUUID7(),
+    copilotBridge: null,
     commands: [],
     templateDir: "",
     agentDir: "",
@@ -9280,6 +11750,7 @@ function ensureEntry(instanceId) {
     fetchPromise: null,
     prompt: "",
     hostedSkills: [],
+    pendingTrigger: "",
     hostedSkillSelections: {},
     selectedHostedSkill: null,
     selectedSkillPath: "",
@@ -9321,6 +11792,7 @@ function ensureEntry(instanceId) {
     triggerPayloadDrafts: defaultTriggerPayloadDrafts(),
     triggerPayloadDraftsLoaded: false,
     subscriptionScopesLoaded: false,
+    modelProviderStateLoaded: false,
     queueMessage: DEFAULT_QUEUE_MESSAGE,
     connectorPayload: JSON.stringify(DEFAULT_M365_INBOX_PAYLOAD, null, 2),
     queueName: "",
@@ -9414,7 +11886,11 @@ function ensureEntry(instanceId) {
       error: "",
       status: "",
       configured: false,
-      source: "foundry",
+      source: "copilot",
+      copilotModels: [],
+      copilotCompatibilityFailures: [],
+      persistedCopilotModelId: "",
+      providerPreferencePresent: false,
       subscription: "",
       subscriptionScope: null,
       subscriptionUnavailable: false,
@@ -9441,6 +11917,8 @@ function ensureEntry(instanceId) {
       initializePromise: null,
       discoveryGeneration: 0,
       discoveryRequest: null,
+      copilotDiscoveryGeneration: 0,
+      copilotDiscoveryRequest: null,
       selectionGeneration: 0
     },
     subscriptionPicker: {
@@ -9576,12 +12054,12 @@ function httpTwinContent(bodyText, skillName = "Hosted skill", inputSchema = nul
   return frontmatter + "\n" + bodyText.trim() + "\n";
 }
 async function ensureConnectorHostConfig(sourceDir) {
-  const hostPath = path11.join(sourceDir, "host.json");
-  const current = JSON.parse(await readFile9(hostPath, "utf8"));
+  const hostPath = path12.join(sourceDir, "host.json");
+  const current = JSON.parse(await readFile10(hostPath, "utf8"));
   const next = withConnectorExtensionBundle(current);
   await writeTextIfChanged(hostPath, `${JSON.stringify(next, null, 2)}
 `);
-  const connectorMcpPath = path11.join(sourceDir, "m365-inbox.mcp.json");
+  const connectorMcpPath = path12.join(sourceDir, "m365-inbox.mcp.json");
   await writeTextIfChanged(
     connectorMcpPath,
     `${JSON.stringify(withM365InboxMcpServer({ servers: {} }), null, 2)}
@@ -9589,12 +12067,12 @@ async function ensureConnectorHostConfig(sourceDir) {
   );
 }
 async function removeConnectorDeploymentConfig(sourceDir) {
-  const hostPath = path11.join(sourceDir, "host.json");
-  const current = JSON.parse(await readFile9(hostPath, "utf8"));
+  const hostPath = path12.join(sourceDir, "host.json");
+  const current = JSON.parse(await readFile10(hostPath, "utf8"));
   const next = withoutConnectorExtensionBundle(current);
   await writeTextIfChanged(hostPath, `${JSON.stringify(next, null, 2)}
 `);
-  await rm6(path11.join(sourceDir, "m365-inbox.mcp.json"), { force: true });
+  await rm8(path12.join(sourceDir, "m365-inbox.mcp.json"), { force: true });
 }
 async function syncGeneratedTriggerFiles(entry, bodyText, skillName, options = {}) {
   return withSourceWorkspaceMutation(
@@ -9603,31 +12081,48 @@ async function syncGeneratedTriggerFiles(entry, bodyText, skillName, options = {
     () => syncGeneratedTriggerFilesUnlocked(
       entry,
       bodyText === void 0 ? entry.prompt : bodyText,
-      skillName === void 0 ? entry.hero?.title || "Hosted skill" : skillName
+      skillName === void 0 ? entry.hero?.title || "Hosted skill" : skillName,
+      options.expectedSelection
     ),
     options
   );
 }
-async function syncGeneratedTriggerFilesUnlocked(entry, bodyText, skillName) {
-  const sourceDir = entry.agentDir || path11.join(requireTemplateDir(entry), "src");
-  const queuePath = path11.join(requireTemplateDir(entry), HERO_TEMPLATE.queueAgentRelPath);
-  const connectorPath = path11.join(requireTemplateDir(entry), HERO_TEMPLATE.connectorAgentRelPath);
+async function syncGeneratedTriggerFilesUnlocked(entry, bodyText, skillName, expectedSelection) {
+  const checkSelection = () => {
+    if (expectedSelection && (entry.trigger !== expectedSelection.trigger || entry.triggerSelectionRevision !== expectedSelection.revision)) {
+      throw new Error("Trigger selection changed. Review the selected trigger and retry.");
+    }
+  };
+  checkSelection();
+  if (expectedSelection?.expectedCanonical) {
+    const { relativePath, revision } = expectedSelection.expectedCanonical;
+    const current = await readFile10(path12.join(requireTemplateDir(entry), relativePath), "utf8");
+    checkSelection();
+    if (createHash8("sha256").update(current).digest("hex") !== revision) {
+      throw new Error("Canonical skill instructions changed on disk. Refresh before preparing this trigger.");
+    }
+  }
+  const sourceDir = entry.agentDir || path12.join(requireTemplateDir(entry), "src");
+  const queuePath = path12.join(requireTemplateDir(entry), HERO_TEMPLATE.queueAgentRelPath);
+  const connectorPath = path12.join(requireTemplateDir(entry), HERO_TEMPLATE.connectorAgentRelPath);
   const queueExists = await exists(queuePath);
   const connectorExists = await exists(connectorPath);
   if (entry.trigger === "queue" || queueExists) {
     await assertLocalQueueStorageSafe(entry);
+    checkSelection();
     entry.queueName = entry.queueName || queueNameForWorkspace(requireTemplateDir(entry));
     await writeTextIfChanged(queuePath, queueAgentContent(bodyText, skillName, entry.queueName));
   }
   if (entry.trigger === "connector" || connectorExists) {
+    checkSelection();
     await writeTextIfChanged(connectorPath, m365InboxAgentContent(bodyText, skillName));
     await ensureConnectorHostConfig(sourceDir);
   }
 }
 async function protectLocalSettings(dir) {
-  const ignorePath = path11.join(dir, ".gitignore");
+  const ignorePath = path12.join(dir, ".gitignore");
   const requiredRules = ["src/local.settings.json", "src/.foundry-token.json", ".intelligent-function-app-studio/", ".azure-functions-hosted-skills/"];
-  const current = await exists(ignorePath) ? await readFile9(ignorePath, "utf8") : "";
+  const current = await exists(ignorePath) ? await readFile10(ignorePath, "utf8") : "";
   const rules = current.split(/\r?\n/).map((line) => line.trim());
   const missingRules = requiredRules.filter((rule) => !rules.includes(rule));
   if (missingRules.length) {
@@ -9635,11 +12130,11 @@ async function protectLocalSettings(dir) {
     await writeFile4(ignorePath, `${current}${separator}${missingRules.join("\n")}
 `);
   }
-  if (await exists(path11.join(dir, ".git"))) {
+  if (await exists(path12.join(dir, ".git"))) {
     await execFileText("git", ["rm", "--cached", "--ignore-unmatch", ...requiredRules], { cwd: dir });
   }
 }
-var BUNDLED_TEMPLATE_DIRECTORY = path11.join(EXTENSION_ROOT, "templates", "hosted-skill");
+var BUNDLED_TEMPLATE_DIRECTORY = path12.join(EXTENSION_ROOT, "templates", "hosted-skill");
 var SOURCE_WORKSPACE_TEMPLATE_ID = HERO_TEMPLATE.repo;
 var LEGACY_DAILY_DIGEST_AGENT_SIGNATURES = /* @__PURE__ */ new Map([
   [HERO_TEMPLATE.timerAgentRelPath, "a17e3135d4d9f3fea17ba88b8bf8a634fc35da9ca78462e66f0c08b4cb68eb10"],
@@ -9668,11 +12163,11 @@ function normalizedTextDigest(text) {
 }
 async function migrateOwnedLegacyDailyDigestAgents(root, manifest) {
   const currentFiles = [];
-  const baseline = new Map((manifest?.baseline || []).map((item) => [path11.normalize(item.path), item]));
+  const baseline = new Map((manifest?.baseline || []).map((item) => [path12.normalize(item.path), item]));
   for (const [relativePath, legacySignature] of LEGACY_DAILY_DIGEST_AGENT_SIGNATURES) {
-    const normalizedPath = path11.normalize(relativePath);
-    const file = path11.join(root, normalizedPath);
-    const current = await readFile9(file, "utf8");
+    const normalizedPath = path12.normalize(relativePath);
+    const file = path12.join(root, normalizedPath);
+    const current = await readFile10(file, "utf8");
     const owned = baseline.get(normalizedPath);
     const currentBytes = Buffer.from(current);
     if (normalizedTextDigest(current) !== legacySignature || owned?.type !== "file" || owned.size !== currentBytes.byteLength || owned.sha256 !== createHash8("sha256").update(currentBytes).digest("hex")) {
@@ -9682,7 +12177,7 @@ async function migrateOwnedLegacyDailyDigestAgents(root, manifest) {
   }
   const replacements = /* @__PURE__ */ new Map();
   for (const item of currentFiles) {
-    const content = await readFile9(path11.join(BUNDLED_TEMPLATE_DIRECTORY, item.normalizedPath), "utf8");
+    const content = await readFile10(path12.join(BUNDLED_TEMPLATE_DIRECTORY, item.normalizedPath), "utf8");
     await writeFile4(item.file, content);
     const bytes = Buffer.from(content);
     replacements.set(item.normalizedPath, {
@@ -9696,7 +12191,7 @@ async function migrateOwnedLegacyDailyDigestAgents(root, manifest) {
     migrated: true,
     manifest: {
       ...manifest,
-      baseline: manifest.baseline.map((item) => replacements.get(path11.normalize(item.path)) || item)
+      baseline: manifest.baseline.map((item) => replacements.get(path12.normalize(item.path)) || item)
     }
   };
 }
@@ -9705,15 +12200,19 @@ function gatewayClientManagerSource() {
 
 import json
 import os
+import secrets
 import time
 
 from agent_framework import Message
 from agent_framework.foundry import FoundryChatClient
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.openai import OpenAIChatClient, OpenAIChatCompletionClient
 from azure.core.credentials import AccessToken
 from azure.identity.aio import DefaultAzureCredential
 from azure_functions_agents import ClientManager
 from github_mcp_middleware import compact_github_results
+
+
+GITHUB_DIGEST_TOOLS = {"actions_list", "list_issues", "list_pull_requests"}
 
 
 def _normalize_timer_messages(messages):
@@ -9744,6 +12243,45 @@ def _bound_completion(kwargs):
     return kwargs
 
 
+def _tool_name(tool):
+    if isinstance(tool, dict):
+        name = tool.get("name") or (tool.get("function") or {}).get("name")
+    else:
+        name = getattr(tool, "name", "")
+    return str(name or "").split("___")[-1].removeprefix("github_")
+
+
+def _declared_tool_name(tool):
+    if isinstance(tool, dict):
+        return str(tool.get("name") or (tool.get("function") or {}).get("name") or "")
+    return str(getattr(tool, "name", "") or "")
+
+
+def _require_initial_github_digest_tool(messages, options):
+    if not os.environ.get("GITHUB_REPOSITORY", "").strip():
+        return
+    tool_choice = options.get("tool_choice")
+    tool_mode = tool_choice.get("mode") if isinstance(tool_choice, dict) else tool_choice
+    if tool_mode == "none" or (messages and getattr(messages[-1], "role", "") == "tool"):
+        return
+    available = {
+        _tool_name(tool): _declared_tool_name(tool)
+        for tool in options.get("tools") or []
+        if _tool_name(tool)
+    }
+    missing = sorted(GITHUB_DIGEST_TOOLS - available.keys())
+    if missing:
+        raise RuntimeError(
+            "GitHub repository digest requires declared GitHub MCP tools before Copilot inference. "
+            f"Missing: {', '.join(missing)}."
+        )
+    if tool_mode in {None, "auto"}:
+        options["tool_choice"] = {
+            "mode": "required",
+            "required_function_name": available["list_issues"],
+        }
+
+
 class AIGatewayChatClient(OpenAIChatClient):
     def get_response(self, messages, **kwargs):
         return super().get_response(_normalize_timer_messages(messages), **_bound_completion(kwargs))
@@ -9752,6 +12290,35 @@ class AIGatewayChatClient(OpenAIChatClient):
 class BoundedFoundryChatClient(FoundryChatClient):
     def get_response(self, messages, **kwargs):
         return super().get_response(_normalize_timer_messages(messages), **_bound_completion(kwargs))
+
+
+class CopilotSessionChatClient(OpenAIChatCompletionClient):
+    def __init__(self, *args, **kwargs):
+        self._bridge_session_id = secrets.token_urlsafe(24)
+        super().__init__(*args, **kwargs)
+
+    def get_response(self, messages, **kwargs):
+        options = dict(kwargs.get("options") or {})
+        options["user"] = self._bridge_session_id
+        options["allow_multiple_tool_calls"] = False
+        _require_initial_github_digest_tool(messages, options)
+        kwargs["options"] = options
+        return super().get_response(_normalize_timer_messages(messages), **_bound_completion(kwargs))
+
+
+class CopilotSessionClientManager(ClientManager):
+    name = "copilot"
+
+    def resolve_model(self, requested: str | None) -> str:
+        return requested or os.environ["AZURE_FUNCTIONS_AGENTS_MODEL"]
+
+    def build_chat_client(self, model: str | None):
+        return CopilotSessionChatClient(
+            model=self.resolve_model(model),
+            api_key=os.environ["COPILOT_SESSION_API_KEY"],
+            base_url=os.environ["COPILOT_SESSION_OPENAI_BASE_URL"],
+            middleware=[compact_github_results],
+        )
 
 
 class AIGatewayClientManager(ClientManager):
@@ -9884,26 +12451,51 @@ def _normalize_arguments(tool_name, arguments, cutoff):
     if "/" not in repository:
         raise RuntimeError("GITHUB_REPOSITORY must contain an exact owner/name before GitHub tools can run.")
     owner, repo = repository.split("/", maxsplit=1)
-    arguments.update(owner=owner, repo=repo)
     if tool_name in {"github_list_pull_requests", "list_pull_requests"}:
-        arguments.update(state="all", sort="updated", direction="desc", perPage=100, page=1)
-    elif tool_name in {"github_list_issues", "list_issues"}:
-        arguments.pop("page", None)
-        arguments.pop("query", None)
+        arguments.clear()
         arguments.update(
+            owner=owner,
+            repo=repo,
+            state="all",
+            sort="updated",
+            direction="desc",
+            perPage=100,
+            page=1,
+            fields=[
+                "number", "title", "state", "draft", "merged", "html_url", "user",
+                "labels", "created_at", "updated_at", "closed_at", "merged_at",
+            ],
+        )
+    elif tool_name in {"github_list_issues", "list_issues"}:
+        arguments.clear()
+        arguments.update(
+            owner=owner,
+            repo=repo,
             orderBy="UPDATED_AT",
             direction="DESC",
             since=cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
             perPage=100,
+            fields=[
+                "number", "title", "state", "user", "labels", "comments",
+                "created_at", "updated_at",
+            ],
         )
     elif tool_name in {"github_actions_list", "actions_list"}:
         filters = arguments.get("workflow_runs_filter")
         filters = dict(filters) if isinstance(filters, Mapping) else {}
+        filters = {
+            key: value
+            for key, value in filters.items()
+            if key in {"actor", "branch", "event"} and isinstance(value, str)
+        }
         filters["status"] = "completed"
+        arguments.clear()
         arguments.update(
+            owner=owner,
+            repo=repo,
             method="list_workflow_runs",
             workflow_runs_filter=filters,
-            per_page=100,
+            perPage=100,
             page=1,
         )
 
@@ -9911,7 +12503,7 @@ def _normalize_arguments(tool_name, arguments, cutoff):
 def _compact(tool_name, payload, cutoff):
     if tool_name in {"github_list_pull_requests", "list_pull_requests"}:
         if not isinstance(payload, list):
-            return payload
+            raise RuntimeError("GitHub MCP list_pull_requests returned an invalid result shape.")
         source = payload[:MAX_ITEMS]
         items = []
         for item in source:
@@ -9928,7 +12520,7 @@ def _compact(tool_name, payload, cutoff):
 
     if tool_name in {"github_list_issues", "list_issues"}:
         if not isinstance(payload, Mapping) or not isinstance(payload.get("issues"), list):
-            return payload
+            raise RuntimeError("GitHub MCP list_issues returned an invalid result shape.")
         source = payload["issues"][:MAX_ITEMS]
         items = []
         for item in source:
@@ -9949,15 +12541,33 @@ def _compact(tool_name, payload, cutoff):
 
     if tool_name in {"github_actions_list", "actions_list"}:
         if not isinstance(payload, Mapping) or not isinstance(payload.get("workflow_runs"), list):
-            return payload
-        source = payload["workflow_runs"][:MAX_ITEMS]
-        items = []
+            raise RuntimeError("GitHub MCP actions_list returned an invalid result shape.")
+        returned = payload["workflow_runs"]
+        source = returned[:MAX_ITEMS]
+        recent = []
+        failures = []
+        conclusion_counts = {}
+        latest_observed_at = None
+        oldest_observed_at = None
         for item in source:
-            if (
-                not isinstance(item, Mapping)
-                or item.get("conclusion") != "failure"
-                or not _is_recent(item.get("updated_at") or item.get("created_at"), cutoff)
+            if not isinstance(item, Mapping):
+                continue
+            observed_at = item.get("updated_at") or item.get("created_at")
+            if isinstance(observed_at, str) and (
+                latest_observed_at is None or observed_at > latest_observed_at
             ):
+                latest_observed_at = observed_at
+            if isinstance(observed_at, str) and (
+                oldest_observed_at is None or observed_at < oldest_observed_at
+            ):
+                oldest_observed_at = observed_at
+            if not _is_recent(observed_at, cutoff):
+                continue
+            recent.append(item)
+            conclusion = item.get("conclusion")
+            conclusion = conclusion if isinstance(conclusion, str) and conclusion else "unknown"
+            conclusion_counts[conclusion] = conclusion_counts.get(conclusion, 0) + 1
+            if conclusion != "failure":
                 continue
             compact = _select(
                 item,
@@ -9968,8 +12578,32 @@ def _compact(tool_name, payload, cutoff):
                 ),
             )
             compact["actor"] = _login(item.get("actor"))
-            items.append(compact)
-        return {"returned_count": len(items), "workflow_runs": items}
+            failures.append(compact)
+        total_count = payload.get("total_count")
+        has_uninspected_runs = (
+            len(returned) > len(source)
+            or isinstance(total_count, int) and total_count > len(returned)
+        )
+        window_coverage_complete = (
+            not has_uninspected_runs
+            or isinstance(oldest_observed_at, str) and not _is_recent(oldest_observed_at, cutoff)
+        )
+        return {
+            "verified": True,
+            "returned_run_count": len(returned),
+            "inspected_run_count": len(source),
+            "inspection_truncated": has_uninspected_runs,
+            "window_coverage_complete": window_coverage_complete,
+            "verified_no_recent_failures": window_coverage_complete and not failures,
+            "recent_completed_run_count": len(recent),
+            "recent_success_count": conclusion_counts.get("success", 0),
+            "recent_skipped_count": conclusion_counts.get("skipped", 0),
+            "recent_failure_count": len(failures),
+            "recent_conclusion_counts": conclusion_counts,
+            "latest_observed_at": latest_observed_at,
+            "oldest_observed_at": oldest_observed_at,
+            "workflow_failures": failures,
+        }
 
     return payload
 
@@ -9977,8 +12611,8 @@ def _compact(tool_name, payload, cutoff):
 def _compact_text(tool_name, text, cutoff):
     try:
         payload = json.loads(text)
-    except json.JSONDecodeError:
-        return text
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"GitHub MCP {tool_name} returned non-JSON text.") from error
     compact_payload = _compact(tool_name, payload, cutoff)
     compact = json.dumps(compact_payload, separators=(",", ":"), sort_keys=True)
     if len(compact.encode("utf-8")) > MAX_TEXT_BYTES:
@@ -9991,7 +12625,7 @@ def _compact_text(tool_name, text, cutoff):
             sort_keys=True,
         )
     logger.warning(
-        "GitHub MCP middleware compacted %s from %d to %d bytes.",
+        "GitHub MCP middleware validated %s payload and compacted from %d to %d bytes.",
         tool_name,
         len(text.encode("utf-8")),
         len(compact.encode("utf-8")),
@@ -10020,10 +12654,10 @@ async def compact_github_results(context: FunctionInvocationContext, call_next):
 `;
 }
 async function writeGithubMcpConfig(sourceDir, mode) {
-  const mcpPath = path11.join(sourceDir, "mcp.json");
+  const mcpPath = path12.join(sourceDir, "mcp.json");
   let mcpConfig = { servers: {} };
   try {
-    const existing = JSON.parse(await readFile9(mcpPath, "utf8"));
+    const existing = JSON.parse(await readFile10(mcpPath, "utf8"));
     if (existing && typeof existing === "object") mcpConfig = existing;
   } catch {
   }
@@ -10064,9 +12698,9 @@ async function writeGithubMcpConfig(sourceDir, mode) {
 }
 async function migrateGithubToolInstructions(sourceDir, mode) {
   for (const file of ["daily-repo-digest.agent.md", "daily-repo-digest-http.agent.md"]) {
-    const agentPath = path11.join(sourceDir, file);
+    const agentPath = path12.join(sourceDir, file);
     if (!await exists(agentPath)) continue;
-    const current = await readFile9(agentPath, "utf8");
+    const current = await readFile10(agentPath, "utf8");
     const next = mode === "gateway" ? current.replaceAll("github___list_pull_requests", "aigw-github___github_list_pull_requests").replaceAll("github___list_issues", "aigw-github___github_list_issues").replaceAll("github___actions_list", "aigw-github___github_actions_list") : current.replaceAll("aigw-github___github_list_pull_requests", "github___list_pull_requests").replaceAll("aigw-github___github_list_issues", "github___list_issues").replaceAll("aigw-github___github_actions_list", "github___actions_list");
     if (next !== current) await writeFile4(agentPath, next);
   }
@@ -10080,45 +12714,45 @@ async function ensureGatewayProviderFiles(entry, mcpMode = "public", options = {
   );
 }
 async function ensureGatewayProviderFilesUnlocked(entry, mcpMode) {
-  const sourceDir = entry.agentDir || path11.join(requireTemplateDir(entry), "src");
-  const helperPath = path11.join(sourceDir, "ai_gateway_client_manager.py");
-  const middlewarePath = path11.join(sourceDir, "github_mcp_middleware.py");
-  const functionAppPath = path11.join(sourceDir, "function_app.py");
-  const agentsConfigPath = path11.join(sourceDir, "agents.config.yaml");
+  const sourceDir = entry.agentDir || path12.join(requireTemplateDir(entry), "src");
+  const helperPath = path12.join(sourceDir, "ai_gateway_client_manager.py");
+  const middlewarePath = path12.join(sourceDir, "github_mcp_middleware.py");
+  const functionAppPath = path12.join(sourceDir, "function_app.py");
+  const agentsConfigPath = path12.join(sourceDir, "agents.config.yaml");
   await writeTextIfChanged(helperPath, gatewayClientManagerSource());
   await writeTextIfChanged(middlewarePath, githubMcpMiddlewareSource());
   const githubMode = githubRequirement(entry) ? mcpMode : "none";
   const mcpChanged = await writeGithubMcpConfig(sourceDir, githubMode);
   await migrateGithubToolInstructions(sourceDir, mcpMode);
-  const agentsConfig = await readFile9(agentsConfigPath, "utf8");
+  const agentsConfig = await readFile10(agentsConfigPath, "utf8");
   if (agentsConfig.includes("model: $FOUNDRY_MODEL")) {
     await writeFile4(agentsConfigPath, agentsConfig.replace("model: $FOUNDRY_MODEL", "model: $AZURE_FUNCTIONS_AGENTS_MODEL"));
   }
-  const current = await readFile9(functionAppPath, "utf8");
+  const current = await readFile10(functionAppPath, "utf8");
   const next = canonicalizeModelProviderRouting(current, { addIfMissing: true });
   await writeFile4(functionAppPath, next);
   return { githubMode, mcpChanged };
 }
 async function readLocalSettings(entry) {
-  const settingsPath = path11.join(entry.agentDir || path11.join(requireTemplateDir(entry), "src"), "local.settings.json");
+  const settingsPath = path12.join(entry.agentDir || path12.join(requireTemplateDir(entry), "src"), "local.settings.json");
   if (!await exists(settingsPath)) {
     return {
       path: settingsPath,
       json: { IsEncrypted: false, Values: { FUNCTIONS_WORKER_RUNTIME: "python", AzureWebJobsStorage: "UseDevelopmentStorage=true" } }
     };
   }
-  const json = JSON.parse(await readFile9(settingsPath, "utf8"));
+  const json = JSON.parse(await readFile10(settingsPath, "utf8"));
   json.Values = json.Values && typeof json.Values === "object" ? json.Values : {};
   return { path: settingsPath, json };
 }
 async function assertLocalQueueStorageSafe(entry) {
-  const queuePath = path11.join(requireTemplateDir(entry), entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.queueAgentRelPath);
+  const queuePath = path12.join(requireTemplateDir(entry), entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.queueAgentRelPath);
   if (entry.trigger !== "queue" && !await exists(queuePath)) return;
   const { json } = await readLocalSettings(entry);
   assertLocalQueueConnection(json.Values.AzureWebJobsStorage);
 }
 async function writeTextIfChanged(file, content, options) {
-  const current = await exists(file) ? await readFile9(file, "utf8") : null;
+  const current = await exists(file) ? await readFile10(file, "utf8") : null;
   if (current === content) return false;
   await writeFile4(file, content, options);
   return true;
@@ -10128,33 +12762,32 @@ async function inspectConfiguredModelBinding(entry) {
   const values = json.Values;
   const provider = String(values.AZURE_FUNCTIONS_AGENTS_PROVIDER || "");
   if (provider === "foundry" && values.FOUNDRY_PROJECT_ENDPOINT && values.FOUNDRY_MODEL) {
-    entry.modelBinding.configured = true;
-    entry.modelBinding.source = "foundry";
-    entry.modelBinding.activeSource = "foundry";
-    entry.modelBinding.modelId = values.FOUNDRY_MODEL;
-    entry.modelBinding.activeModelId = values.FOUNDRY_MODEL;
-    entry.modelBinding.activeLabel = `${values.FOUNDRY_MODEL} via Microsoft Foundry`;
     return { source: "foundry", endpoint: values.FOUNDRY_PROJECT_ENDPOINT, model: values.FOUNDRY_MODEL };
   }
   if (provider === "ai_gateway" && values.AZURE_AI_GATEWAY_OPENAI_BASE_URL && values.AZURE_AI_GATEWAY_API_KEY && values.AZURE_FUNCTIONS_AGENTS_MODEL) {
-    entry.modelBinding.configured = true;
-    entry.modelBinding.source = "gateway";
-    entry.modelBinding.activeSource = "gateway";
-    entry.modelBinding.modelId = values.AZURE_FUNCTIONS_AGENTS_MODEL;
-    entry.modelBinding.activeModelId = values.AZURE_FUNCTIONS_AGENTS_MODEL;
-    entry.modelBinding.activeLabel = `${values.AZURE_FUNCTIONS_AGENTS_MODEL} via AI Gateway`;
     return {
       source: "gateway",
       endpoint: values.AZURE_AI_GATEWAY_OPENAI_BASE_URL,
       model: values.AZURE_FUNCTIONS_AGENTS_MODEL
     };
   }
+  return null;
+}
+function restoreConfiguredModelBinding(entry, configured) {
+  if (configured) {
+    entry.modelBinding.configured = true;
+    entry.modelBinding.source = configured.source;
+    entry.modelBinding.activeSource = configured.source;
+    entry.modelBinding.modelId = configured.model;
+    entry.modelBinding.activeModelId = configured.model;
+    entry.modelBinding.activeLabel = `${configured.model} via ${configured.source === "foundry" ? "Microsoft Foundry" : "AI Gateway"}`;
+    return;
+  }
   entry.modelBinding.configured = false;
   entry.modelBinding.activeLabel = "";
   entry.modelBinding.activeSource = "";
   entry.modelBinding.activeResourceId = "";
   entry.modelBinding.activeModelId = "";
-  return null;
 }
 async function writeModelBindingSettings(entry, valuesToSet, options = {}) {
   return withSourceWorkspaceMutation(
@@ -10168,8 +12801,10 @@ async function writeModelBindingSettingsUnlocked(entry, valuesToSet) {
   const { path: settingsPath, json } = await readLocalSettings(entry);
   const values = json.Values;
   for (const key of [
+    "AZURE_FUNCTIONS_AGENTS_PROVIDER",
     "FOUNDRY_PROJECT_ENDPOINT",
     "FOUNDRY_MODEL",
+    "AZURE_AI_PROJECT_ENDPOINT",
     "AZURE_OPENAI_ENDPOINT",
     "AZURE_OPENAI_DEPLOYMENT",
     "AZURE_OPENAI_API_KEY",
@@ -10177,23 +12812,42 @@ async function writeModelBindingSettingsUnlocked(entry, valuesToSet) {
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
     "AZURE_AI_GATEWAY_OPENAI_BASE_URL",
+    "AZURE_AI_GATEWAY_ENDPOINT",
     "AZURE_AI_GATEWAY_MCP_URL",
     "AZURE_AI_GATEWAY_API_KEY",
+    "AI_GATEWAY_ENDPOINT",
+    "AI_GATEWAY_API_KEY",
     "AZURE_FUNCTIONS_AGENTS_MODEL",
     "AZURE_TOKEN_CREDENTIALS",
     "FOUNDRY_TOKEN_FILE",
     "GITHUB_MCP_AUTHORIZATION",
     "GITHUB_MCP_SERVER_URL",
-    "GITHUB_REPOSITORY"
+    "GITHUB_REPOSITORY",
+    "AZURE_SUBSCRIPTION_ID",
+    "COPILOT_SESSION_OPENAI_BASE_URL",
+    "COPILOT_SESSION_API_KEY"
   ]) {
     delete values[key];
   }
-  values.AZURE_SUBSCRIPTION_ID = entry.modelBinding.subscription;
+  if (normalizeModelProvider(entry.modelBinding.source) !== "copilot" && entry.modelBinding.subscription) {
+    values.AZURE_SUBSCRIPTION_ID = entry.modelBinding.subscription;
+  }
   Object.assign(values, valuesToSet);
-  await writeFile4(settingsPath, `${JSON.stringify(json, null, 2)}
-`, { mode: 384 });
+  const changed = await writeTextIfChanged(
+    settingsPath,
+    `${JSON.stringify(json, null, 2)}
+`,
+    { mode: 384 }
+  );
   await chmod(settingsPath, 384);
   await protectLocalSettings(requireTemplateDir(entry));
+  if (valuesToSet.AZURE_FUNCTIONS_AGENTS_PROVIDER !== "foundry") {
+    await rm8(
+      path12.join(requireTemplateDir(entry), ".azure-functions-hosted-skills", "foundry-token.json"),
+      { force: true }
+    );
+  }
+  return changed;
 }
 function tokenExpirySeconds(token) {
   const numeric = Number(token?.expires_on || token?.expiresOnTimestamp || 0);
@@ -10210,10 +12864,10 @@ async function fetchLocalFoundryToken(entry) {
   return { accessToken: token.accessToken, expiresOn };
 }
 async function writeLocalFoundryToken(entry, token) {
-  const tokenDir = path11.join(requireTemplateDir(entry), ".azure-functions-hosted-skills");
-  await mkdir5(tokenDir, { recursive: true, mode: 448 });
+  const tokenDir = path12.join(requireTemplateDir(entry), ".azure-functions-hosted-skills");
+  await mkdir6(tokenDir, { recursive: true, mode: 448 });
   await chmod(tokenDir, 448);
-  const tokenPath = path11.join(tokenDir, "foundry-token.json");
+  const tokenPath = path12.join(tokenDir, "foundry-token.json");
   await writeFile4(tokenPath, `${JSON.stringify(token)}
 `, { mode: 384 });
   await chmod(tokenPath, 384);
@@ -10261,11 +12915,11 @@ async function ensureDeclaredParameterRuntimeSettings(entry, options = {}) {
     "Writing declared parameter runtime settings",
     async () => {
       const { path: settingsPath, json } = await readLocalSettings(entry);
+      delete json.Values.GITHUB_MCP_AUTHORIZATION;
       if (githubRequirement(entry) && entry.githubContext.repository) {
         json.Values.GITHUB_REPOSITORY = entry.githubContext.repository;
       } else {
         delete json.Values.GITHUB_REPOSITORY;
-        delete json.Values.GITHUB_MCP_AUTHORIZATION;
       }
       await writeTextIfChanged(settingsPath, `${JSON.stringify(json, null, 2)}
 `, { mode: 384 });
@@ -10293,6 +12947,81 @@ function startFoundryTokenRefresh(entry) {
 function modelResources(entry, source = entry.modelBinding.source) {
   return source === "gateway" ? entry.modelBinding.gateways : entry.modelBinding.foundry;
 }
+async function writeCopilotModelBinding(entry, model) {
+  if (!entry.url) throw new Error("The local Copilot session bridge is not available.");
+  await ensureGatewayProviderFiles(entry, "public");
+  return writeModelBindingSettings(entry, {
+    AZURE_FUNCTIONS_AGENTS_PROVIDER: "copilot",
+    AZURE_FUNCTIONS_AGENTS_MODEL: model.id,
+    COPILOT_SESSION_OPENAI_BASE_URL: new URL("copilot/v1", entry.url).toString(),
+    COPILOT_SESSION_API_KEY: entry.copilotBridgeToken,
+    ...githubRequirement(entry) && entry.githubContext.repository ? { GITHUB_REPOSITORY: entry.githubContext.repository } : {}
+  });
+}
+async function applyCopilotModelSelection(entry, modelId, { persist = true, restart = true } = {}) {
+  const model = entry.modelBinding.copilotModels.find((candidate) => candidate.id === modelId);
+  if (!model) throw new Error("Choose an available GitHub Copilot model.");
+  const previousSource = entry.modelBinding.activeSource;
+  const previousModelId = entry.modelBinding.activeModelId;
+  const selectionChanged = markModelSelection(entry.modelBinding, {
+    source: "copilot",
+    resourceId: "",
+    modelId: model.id
+  });
+  await copilotBridgeForEntry(entry).prepareModel(model.id);
+  const settingsChanged = await writeCopilotModelBinding(entry, model);
+  entry.modelBinding.persistedCopilotModelId = model.id;
+  entry.modelBinding.configured = true;
+  entry.modelBinding.activeSource = "copilot";
+  entry.modelBinding.activeResourceId = "";
+  entry.modelBinding.activeModelId = model.id;
+  entry.modelBinding.activeLabel = `${model.name} via GitHub Copilot`;
+  entry.modelBinding.status = `${entry.modelBinding.activeLabel} selected`;
+  entry.modelBinding.error = "";
+  if (persist) await persistModelProviderState(entry);
+  if (restart && entry.local.status === "running" && (settingsChanged || selectionChanged || previousSource !== "copilot" || previousModelId !== model.id)) {
+    await restartLocalEnvironment(entry);
+  }
+  broadcast(entry, "state", snapshot(entry));
+}
+async function discoverCopilotModels(entry, { force = false } = {}) {
+  const request = beginCopilotModelDiscovery(entry.modelBinding);
+  let applied = false;
+  entry.modelBinding.loading = true;
+  entry.modelBinding.error = "";
+  entry.modelBinding.copilotCompatibilityFailures = [];
+  entry.modelBinding.status = "Loading GitHub Copilot models...";
+  broadcast(entry, "state", snapshot(entry));
+  try {
+    const response = await copilotBridgeForEntry(entry).listModels({ force });
+    if (!isCopilotModelDiscoveryCurrent(entry.modelBinding, request)) return false;
+    const models = copilotModelCatalogFromResponse(response);
+    entry.modelBinding.copilotModels = models;
+    const preferred = selectPreferredCopilotModel(
+      models,
+      entry.modelBinding.modelId || entry.modelBinding.persistedCopilotModelId
+    );
+    await applyCopilotModelSelection(entry, preferred.id);
+    applied = true;
+    return true;
+  } catch (error) {
+    if (!isCopilotModelDiscoveryCurrent(entry.modelBinding, request)) return false;
+    entry.modelBinding.copilotModels = [];
+    entry.modelBinding.configured = false;
+    entry.modelBinding.activeSource = "";
+    entry.modelBinding.activeResourceId = "";
+    entry.modelBinding.activeModelId = "";
+    entry.modelBinding.activeLabel = "";
+    entry.modelBinding.error = `GitHub Copilot model discovery failed: ${shortError(error)}`;
+    entry.modelBinding.status = "";
+    return false;
+  } finally {
+    if (applied || entry.modelBinding.copilotDiscoveryRequest?.generation === request.generation) {
+      entry.modelBinding.loading = false;
+      broadcast(entry, "state", snapshot(entry));
+    }
+  }
+}
 function selectDefaultModelBinding(entry) {
   const resources = modelResources(entry);
   const resource = resources.find((item) => item.models.length);
@@ -10304,11 +13033,14 @@ function selectDefaultModelBinding(entry) {
   entry.modelBinding.resourceId = resource.id;
   entry.modelBinding.modelId = resource.models[0].id;
 }
-async function discoverModelBindings(entry, subscription) {
+async function discoverModelBindings(entry, subscription, expectedSource = entry.modelBinding.source) {
   if (entry.modelBinding?.subscriptionUnavailable) {
     throw new Error("The saved model subscription is unavailable. Choose an available subscription.");
   }
+  const requestedSource = normalizeModelProvider(expectedSource);
+  if (entry.modelBinding.source !== requestedSource || requestedSource === "copilot") return false;
   const request = beginModelDiscovery(entry.modelBinding, subscription);
+  request.source = requestedSource;
   entry.modelBinding.loading = true;
   entry.modelBinding.error = "";
   entry.modelBinding.status = "Discovering existing model endpoints...";
@@ -10359,7 +13091,7 @@ GET https://management.azure.com/subscriptions/${subscription}/providers/Microso
     cmdEnd(entry, c, { ok: false, note: shortError(error) });
     return false;
   } finally {
-    if (entry.modelBinding.discoveryRequest?.generation === request.generation) {
+    if (entry.modelBinding.discoveryRequest?.generation === request.generation && entry.modelBinding.source === request.source) {
       entry.modelBinding.loading = false;
       broadcast(entry, "state", snapshot(entry));
     }
@@ -10387,6 +13119,7 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
   if (!resource) throw new Error("Choose an existing model resource.");
   const model = resource.models.find((item) => item.id === modelId);
   if (!model) throw new Error("Choose an existing model.");
+  await closeCopilotBridge(entry);
   markModelSelection(entry.modelBinding, {
     source,
     resourceId: resource.id,
@@ -10436,7 +13169,13 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
     entry.modelBinding.activeModelId = model.id;
     entry.modelBinding.activeLabel = `${model.label} via ${source === "foundry" ? "Microsoft Foundry" : "AI Gateway"}`;
     entry.modelBinding.status = `${entry.modelBinding.activeLabel} is ready`;
-    if (restart) await restartLocalEnvironment(entry);
+    await persistModelProviderState(entry);
+    if (restart) {
+      await restartLocalEnvironment(entry);
+      if (entry.local.status === "running") {
+        updateBootstrap(entry, "ready", "Model endpoint bound and local function host ready.");
+      }
+    }
   } catch (error) {
     entry.modelBinding.error = shortError(error);
     entry.modelBinding.status = "";
@@ -10445,28 +13184,6 @@ async function applyModelBinding(entry, { source, resourceId, modelId }, restart
     entry.modelBinding.loading = false;
     broadcast(entry, "state", snapshot(entry));
   }
-}
-function deploymentModelConfirmation(entry, confirmation) {
-  const source = String(entry.modelBinding.activeSource || "");
-  const modelId = String(entry.modelBinding.activeModelId || "");
-  const resourceId = String(entry.modelBinding.activeResourceId || "");
-  if (!source && !modelId && !resourceId) return null;
-  const expected = {
-    selectedSource: source,
-    selectedModelId: modelId,
-    selectedResourceId: resourceId,
-    effectiveDeploymentName: DEFAULT_FOUNDRY_MODEL_DEPLOYMENT.deploymentName
-  };
-  if (confirmation && Object.entries(expected).every(([name, value]) => String(confirmation[name] || "") === value)) {
-    return null;
-  }
-  const selected = entry.modelBinding.activeLabel || `${modelId || "an existing model"} via ${source || "the current binding"}`;
-  return {
-    ok: false,
-    confirmationRequired: true,
-    confirmation: expected,
-    message: `The local app is bound to ${selected}. Deploy to Azure does not reuse that existing resource. It creates a new Foundry account and provisions ${foundryDeploymentLabel()} in ${FOUNDRY_DEPLOYMENT_LOCATION}. Automatic model fallback is disabled. Continue with that deployment model?`
-  };
 }
 var FOUNDRY_CREATE_RESOURCES = [
   {
@@ -10498,9 +13215,9 @@ async function ensureCreateModelsBicep(entry, options = {}) {
   );
 }
 async function ensureCreateModelsBicepUnlocked(entry) {
-  const infraDir = path11.join(requireTemplateDir(entry), "infra");
-  const bicepPath = path11.join(infraDir, "app", "foundry.bicep");
-  const current = await readFile9(bicepPath, "utf8");
+  const infraDir = path12.join(requireTemplateDir(entry), "infra");
+  const bicepPath = path12.join(infraDir, "app", "foundry.bicep");
+  const current = await readFile10(bicepPath, "utf8");
   const isManaged = current.startsWith(CREATE_MODELS_BICEP_MARKER) || current.startsWith(LEGACY_CREATE_MODELS_BICEP_MARKER);
   const normalized = `${current.replace(/\r\n/g, "\n").trimEnd()}
 `;
@@ -10511,9 +13228,9 @@ async function ensureCreateModelsBicepUnlocked(entry) {
       "Create Models found a customized infra/app/foundry.bicep and will not overwrite it. Restore the stock template file or manage its model deployments directly."
     );
   }
-  const entrypointPath = path11.join(infraDir, "create-models.bicep");
+  const entrypointPath = path12.join(infraDir, "create-models.bicep");
   if (await exists(entrypointPath)) {
-    const entrypointCurrent = await readFile9(entrypointPath, "utf8");
+    const entrypointCurrent = await readFile10(entrypointPath, "utf8");
     if (!entrypointCurrent.startsWith(CREATE_MODELS_ENTRYPOINT_MARKER) && !entrypointCurrent.startsWith(LEGACY_CREATE_MODELS_ENTRYPOINT_MARKER)) {
       throw new Error("Create Models found a customized infra/create-models.bicep and will not overwrite it.");
     }
@@ -10530,7 +13247,7 @@ async function buildModelCreationPlan(entry, { lockHeld = false } = {}) {
   const subscription = entry.modelBinding.subscription || "";
   const environmentName = (safeSegment(entry.instanceId) || "ifas").slice(0, 40);
   const deploymentName = `ifas-models-${createHash8("sha256").update(entry.instanceId).digest("hex").slice(0, 8)}`;
-  const abbreviations = JSON.parse(await readFile9(path11.join(dir, "infra", "abbreviations.json"), "utf8"));
+  const abbreviations = JSON.parse(await readFile10(path12.join(dir, "infra", "abbreviations.json"), "utf8"));
   const resourceGroupName = `${abbreviations.resourcesResourceGroups || "rg-"}${environmentName}`;
   const args = [
     "deployment",
@@ -10541,7 +13258,7 @@ async function buildModelCreationPlan(entry, { lockHeld = false } = {}) {
     "--location",
     FOUNDRY_DEPLOYMENT_LOCATION,
     "--template-file",
-    path11.join(dir, "infra", "create-models.bicep"),
+    path12.join(dir, "infra", "create-models.bicep"),
     "--parameters",
     `environmentName=${environmentName}`,
     `location=${FOUNDRY_DEPLOYMENT_LOCATION}`,
@@ -10594,7 +13311,7 @@ async function runModelCreation(entry) {
       return { ok: false, message: shortError(error) };
     }
     await ensureCreateModelsBicep(entry, { lockHeld: true });
-    const snapshotDir = modelCreationWorkspaceDirectory(entry, `${Date.now()}-${randomUUID5()}`);
+    const snapshotDir = modelCreationWorkspaceDirectory(entry, `${Date.now()}-${randomUUID7()}`);
     await prepareDeploymentProjectCopy(plan.workingDir, snapshotDir);
     modelSnapshotDir = snapshotDir;
     const args = [...plan.args];
@@ -10602,7 +13319,7 @@ async function runModelCreation(entry) {
     if (templateIndex < 0 || !args[templateIndex + 1]) {
       throw new Error("Create Models could not locate its template-file argument.");
     }
-    args[templateIndex + 1] = path11.join(snapshotDir, "infra", "create-models.bicep");
+    args[templateIndex + 1] = path12.join(snapshotDir, "infra", "create-models.bicep");
     plan = {
       ...plan,
       workingDir: snapshotDir,
@@ -10643,7 +13360,7 @@ async function runModelCreation(entry) {
     cmdEnd(entry, c, { ok: false, note: shortError(error) });
     endAzdOperation(entry, "create-models");
     broadcast(entry, "state", snapshot(entry));
-    await rm6(modelSnapshotDir, { recursive: true, force: true });
+    await rm8(modelSnapshotDir, { recursive: true, force: true });
     return { ok: false, message };
   }
   let azCommand;
@@ -10655,7 +13372,7 @@ async function runModelCreation(entry) {
     cmdEnd(entry, c, { ok: false, note: message });
     endAzdOperation(entry, "create-models");
     broadcast(entry, "state", snapshot(entry));
-    await rm6(modelSnapshotDir, { recursive: true, force: true });
+    await rm8(modelSnapshotDir, { recursive: true, force: true });
     return { ok: false, message };
   }
   return new Promise((resolve) => {
@@ -10692,7 +13409,7 @@ async function runModelCreation(entry) {
       cmdEnd(entry, c, { ok: false, note: shortError(error) });
       endAzdOperation(entry, "create-models");
       broadcast(entry, "state", snapshot(entry));
-      rm6(modelSnapshotDir, { recursive: true, force: true }).finally(() => resolve({ ok: false, message }));
+      rm8(modelSnapshotDir, { recursive: true, force: true }).finally(() => resolve({ ok: false, message }));
     });
     child.once("spawn", () => {
       child.unref();
@@ -10721,7 +13438,7 @@ async function runModelCreation(entry) {
         cmdEnd(entry, c, { ok: exitOk, note: exitMessage });
         endAzdOperation(entry, "create-models");
         broadcast(entry, "state", snapshot(entry));
-        await rm6(modelSnapshotDir, { recursive: true, force: true });
+        await rm8(modelSnapshotDir, { recursive: true, force: true });
       });
     });
   });
@@ -10729,15 +13446,39 @@ async function runModelCreation(entry) {
 async function initializeModelBindings(entry) {
   if (entry.modelBinding.initializePromise) return entry.modelBinding.initializePromise;
   entry.modelBinding.initializePromise = (async () => {
+    const initialSelectionGeneration = entry.modelBinding.selectionGeneration;
     await ensureTemplate(entry);
     const configured = await inspectConfiguredModelBinding(entry);
+    const selectionChanged = entry.modelBinding.selectionGeneration !== initialSelectionGeneration;
+    const selectedSource = selectInitialModelProvider({
+      sourceMode: entry.sourceWorkspace.sourceMode,
+      persistedProvider: entry.modelBinding.providerPreferencePresent ? entry.modelBinding.source : "",
+      selectedProvider: entry.modelBinding.source,
+      selectionChanged,
+      configuredSource: configured?.source || ""
+    });
+    entry.modelBinding.source = selectedSource;
+    restoreConfiguredModelBinding(
+      entry,
+      configured?.source === selectedSource ? configured : null
+    );
+    if (entry.modelBinding.source === "copilot") {
+      entry.modelBinding.resourceId = "";
+      entry.modelBinding.modelId = entry.modelBinding.persistedCopilotModelId || entry.modelBinding.modelId;
+      await discoverCopilotModels(entry);
+      return;
+    }
     await ensureAzureSubscriptions(entry);
     if (!entry.modelBinding.subscription || entry.modelBinding.subscriptionUnavailable) {
       entry.modelBinding.error = entry.modelBinding.subscriptionUnavailable ? "The saved model subscription is unavailable. Choose an available subscription." : entry.azure.subscriptionsError || "No Azure subscription is available for model discovery.";
       broadcast(entry, "state", snapshot(entry));
       return;
     }
-    const discoveryApplied = await discoverModelBindings(entry, entry.modelBinding.subscription);
+    const discoveryApplied = await discoverModelBindings(
+      entry,
+      entry.modelBinding.subscription,
+      entry.modelBinding.source
+    );
     if (!discoveryApplied) return;
     const resources = modelResources(entry);
     const configuredResource = configured ? resources.find((resource) => {
@@ -10765,7 +13506,6 @@ async function initializeModelBindings(entry) {
       entry.modelBinding.error = "The existing app's configured model endpoint was not found in this subscription. Azure Functions Hosted Skills will not rewrite developer-owned settings.";
     }
     if (!entry.modelBinding.configured) {
-      entry.modelBinding.source = entry.modelBinding.foundry.some((item) => item.models.length) || entry.modelBinding.gatewayCapability.status !== "available" ? "foundry" : "gateway";
       selectDefaultModelBinding(entry);
       if (entry.sourceWorkspace.sourceMode === "managed" && entry.modelBinding.resourceId && entry.modelBinding.modelId) {
         await applyModelBinding(
@@ -10889,10 +13629,10 @@ async function setTimerSchedule(entry, input) {
   const schedule = normalizeTimerSchedule({ ...entry.timerSchedule, ...input });
   const expression = timerExpressionFromSchedule(schedule);
   await withSourceWorkspaceMutation(entry, "Changing timer schedule", async () => {
-    const timerPath = path11.join(requireTemplateDir(entry), HERO_TEMPLATE.timerAgentRelPath);
-    const source = await readFile9(timerPath, "utf8");
+    const timerPath = path12.join(requireTemplateDir(entry), HERO_TEMPLATE.timerAgentRelPath);
+    const source = await readFile10(timerPath, "utf8");
     const next = replaceTimerScheduleExpression(source, expression);
-    await writeFile4(timerPath, next);
+    await writeTextIfChanged(timerPath, next);
   });
   entry.timerSchedule = {
     ...schedule,
@@ -10901,13 +13641,13 @@ async function setTimerSchedule(entry, input) {
     status: describeTimerSchedule(schedule)
   };
   broadcast(entry, "state", snapshot(entry));
-  if (entry.target === "local" && entry.trigger === "timer") await restartLocalEnvironment(entry);
+  await refreshWorkspaceFromDisk(entry, { restartIfRunning: entry.target === "local", followSelectedFileTrigger: false });
 }
 function isolatedTemplateDirectory(entry) {
-  return entry.runtimeDirectories?.template || path11.join(runtimeStatePaths(entry).root, "template");
+  return entry.runtimeDirectories?.template || path12.join(runtimeStatePaths(entry).root, "template");
 }
 function modelCreationWorkspaceDirectory(entry, runId) {
-  return path11.join(
+  return path12.join(
     runtimeStatePaths(entry).root,
     `model-creation-${safeSegment(runId)}`
   );
@@ -10915,7 +13655,7 @@ function modelCreationWorkspaceDirectory(entry, runId) {
 function sourceOwnershipManifestPath(entry) {
   const { copilotHome } = runtimeStatePaths(entry);
   if (entry.sourceWorkspace.workingDirectory) {
-    return sourceManifestPath(copilotHome, "workspace", path11.resolve(entry.sourceWorkspace.workingDirectory));
+    return sourceManifestPath(copilotHome, "workspace", path12.resolve(entry.sourceWorkspace.workingDirectory));
   }
   return sourceManifestPath(copilotHome, entry.sessionId, entry.instanceId);
 }
@@ -10928,8 +13668,8 @@ function legacySourceOwnershipManifestPaths(entry) {
   ];
   if (entry.sourceWorkspace.workingDirectory) {
     files.unshift(
-      sourceManifestPath(copilotHome, "workspace", path11.resolve(entry.sourceWorkspace.workingDirectory), { legacy: true }),
-      ...LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) => sourceManifestPath(copilotHome, "workspace", path11.resolve(entry.sourceWorkspace.workingDirectory), { identity }))
+      sourceManifestPath(copilotHome, "workspace", path12.resolve(entry.sourceWorkspace.workingDirectory), { legacy: true }),
+      ...LEGACY_PREVIEW_STATE_COMPONENTS.map((identity) => sourceManifestPath(copilotHome, "workspace", path12.resolve(entry.sourceWorkspace.workingDirectory), { identity }))
     );
   }
   return [...new Set(files)].filter((file) => file !== entry.sourceWorkspace.manifestPath);
@@ -10940,18 +13680,18 @@ function sourceRemovalMarkerPath(entry) {
 async function reconcileSourceWorkspaceMove(entry, manifest, manifestPath) {
   if (manifest?.state !== "moving") return { manifest, isolatedDestination: "" };
   const move = manifest.move;
-  if (path11.resolve(move.sourceRoot) !== path11.resolve(manifest.root)) {
+  if (path12.resolve(move.sourceRoot) !== path12.resolve(manifest.root)) {
     throw new Error("The unfinished generated app move has an invalid source path.");
   }
-  if (path11.resolve(manifest.workspaceRoot) !== path11.resolve(entry.sourceWorkspace.workingDirectory)) {
+  if (path12.resolve(manifest.workspaceRoot) !== path12.resolve(entry.sourceWorkspace.workingDirectory)) {
     throw new Error("The unfinished generated app move belongs to a different worktree.");
   }
   if (move.mode === "current") {
     const selected = await assertCurrentWorkspaceDestinationSafe(manifest.workspaceRoot, move.relativePath);
-    if (selected.destination !== path11.resolve(move.destinationRoot)) {
+    if (selected.destination !== path12.resolve(move.destinationRoot)) {
       throw new Error("The unfinished generated app move has an invalid destination path.");
     }
-  } else if (path11.resolve(move.destinationRoot) !== path11.resolve(isolatedTemplateDirectory(entry))) {
+  } else if (path12.resolve(move.destinationRoot) !== path12.resolve(isolatedTemplateDirectory(entry))) {
     throw new Error("The unfinished generated app move has an invalid isolated destination.");
   }
   const sourceExists = await exists(move.sourceRoot);
@@ -10971,12 +13711,12 @@ async function reconcileSourceWorkspaceMove(entry, manifest, manifestPath) {
   await assertWorkspaceIdentity(move.destinationRoot, manifest);
   if (move.mode === "isolated") {
     await deleteOwnershipManifest(manifestPath);
-    return { manifest: null, isolatedDestination: path11.resolve(move.destinationRoot) };
+    return { manifest: null, isolatedDestination: path12.resolve(move.destinationRoot) };
   }
   const completed = {
     ...manifest,
-    root: path11.resolve(move.destinationRoot),
-    relativePath: path11.normalize(move.relativePath),
+    root: path12.resolve(move.destinationRoot),
+    relativePath: path12.normalize(move.relativePath),
     state: "ready"
   };
   delete completed.move;
@@ -10984,18 +13724,18 @@ async function reconcileSourceWorkspaceMove(entry, manifest, manifestPath) {
   return { manifest: completed, isolatedDestination: "" };
 }
 async function configureTemplateDirectory(entry, dir, options = {}) {
-  const timerPath = path11.join(dir, HERO_TEMPLATE.timerAgentRelPath);
-  const httpPath = path11.join(dir, HERO_TEMPLATE.httpAgentRelPath);
+  const timerPath = path12.join(dir, HERO_TEMPLATE.timerAgentRelPath);
+  const httpPath = path12.join(dir, HERO_TEMPLATE.httpAgentRelPath);
   entry.templateDir = dir;
-  entry.agentDir = path11.join(dir, "src");
+  entry.agentDir = path12.join(dir, "src");
   entry.queueName = queueNameForWorkspace(dir);
   await protectLocalSettings(dir);
   await ensureAgentResponseLogging(entry);
-  const raw = await readFile9(timerPath, "utf8");
+  const raw = await readFile10(timerPath, "utf8");
   entry.prompt = stripFrontmatter(raw);
   entry.parameterContract = parameterContractOf(raw);
   const skillName = skillNameOf(raw);
-  const currentHttpTwin = await exists(httpPath) ? await readFile9(httpPath, "utf8") : "";
+  const currentHttpTwin = await exists(httpPath) ? await readFile10(httpPath, "utf8") : "";
   const needsSecureHttpTwin = !currentHttpTwin || /\bhttp_auth\s*:\s*/i.test(currentHttpTwin) || /\bauth_level\s*:\s*anonymous\b/i.test(currentHttpTwin);
   if (needsSecureHttpTwin) {
     const c = cmdStart(entry, {
@@ -11017,7 +13757,7 @@ async function configureTemplateDirectory(entry, dir, options = {}) {
 }
 async function loadTemplateDirectory(entry, dir) {
   entry.templateDir = dir;
-  entry.agentDir = await exists(path11.join(dir, "src", "host.json")) ? path11.join(dir, "src") : dir;
+  entry.agentDir = await exists(path12.join(dir, "src", "host.json")) ? path12.join(dir, "src") : dir;
   entry.queueName = queueNameForWorkspace(dir);
   const skills = await discoverHostedSkills(dir);
   if (!skills.length) throw new Error(`No valid .agent.md files were found in ${entry.agentDir}.`);
@@ -11044,14 +13784,16 @@ ${initial.body}`);
   return entry.hero;
 }
 async function cloneTemplateDirectory(entry, dir) {
-  const timerPath = path11.join(dir, HERO_TEMPLATE.timerAgentRelPath);
+  const timerPath = path12.join(dir, HERO_TEMPLATE.timerAgentRelPath);
   if (await exists(timerPath)) return;
   if (await exists(dir)) throw new Error(`The selected generated app folder already exists: ${dir}`);
   try {
-    await mkdir5(path11.dirname(dir), { recursive: true });
+    await mkdir6(path12.dirname(dir), { recursive: true });
     await cp3(BUNDLED_TEMPLATE_DIRECTORY, dir, { recursive: true, errorOnExist: true, force: false });
+    const timerSource = await readFile10(timerPath, "utf8");
+    await writeFile4(timerPath, applyDefaultTimerSchedule(timerSource));
   } catch (error) {
-    await rm6(dir, { recursive: true, force: true });
+    await rm8(dir, { recursive: true, force: true });
     throw error;
   }
 }
@@ -11059,7 +13801,7 @@ async function hydrateSourceWorkspace(entry, { sessionId, workingDirectory } = {
   entry.sourceWorkspace.error = "";
   entry.sourceWorkspace.migrationBlocked = true;
   entry.sessionId = String(sessionId || entry.sessionId || "");
-  entry.sourceWorkspace.workingDirectory = workingDirectory && path11.isAbsolute(workingDirectory) ? path11.resolve(workingDirectory) : "";
+  entry.sourceWorkspace.workingDirectory = workingDirectory && path12.isAbsolute(workingDirectory) ? path12.resolve(workingDirectory) : "";
   entry.sourceWorkspace.manifestPath = sourceOwnershipManifestPath(entry);
   let releaseOwnershipLock = null;
   try {
@@ -11134,7 +13876,7 @@ async function hydrateSourceWorkspace(entry, { sessionId, workingDirectory } = {
       stopLocal(entry);
       resetGeneratedWorkspaceState(entry);
       const isolated = isolatedMoveDestination || isolatedTemplateDirectory(entry);
-      if (await exists(path11.join(isolated, HERO_TEMPLATE.timerAgentRelPath))) {
+      if (await exists(path12.join(isolated, HERO_TEMPLATE.timerAgentRelPath))) {
         entry.sourceWorkspace.mode = "isolated";
         entry.sourceWorkspace.destination = isolated;
         entry.sourceWorkspace.materialized = true;
@@ -11192,7 +13934,7 @@ async function attachExistingSource(entry, inputPath, { persist = true } = {}) {
     const attached = await resolveAttachedAppRoot(inputPath, {
       workingDirectory: entry.sourceWorkspace.workingDirectory
     });
-    if (entry.sourceWorkspace.managedMaterialized && entry.sourceWorkspace.destination && path11.resolve(attached.root) === path11.resolve(entry.sourceWorkspace.destination)) {
+    if (entry.sourceWorkspace.managedMaterialized && entry.sourceWorkspace.destination && path12.resolve(attached.root) === path12.resolve(entry.sourceWorkspace.destination)) {
       throw new Error("That folder is already the managed generated app.");
     }
     entry.sourceWorkspace.managedMaterialized = entry.sourceWorkspace.materialized;
@@ -11337,7 +14079,7 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
           );
         }
       }
-      if (existingManifest && path11.resolve(existingManifest.root) !== destination) {
+      if (existingManifest && path12.resolve(existingManifest.root) !== destination) {
         if (await exists(existingManifest.root)) {
           throw new Error(
             `Azure Functions Hosted Skills already owns a generated app at ${existingManifest.relativePath}. Reopen or move that app instead of creating another one in this worktree.`
@@ -11381,7 +14123,7 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
           throw new Error(`The recorded Azure Functions Hosted Skills workspace is missing: ${existingManifest.root}`);
         }
       }
-      cloneDestination = path11.join(
+      cloneDestination = path12.join(
         runtimeStatePaths(entry).root,
         `staging-${Date.now()}`
       );
@@ -11431,14 +14173,14 @@ async function materializeSourceWorkspace(entry, { mode, relativePath } = {}) {
     entry.sourceWorkspace.managedMaterialized = true;
     entry.sourceWorkspace.autoCreate = true;
     entry.sourceWorkspace.reentered = false;
-    await rm6(sourceRemovalMarkerPath(entry), { force: true });
+    await rm8(sourceRemovalMarkerPath(entry), { force: true });
     entry.fetchError = "";
     return entry.hero;
   } catch (error) {
     let failure = error;
     if (removeCloneOnFailure && cloneDestination) {
       try {
-        await rm6(cloneDestination, { recursive: true, force: true });
+        await rm8(cloneDestination, { recursive: true, force: true });
       } catch (cleanupError) {
         failure = new AggregateError(
           [error, cleanupError],
@@ -11520,7 +14262,7 @@ async function validateLockedCurrentWorkspace(entry) {
   if (manifest.state !== "ready") {
     throw new Error("The generated app ownership record is incomplete. Reopen the canvas before changing it.");
   }
-  if (path11.resolve(manifest.root) !== path11.resolve(requireTemplateDir(entry)) || path11.resolve(manifest.root) !== path11.resolve(expected.root) || path11.resolve(manifest.workspaceRoot) !== path11.resolve(expected.workspaceRoot)) {
+  if (path12.resolve(manifest.root) !== path12.resolve(requireTemplateDir(entry)) || path12.resolve(manifest.root) !== path12.resolve(expected.root) || path12.resolve(manifest.workspaceRoot) !== path12.resolve(expected.workspaceRoot)) {
     throw new Error("The generated app location changed in another canvas instance. Reopen the canvas before changing it.");
   }
   const reentry = await reenterOwnedWorkspace({
@@ -11533,7 +14275,7 @@ async function validateLockedCurrentWorkspace(entry) {
     recoverySignatures: SOURCE_WORKSPACE_RECOVERY_SIGNATURES
   });
   if (!reentry) throw new Error(`The recorded Azure Functions Hosted Skills workspace is missing: ${manifest.root}`);
-  if (path11.resolve(requireTemplateDir(entry)) !== reentry.destination) {
+  if (path12.resolve(requireTemplateDir(entry)) !== reentry.destination) {
     throw new Error("The generated app location changed in another canvas instance. Reopen the canvas before changing it.");
   }
   if (reentry.manifestChanged) {
@@ -11787,13 +14529,14 @@ function requireTemplateDir(entry) {
   return entry.templateDir;
 }
 async function saveInstructions(entry, bodyText, expectedRevision) {
+  await materializePendingTrigger(entry, { restartIfRunning: false });
   let clean = "";
   await withSourceWorkspaceMutation(entry, "Saving skill instructions", async () => {
     clean = String(bodyText).trim();
     const dir = requireTemplateDir(entry);
     const selected = entry.selectedHostedSkill;
     if (!selected) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
-    const selectedPath = path11.join(dir, selected.relativePath);
+    const selectedPath = path12.join(dir, selected.relativePath);
     const imported = completeAgentDocument(bodyText, selected.relativePath);
     if (imported) {
       await writeAgentDocumentIfRevision(selectedPath, String(bodyText), expectedRevision);
@@ -11801,7 +14544,7 @@ async function saveInstructions(entry, bodyText, expectedRevision) {
       await writeAgentBodyIfRevision(selectedPath, clean, expectedRevision);
     }
     if (selected.relativePath === HERO_TEMPLATE.timerAgentRelPath && (!imported || imported.trigger === "timer")) {
-      const twinPath = path11.join(dir, HERO_TEMPLATE.httpAgentRelPath);
+      const twinPath = path12.join(dir, HERO_TEMPLATE.httpAgentRelPath);
       const twin = entry.hostedSkills.find((skill) => skill.relativePath === HERO_TEMPLATE.httpAgentRelPath);
       if (await exists(twinPath)) {
         if (imported) {
@@ -11819,6 +14562,7 @@ ${imported.body}`);
     }
     await refreshHostedSkillsFromDiskUnlocked(entry, { followSelectedFileTrigger: Boolean(imported) });
   });
+  await refreshWorkspaceFromDisk(entry, { restartIfRunning: true, followSelectedFileTrigger: false });
   broadcast(entry, "state", snapshot(entry));
 }
 async function resolvePythonProvisioning(entry) {
@@ -11840,11 +14584,11 @@ async function resolvePythonProvisioning(entry) {
   return { provider: "system", bin: system.bin, detail: `${system.text} (${system.source})` };
 }
 async function checkExtensionRegistration2() {
-  const pluginRoot = path11.dirname(fileURLToPath3(import.meta.url));
-  if (path11.basename(pluginRoot) === PLUGIN_ID && path11.basename(path11.dirname(pluginRoot)) === "extensions") {
-    const manifestPath = path11.resolve(pluginRoot, "../../.github/plugin/plugin.json");
+  const pluginRoot = path12.dirname(fileURLToPath3(import.meta.url));
+  if (path12.basename(pluginRoot) === PLUGIN_ID && path12.basename(path12.dirname(pluginRoot)) === "extensions") {
+    const manifestPath = path12.resolve(pluginRoot, "../../.github/plugin/plugin.json");
     if (await exists(manifestPath)) {
-      const manifest = JSON.parse(await readFile9(manifestPath, "utf8"));
+      const manifest = JSON.parse(await readFile10(manifestPath, "utf8"));
       if (manifest.name === PLUGIN_ID && ["./extensions", "extensions"].includes(manifest.extensions)) {
         return { registered: true, detail: `native plugin at ${pluginRoot}` };
       }
@@ -11852,8 +14596,16 @@ async function checkExtensionRegistration2() {
   }
   return checkExtensionRegistration({ pluginRoot });
 }
-async function runDoctor(entry) {
+async function runDoctor(entry, {
+  workflow = "current",
+  runAzureCliTextImpl = runAzureCliText,
+  checkAzureLoginImpl = checkAzureLogin
+} = {}) {
   const checks = [];
+  const azureRequired = doctorRequiresAzure({
+    target: entry.target,
+    modelSource: normalizeModelProvider(entry.modelBinding.source)
+  }, workflow);
   const uvProbe = await runExternalCommandText("uv", ["--version"]).catch((error) => ({ error }));
   const uvReady = !uvProbe.error;
   checks.push(
@@ -11966,74 +14718,101 @@ async function runDoctor(entry) {
       }
     );
   }
-  const az = await runAzureCliText(["version", "-o", "json"], { timeout: 15e3 }).catch((error) => ({ error }));
-  checks.push(
-    az.error ? isAzureCliNotFoundError(az.error) ? {
-      id: "az-cli",
-      label: "Azure CLI (az)",
-      status: "missing",
-      detail: "executable not found",
-      fix: "Install Azure CLI or set AZURE_CLI_PATH to the absolute az.cmd, az.exe, or az path.",
-      required: true
-    } : {
-      id: "az-cli",
-      label: "Azure CLI (az)",
-      status: "error",
-      detail: shortError(az.error),
-      fix: "Repair the Azure CLI installation or its child-process environment, then recheck.",
-      required: true
-    } : {
-      id: "az-cli",
-      label: "Azure CLI (az)",
-      status: "ready",
-      detail: (() => {
-        try {
-          return JSON.parse(az.stdout)["azure-cli"] ? `azure-cli ${JSON.parse(az.stdout)["azure-cli"]}` : "installed";
-        } catch {
-          return "installed";
-        }
-      })(),
-      fix: "",
-      required: true
-    }
-  );
-  const login = az.error ? {
+  let login = {
     loggedIn: false,
-    cliFound: !isAzureCliNotFoundError(az.error),
+    cliFound: false,
     signInRequired: false,
-    error: shortError(az.error)
-  } : await checkAzureLogin(true);
-  checks.push(
-    login.loggedIn ? {
-      id: "az-login",
-      label: "Azure CLI sign-in",
-      status: "ready",
-      detail: login.user ? `Signed in as ${login.user}` : `Signed in (${login.account})`,
-      fix: "",
-      required: true
-    } : !login.cliFound ? {
-      id: "az-login",
-      label: "Azure CLI sign-in",
-      status: "missing",
-      detail: "Cannot check sign-in because the Azure CLI executable was not found.",
-      fix: "Install Azure CLI or set AZURE_CLI_PATH, then use Recheck.",
-      required: true
-    } : login.signInRequired ? {
-      id: "az-login",
-      label: "Azure CLI sign-in",
-      status: "missing",
-      detail: login.error || "Not signed in",
-      fix: "Run `az login` in a terminal, then use Recheck. This canvas never opens a login flow for you.",
-      required: true
-    } : {
-      id: "az-login",
-      label: "Azure CLI sign-in",
-      status: "error",
-      detail: login.error || "Azure CLI sign-in check failed.",
-      fix: "Run `az account show` in a terminal and resolve the reported Azure CLI error, then use Recheck.",
-      required: true
-    }
-  );
+    error: ""
+  };
+  if (!azureRequired) {
+    checks.push(
+      {
+        id: "az-cli",
+        label: "Azure CLI (az)",
+        status: "ready",
+        detail: "Not required or checked for a local GitHub Copilot run.",
+        fix: "Azure CLI is required when you select Foundry, AI Gateway, an Azure Function App, Create Models, or Deploy to Azure.",
+        required: false
+      },
+      {
+        id: "az-login",
+        label: "Azure CLI sign-in",
+        status: "ready",
+        detail: "Not required or checked for a local GitHub Copilot run.",
+        fix: "Azure sign-in is required only for Azure-backed workflows.",
+        required: false
+      }
+    );
+  } else {
+    const az = await runAzureCliTextImpl(["version", "-o", "json"], { timeout: 15e3 }).catch((error) => ({ error }));
+    checks.push(
+      az.error ? isAzureCliNotFoundError(az.error) ? {
+        id: "az-cli",
+        label: "Azure CLI (az)",
+        status: "missing",
+        detail: "executable not found",
+        fix: "Install Azure CLI or set AZURE_CLI_PATH to the absolute az.cmd, az.exe, or az path.",
+        required: true
+      } : {
+        id: "az-cli",
+        label: "Azure CLI (az)",
+        status: "error",
+        detail: shortError(az.error),
+        fix: "Repair the Azure CLI installation or its child-process environment, then recheck.",
+        required: true
+      } : {
+        id: "az-cli",
+        label: "Azure CLI (az)",
+        status: "ready",
+        detail: (() => {
+          try {
+            return JSON.parse(az.stdout)["azure-cli"] ? `azure-cli ${JSON.parse(az.stdout)["azure-cli"]}` : "installed";
+          } catch {
+            return "installed";
+          }
+        })(),
+        fix: "",
+        required: true
+      }
+    );
+    login = az.error ? {
+      loggedIn: false,
+      cliFound: !isAzureCliNotFoundError(az.error),
+      signInRequired: false,
+      error: shortError(az.error)
+    } : await checkAzureLoginImpl(true);
+    checks.push(
+      login.loggedIn ? {
+        id: "az-login",
+        label: "Azure CLI sign-in",
+        status: "ready",
+        detail: login.user ? `Signed in as ${login.user}` : `Signed in (${login.account})`,
+        fix: "",
+        required: true
+      } : !login.cliFound ? {
+        id: "az-login",
+        label: "Azure CLI sign-in",
+        status: "missing",
+        detail: "Cannot check sign-in because the Azure CLI executable was not found.",
+        fix: "Install Azure CLI or set AZURE_CLI_PATH, then use Recheck.",
+        required: true
+      } : login.signInRequired ? {
+        id: "az-login",
+        label: "Azure CLI sign-in",
+        status: "missing",
+        detail: login.error || "Not signed in",
+        fix: "Run `az login` in a terminal, then use Recheck. This canvas never opens a login flow for you.",
+        required: true
+      } : {
+        id: "az-login",
+        label: "Azure CLI sign-in",
+        status: "error",
+        detail: login.error || "Azure CLI sign-in check failed.",
+        fix: "Run `az account show` in a terminal and resolve the reported Azure CLI error, then use Recheck.",
+        required: true
+      }
+    );
+  }
   const packageIndex = await resolvePythonPackageIndex(entry, login);
   checks.push({
     id: "python-package-index",
@@ -12043,8 +14822,17 @@ async function runDoctor(entry) {
     fix: "",
     required: false
   });
-  const doctorSubscription = entry.modelBinding.subscription || entry.azure.subscription || (login.loggedIn ? (await listSubscriptions().catch(() => []))[0]?.id : "");
-  if (doctorSubscription) {
+  const doctorSubscription = azureRequired ? entry.modelBinding.subscription || entry.azure.subscription || (login.loggedIn ? (await listSubscriptions().catch(() => []))[0]?.id : "") : "";
+  if (!azureRequired) {
+    checks.push({
+      id: "ai-gateway-arm",
+      label: "AI Gateway management API",
+      status: "ready",
+      detail: "Not required or checked for a local GitHub Copilot run.",
+      fix: "",
+      required: false
+    });
+  } else if (doctorSubscription) {
     try {
       const gateways = await listGateways(armClient, doctorSubscription);
       checks.push({
@@ -12200,14 +14988,14 @@ async function probeAzuriteServices(ports = [1e4, 10001, 10002]) {
   return (await probeAzuriteServiceDetails(ports)).map((probe) => probe.ready);
 }
 async function ensureAzuriteCommand(args, entry) {
-  const artifactBin = path11.join(EXTENSION_ROOT, "node_modules", ".bin");
+  const artifactBin = path12.join(EXTENSION_ROOT, "node_modules", ".bin");
   try {
     return await externalCommandSpawnSpec("azurite", args, { extraDirectories: [artifactBin] });
   } catch (error) {
     if (error?.code !== "EXTERNAL_COMMAND_NOT_FOUND") throw error;
   }
-  const installRoot = path11.join(studioStateEnvironment().home, ".azure-functions-hosted-skills", "tools", `azurite-${AZURITE_VERSION}`);
-  const installBin = path11.join(installRoot, "node_modules", ".bin");
+  const installRoot = path12.join(studioStateEnvironment().home, ".azure-functions-hosted-skills", "tools", `azurite-${AZURITE_VERSION}`);
+  const installBin = path12.join(installRoot, "node_modules", ".bin");
   try {
     return await externalCommandSpawnSpec("azurite", args, { extraDirectories: [installBin] });
   } catch (error) {
@@ -12216,7 +15004,7 @@ async function ensureAzuriteCommand(args, entry) {
   let installPromise = azuriteInstallPromises.get(installRoot);
   if (!installPromise) {
     installPromise = (async () => {
-      await mkdir5(installRoot, { recursive: true });
+      await mkdir6(installRoot, { recursive: true });
       const command = cmdStart(entry, {
         kind: "shell",
         title: `Install Azurite ${AZURITE_VERSION}`,
@@ -12276,7 +15064,7 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
     purpose: "Detect the Azurite storage emulator used by Timer state and Queue messages"
   });
   let azuriteCommand;
-  const dataDir = entry.sourceWorkspace.sourceMode === "attached" ? path11.join(entry.runtimeState.paths.root, "azurite", createHash8("sha256").update(path11.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24)) : path11.join(entry.templateDir, ".azurite");
+  const dataDir = entry.sourceWorkspace.sourceMode === "attached" ? path12.join(entry.runtimeState.paths.root, "azurite", createHash8("sha256").update(path12.resolve(requireTemplateDir(entry))).digest("hex").slice(0, 24)) : path12.join(entry.templateDir, ".azurite");
   try {
     azuriteCommand = await ensureAzuriteCommand(
       ["--silent", "--location", dataDir, "--skipApiVersionCheck"],
@@ -12287,7 +15075,7 @@ async function ensureAzuriteUnlocked(entry, ensureCurrent) {
     cmdEnd(entry, c1, { ok: false, note: shortError(error) });
     throw error;
   }
-  await mkdir5(dataDir, { recursive: true });
+  await mkdir6(dataDir, { recursive: true });
   const cmdText = `azurite --silent --location ${dataDir} --skipApiVersionCheck`;
   const c2 = cmdStart(entry, {
     kind: "shell",
@@ -12388,8 +15176,8 @@ async function ensureRuntimeRequirement(entry, options = {}) {
   );
 }
 async function ensureRuntimeRequirementAtDirectory(agentDir) {
-  const reqPath = path11.join(agentDir, "requirements.txt");
-  const current = await readFile9(reqPath, "utf8");
+  const reqPath = path12.join(agentDir, "requirements.txt");
+  const current = await readFile10(reqPath, "utf8");
   const next = current.replace(
     /^azurefunctions-agents-runtime(?:\s*[<>=!~].*)?\s*$/m,
     `azurefunctions-agents-runtime==${RUNTIME_VERSION}`
@@ -12406,9 +15194,9 @@ async function ensureVenv(entry, options = {}) {
 }
 async function ensureVenvUnlocked(entry, { agentDir = entry.agentDir, updateRuntimeState = true, packageIndex: selectedPackageIndex } = {}) {
   const venv = pythonVirtualEnvironment(agentDir);
-  const reqPath = path11.join(agentDir, "requirements.txt");
+  const reqPath = path12.join(agentDir, "requirements.txt");
   await ensureRuntimeRequirementAtDirectory(agentDir);
-  const reqText = await readFile9(reqPath, "utf8").catch(() => "");
+  const reqText = await readFile10(reqPath, "utf8").catch(() => "");
   const reqHash = createHash8("sha256").update(reqText).digest("hex").slice(0, 16);
   const directoryExists = await exists(venv.directory);
   const interpreterExists = await exists(venv.python);
@@ -12420,7 +15208,7 @@ async function ensureVenvUnlocked(entry, { agentDir = entry.agentDir, updateRunt
   });
   let installedHash = "";
   try {
-    installedHash = (await readFile9(venv.marker, "utf8")).trim();
+    installedHash = (await readFile10(venv.marker, "utf8")).trim();
   } catch {
   }
   if (venvState === "ready" && installedHash === reqHash && reqHash) {
@@ -12437,7 +15225,7 @@ async function ensureVenvUnlocked(entry, { agentDir = entry.agentDir, updateRunt
       cmd: `remove ${venv.directory}`,
       purpose: venvState === "partial" ? `The existing .venv does not contain ${venv.python}, so it must be recreated before dependency installation` : `The existing .venv uses ${probe?.text || "an unknown/broken Python"}, below the Python ${MIN_PYTHON_LABEL} the serverless agents runtime requires, so it must be recreated with a verified interpreter`
     });
-    await rm6(venv.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await rm8(venv.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     cmdEnd(entry, c0, { ok: true });
   }
   if (!await exists(venv.python)) {
@@ -12564,7 +15352,7 @@ async function ensureVenvUnlocked(entry, { agentDir = entry.agentDir, updateRunt
   }
 }
 async function prepareVsCodeCopy(entry, openDir, packageIndex) {
-  const copyAgentDir = path11.join(openDir, "src");
+  const copyAgentDir = path12.join(openDir, "src");
   const copyEntry = {
     ...entry,
     agentDir: copyAgentDir,
@@ -12699,7 +15487,7 @@ async function startFuncHost(entry, ensureCurrent = () => {
   const env = {
     ...pythonVirtualEnvironmentEnv(entry.agentDir),
     AzureWebJobsStorage: "UseDevelopmentStorage=true",
-    ...githubFunctionEnvironment(runtimeSettings.Values)
+    ...await resolveGithubFunctionEnvironment(entry, runtimeSettings.Values)
   };
   const funcCommand = await externalCommandSpawnSpec("func", ["start", "--port", String(port)], { env });
   const child = spawn2(funcCommand.file, funcCommand.args, {
@@ -12849,7 +15637,7 @@ function startLocalEnvironment(entry) {
   if (!entry.modelBinding.configured) {
     return initializeModelBindings(entry).then(() => {
       if (!entry.modelBinding.configured) {
-        throw new Error("Select an existing Microsoft Foundry or AI Gateway model before starting locally.");
+        throw new Error("Select an available GitHub Copilot, Microsoft Foundry, or AI Gateway model before starting locally.");
       }
       return startLocalEnvironment(entry);
     });
@@ -12986,6 +15774,7 @@ async function stopLocalAndRelease(entry) {
   if (release) await release();
   await entry.local.runtimeReleasePromise;
   entry.local.runtimeReleasePromise = null;
+  await closeCopilotBridge(entry);
 }
 async function acquireLocalAppRuntimeOwnership(entry) {
   if (entry.local.releaseAppRuntimeOwner) return;
@@ -12993,9 +15782,9 @@ async function acquireLocalAppRuntimeOwnership(entry) {
     await entry.local.runtimeReleasePromise;
     entry.local.runtimeReleasePromise = null;
   }
-  const root = path11.resolve(requireTemplateDir(entry));
+  const root = path12.resolve(requireTemplateDir(entry));
   const digest = createHash8("sha256").update(root).digest("hex").slice(0, 32);
-  const lockPath = path11.join(studioStateEnvironment().home, `.${STATE_PRODUCT}`, "runtime-apps", digest);
+  const lockPath = path12.join(studioStateEnvironment().home, `.${STATE_PRODUCT}`, "runtime-apps", digest);
   try {
     entry.local.releaseAppRuntimeOwner = await acquireStateLock(lockPath, { timeoutMs: 250, pollMs: 25 });
   } catch (error) {
@@ -13202,11 +15991,11 @@ async function invokeLocalHttp(entry, base, trigger, promptOverride, timerTwin, 
     if (request.display.overriddenHeaders.length) {
       invocation.note += ` Azure Functions Hosted Skills overrode ${request.display.overriddenHeaders.join(", ")} with application/json.`;
     }
-    if (!accepted && resp.ok && requiresGithubEvidence) {
-      invocation.note = "The function returned HTTP 200 without a successful required GitHub MCP call; the plausible digest was rejected.";
-    } else if (invocation.response) {
-      invocation.note = `${invocation.note} Agent digest is available below.`;
-    }
+    finalizeLocalHttpInvocationNote(invocation, {
+      accepted,
+      status: resp.status,
+      requiresGithubEvidence
+    });
     scheduleInvocationHistoryWrite(entry);
     broadcast(entry, "state", snapshot(entry));
     return invocation;
@@ -13224,6 +16013,7 @@ async function invokeLocalHttp(entry, base, trigger, promptOverride, timerTwin, 
 }
 async function prepareInvocation(entry, httpRequestDraft) {
   if (entry.target !== "local") return;
+  await materializePendingTrigger(entry);
   await refreshWorkspaceFromDisk(entry, { restartIfRunning: true });
   if (!entry.selectedHostedSkill) throw new Error(`No ${entry.trigger} hosted skill is selected.`);
   await startLocalBootstrap(entry);
@@ -13276,8 +16066,10 @@ async function listSubscriptions(force = false) {
 function resetModelDiscovery(entry) {
   entry.modelBinding.foundry = [];
   entry.modelBinding.gateways = [];
-  entry.modelBinding.resourceId = "";
-  entry.modelBinding.modelId = "";
+  if (entry.modelBinding.source !== "copilot") {
+    entry.modelBinding.resourceId = "";
+    entry.modelBinding.modelId = "";
+  }
   entry.modelBinding.error = "";
   entry.modelBinding.status = "";
   entry.modelBinding.discoveryGeneration++;
@@ -13407,6 +16199,7 @@ async function selectSubscription(entry, subscriptionId) {
 }
 async function applyToolkitSubscriptionScope(entry, target, request) {
   const state = target === "model" ? entry.modelBinding : entry.azure;
+  const expectedModelSource = entry.modelBinding.source;
   return runLatestSubscriptionApply(state, {
     resolve: () => azureAuth.resolvePickerScope(request),
     commit: async (resolved) => {
@@ -13421,7 +16214,7 @@ async function applyToolkitSubscriptionScope(entry, target, request) {
       if (target === "azure") resetAzureFunctionSelection(entry);
       await persistSubscriptionScopes(entry);
     },
-    complete: async () => target === "model" ? discoverModelBindings(entry, state.subscription) : loadFunctionApps(entry)
+    complete: async () => target === "model" ? discoverModelBindings(entry, state.subscription, expectedModelSource) : loadFunctionApps(entry)
   }).then((result) => {
     if (!result || target === "model" && !result.result) return null;
     return { generation: result.generation, ...target === "model" ? { discoveryApplied: true } : {} };
@@ -14004,8 +16797,8 @@ function stopLoadTest(entry) {
 }
 async function commitAppHandoff(dir, instanceId) {
   const branch = `azure-functions-hosted-skills/${safeSegment(instanceId).slice(0, 48)}`;
-  const instructionsPath = path11.join(dir, ".github", "copilot-instructions.md");
-  await mkdir5(path11.dirname(instructionsPath), { recursive: true });
+  const instructionsPath = path12.join(dir, ".github", "copilot-instructions.md");
+  await mkdir6(path12.dirname(instructionsPath), { recursive: true });
   await writeFile4(
     instructionsPath,
     [
@@ -14019,7 +16812,7 @@ async function commitAppHandoff(dir, instanceId) {
     ].join("\n")
   );
   await protectLocalSettings(dir);
-  if (!await exists(path11.join(dir, ".git"))) {
+  if (!await exists(path12.join(dir, ".git"))) {
     await execFileText("git", ["init", "-b", "main"], { cwd: dir });
   }
   let branchExists = true;
@@ -14098,16 +16891,83 @@ function readJsonBody(req, maxLen = 16e3) {
     });
   });
 }
+async function readRequestBody(req, maxBytes = COPILOT_PROXY_REQUEST_MAX_BYTES) {
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw new Error("Copilot inference request exceeded the local bridge limit.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function constantTimeCredentialMatches(actual, expected) {
+  const actualDigest = createHash8("sha256").update(String(actual || ""), "utf8").digest();
+  const expectedDigest = createHash8("sha256").update(String(expected || ""), "utf8").digest();
+  return timingSafeEqual(actualDigest, expectedDigest);
+}
+async function forwardCopilotInference(entry, req, res) {
+  if (req.method !== "POST" || req.url !== COPILOT_PROXY_ROUTE) {
+    res.writeHead(req.method === "POST" ? 404 : 405, req.method === "POST" ? {} : { Allow: "POST" });
+    res.end(req.method === "POST" ? "Not found" : "Method not allowed");
+    return;
+  }
+  req.setTimeout(COPILOT_PROXY_TIMEOUT_MS, () => {
+    req.destroy(new Error("Copilot inference request timed out."));
+  });
+  if (entry.modelBinding.activeSource !== "copilot" || !entry.modelBinding.activeModelId) {
+    throw new Error("No GitHub Copilot model is active for this local runtime.");
+  }
+  if (entry.local.status !== "running") {
+    throw new CopilotSdkBridgeError("The local Functions runtime is not running.", 409);
+  }
+  const authorization = String(req.headers.authorization || "");
+  const credential = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  if (!constantTimeCredentialMatches(credential, entry.copilotBridgeToken)) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "Invalid local Copilot session bridge credential." } }));
+    return;
+  }
+  const raw = await readRequestBody(req);
+  let payload;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw new Error("GitHub Copilot inference requests must contain a JSON body.");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("GitHub Copilot inference requests must contain a JSON object.");
+  }
+  if (["base_url", "baseUrl", "url", "headers"].some((key) => Object.hasOwn(payload, key))) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "Client-supplied provider URLs or headers are not supported." } }));
+    return;
+  }
+  const controller = new AbortController();
+  req.once("aborted", () => controller.abort());
+  const response = await copilotBridgeForEntry(entry).completeChat(payload, {
+    modelId: entry.modelBinding.activeModelId,
+    signal: controller.signal
+  });
+  const responseBody = JSON.stringify(response);
+  if (Buffer.byteLength(responseBody) > COPILOT_PROXY_RESPONSE_MAX_BYTES) {
+    throw new Error("Copilot response exceeded the local bridge limit.");
+  }
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store"
+  });
+  res.end(responseBody);
+}
 async function startServer(entry, {
   prepareInvocationImpl = prepareInvocation,
   invokeLocalImpl = invokeLocal,
   invokeAzureImpl = invokeAzure,
-  restartLocalEnvironmentImpl = restartLocalEnvironment,
-  syncGeneratedTriggerFilesImpl = syncGeneratedTriggerFiles,
   htmlHeaders = {},
   corsOrigin = ""
 } = {}) {
   await initializeEntryRuntimeState(entry);
+  const usageMetrics = entry.usageMetrics;
   const server = createServer((req, res) => {
     if (corsOrigin) {
       res.setHeader("Access-Control-Allow-Origin", corsOrigin);
@@ -14119,9 +16979,24 @@ async function startServer(entry, {
         return;
       }
     }
+    if (req.url?.startsWith("/copilot/v1/")) {
+      forwardCopilotInference(entry, req, res).catch((error) => {
+        if (res.headersSent) {
+          res.destroy(error);
+          return;
+        }
+        const statusCode = Number(error?.statusCode);
+        res.writeHead(statusCode >= 400 && statusCode <= 599 ? statusCode : 502, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store"
+        });
+        res.end(JSON.stringify({ error: { message: shortError(error) } }));
+      });
+      return;
+    }
     const asset = req.method === "GET" && hostedSkillsAssets.get(req.url?.slice(1));
     if (asset) {
-      readFile9(asset[0]).then((content) => {
+      readFile10(asset[0]).then((content) => {
         res.writeHead(200, { "Content-Type": asset[1] });
         res.end(content);
       }).catch((error) => {
@@ -14132,7 +17007,7 @@ async function startServer(entry, {
     }
     if (req.method === "GET" && req.url === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...htmlHeaders });
-      res.end(renderHtml());
+      res.end(renderHtml({ usageMetricsEnabled: usageMetrics.enabled }));
       return;
     }
     if (req.method === "GET" && req.url === "/events") {
@@ -14143,6 +17018,10 @@ data: ${JSON.stringify(snapshot(entry))}
 `);
       entry.clients.add(res);
       req.on("close", () => entry.clients.delete(res));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/metrics/interaction") {
+      readJsonBody(req, 1024).then((body) => responseJson(res, { ok: true, accepted: usageMetrics.trackUiInteraction(body) })).catch(() => responseJson(res, { ok: false, accepted: false, message: "Invalid usage interaction." }));
       return;
     }
     if (req.method === "POST" && req.url === "/source/select") {
@@ -14245,26 +17124,7 @@ data: ${JSON.stringify(snapshot(entry))}
         const id = String(body.trigger || "");
         const t = TRIGGER_TYPES.find((x) => x.id === id);
         if (!t || t.nyi) throw new Error(`Trigger ${id || "(missing)"} is not implemented.`);
-        const changed = Boolean(t && !t.nyi && entry.trigger !== id);
-        const previousTrigger = entry.trigger;
-        const previousPrompt = entry.prompt;
-        const previousSkillName = entry.selectedHostedSkill?.name || entry.hero?.title || "Hosted skill";
-        entry.trigger = id;
-        if (changed && entry.sourceWorkspace.materialized) {
-          await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-          if (entry.sourceWorkspace.sourceMode === "managed" && !entry.selectedHostedSkill && (id === "queue" || id === "connector")) {
-            assertWorkspaceMutationAllowed(entry, "Changing triggers");
-            await syncGeneratedTriggerFilesImpl(entry, previousPrompt, previousSkillName);
-            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-          }
-          if (entry.sourceWorkspace.sourceMode === "attached" && !entry.selectedHostedSkill) {
-            entry.trigger = previousTrigger;
-            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-            throw new Error(`The selected existing app has no ${id} Hosted Skill in its .agent.md files.`);
-          }
-        }
-        broadcast(entry, "state", snapshot(entry));
-        if (changed && entry.target === "local") await restartLocalEnvironmentImpl(entry);
+        if (entry.trigger !== id) selectLocalTrigger(entry, id);
         responseJson(res, { ok: true, trigger: entry.trigger });
       }).catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
       return;
@@ -14299,7 +17159,7 @@ data: ${JSON.stringify(snapshot(entry))}
           await ensureAzureSubscriptions(entry);
         } else if (entry.sourceWorkspace.materialized) {
           const localTriggerAvailable = entry.hostedSkills.some((skill) => skill.trigger === entry.trigger);
-          if (!localTriggerAvailable) {
+          if (!localTriggerAvailable && entry.pendingTrigger !== entry.trigger) {
             entry.trigger = entry.hostedSkills.find((skill) => !["connector", "blob", "cosmos"].includes(skill.trigger))?.trigger || "timer";
             await refreshWorkspaceFromDisk(entry, {
               restartIfRunning: false,
@@ -14375,7 +17235,7 @@ data: ${JSON.stringify(snapshot(entry))}
         });
         return;
       }
-      startLocalBootstrap(entry, { userInitiated: true }).then(() => responseJson(res, { ok: true, port: entry.local.port })).catch((error) => responseJson(res, { ok: false, message: shortError(error) || String(error?.message || error) }));
+      materializePendingTrigger(entry).then(() => startLocalBootstrap(entry, { userInitiated: true })).then(() => responseJson(res, { ok: true, port: entry.local.port })).catch((error) => responseJson(res, { ok: false, message: shortError(error) || String(error?.message || error) }));
       return;
     }
     if (req.method === "POST" && req.url === "/local/stop") {
@@ -14389,7 +17249,7 @@ data: ${JSON.stringify(snapshot(entry))}
       }
       entry.doctorRunning = true;
       broadcast(entry, "state", snapshot(entry));
-      runDoctor(entry).then((doctor) => responseJson(res, { ok: true, ready: doctor.ready, doctor })).catch((error) => responseJson(res, { ok: false, message: shortError(error) || String(error?.message || error) })).finally(() => {
+      readJsonBody(req).then((body) => runDoctor(entry, { workflow: body.workflow })).then((doctor) => responseJson(res, { ok: true, ready: doctor.ready, doctor })).catch((error) => responseJson(res, { ok: false, message: shortError(error) || String(error?.message || error) })).finally(() => {
         entry.doctorRunning = false;
         broadcast(entry, "state", snapshot(entry));
       });
@@ -14472,14 +17332,33 @@ data: ${JSON.stringify(snapshot(entry))}
         if (entry.sourceWorkspace.sourceMode === "attached") {
           throw new Error("Existing apps keep their developer-owned model configuration. Update local.settings.json in the app, then Refresh.");
         }
-        const source = body.source === "gateway" ? "gateway" : "foundry";
-        entry.modelBinding.source = source;
-        selectDefaultModelBinding(entry);
-        await applyModelBinding(entry, {
+        const source = normalizeModelProvider(body.source);
+        entry.modelBinding.providerPreferencePresent = true;
+        markModelSelection(entry.modelBinding, {
           source,
-          resourceId: entry.modelBinding.resourceId,
-          modelId: entry.modelBinding.modelId
+          resourceId: "",
+          modelId: source === "copilot" ? entry.modelBinding.persistedCopilotModelId : ""
         });
+        entry.modelBinding.configured = false;
+        entry.modelBinding.activeSource = "";
+        entry.modelBinding.activeResourceId = "";
+        entry.modelBinding.activeModelId = "";
+        entry.modelBinding.activeLabel = "";
+        entry.modelBinding.status = source === "copilot" ? "Loading GitHub Copilot models..." : "Select an Azure subscription to discover models.";
+        await persistModelProviderState(entry);
+        broadcast(entry, "state", snapshot(entry));
+        await initializeModelBindings(entry);
+        if (entry.modelBinding.source === source && !entry.modelBinding.configured && !entry.modelBinding.error && (source === "copilot" && !entry.modelBinding.copilotModels.length || source !== "copilot" && entry.modelBinding.subscription)) {
+          await initializeModelBindings(entry);
+        }
+        if (source !== "copilot" && (!entry.modelBinding.subscription || entry.modelBinding.subscriptionUnavailable)) {
+          entry.modelBinding.error = "";
+          entry.modelBinding.status = "Select an Azure subscription to discover models.";
+          broadcast(entry, "state", snapshot(entry));
+          responseJson(res, { ok: true, activeLabel: "" });
+          return;
+        }
+        if (entry.modelBinding.error) throw new Error(entry.modelBinding.error);
         responseJson(res, { ok: true, activeLabel: entry.modelBinding.activeLabel });
       }).catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
       return;
@@ -14488,6 +17367,11 @@ data: ${JSON.stringify(snapshot(entry))}
       readJsonBody(req).then(async (body) => {
         if (entry.sourceWorkspace.sourceMode === "attached") {
           throw new Error("Existing apps keep their developer-owned model configuration. Update local.settings.json in the app, then Refresh.");
+        }
+        if (entry.modelBinding.source === "copilot") {
+          await applyCopilotModelSelection(entry, String(body.modelId || ""));
+          responseJson(res, { ok: true, activeLabel: entry.modelBinding.activeLabel });
+          return;
         }
         const resource = modelResources(entry).find((item) => item.id === String(body.resourceId || ""));
         if (!resource) throw new Error("Unknown model resource.");
@@ -14503,6 +17387,10 @@ data: ${JSON.stringify(snapshot(entry))}
     }
     if (req.method === "POST" && req.url === "/models/select-subscription") {
       readJsonBody(req).then(async (body) => {
+        if (entry.modelBinding.source === "copilot") {
+          throw new Error("GitHub Copilot local mode does not use an Azure subscription.");
+        }
+        const expectedSource = entry.modelBinding.source;
         let discoveryApplied;
         let applyGeneration = null;
         if (subscriptionProviderMode === "toolkit") {
@@ -14527,7 +17415,7 @@ data: ${JSON.stringify(snapshot(entry))}
             }]
           };
           await persistSubscriptionScopes(entry);
-          discoveryApplied = await discoverModelBindings(entry, subscription);
+          discoveryApplied = await discoverModelBindings(entry, subscription, expectedSource);
         }
         if (!discoveryApplied) {
           throw new Error(entry.modelBinding.error || "A newer model selection replaced this discovery request.");
@@ -14535,10 +17423,7 @@ data: ${JSON.stringify(snapshot(entry))}
         if (applyGeneration !== null && applyGeneration !== entry.modelBinding.subscriptionApplyGeneration) {
           throw new Error("A newer model subscription selection replaced this request.");
         }
-        if (!modelResources(entry).some((item) => item.models.length)) {
-          entry.modelBinding.source = entry.modelBinding.foundry.some((item) => item.models.length) || entry.modelBinding.gatewayCapability.status !== "available" ? "foundry" : "gateway";
-          selectDefaultModelBinding(entry);
-        }
+        selectDefaultModelBinding(entry);
         if (entry.modelBinding.resourceId && entry.modelBinding.modelId) {
           if (applyGeneration !== null && applyGeneration !== entry.modelBinding.subscriptionApplyGeneration) {
             throw new Error("A newer model subscription selection replaced this request.");
@@ -14554,6 +17439,14 @@ data: ${JSON.stringify(snapshot(entry))}
       return;
     }
     if (req.method === "POST" && req.url === "/models/refresh") {
+      if (entry.modelBinding.source === "copilot") {
+        discoverCopilotModels(entry, { force: true }).then((applied) => {
+          if (!applied) throw new Error(entry.modelBinding.error || "A newer model selection replaced this request.");
+          responseJson(res, { ok: true });
+        }).catch((error) => responseJson(res, { ok: false, message: shortError(error) }));
+        return;
+      }
+      const expectedSource = entry.modelBinding.source;
       ensureAzureSubscriptions(entry, { force: true, loadApps: false }).then(() => {
         const subscription = entry.azure.subscriptions.some(
           (item) => item.id === entry.modelBinding.subscription
@@ -14561,7 +17454,7 @@ data: ${JSON.stringify(snapshot(entry))}
         if (!subscription) {
           throw new Error(entry.azure.subscriptionsError || "No Azure subscription is available for model discovery.");
         }
-        return discoverModelBindings(entry, subscription);
+        return discoverModelBindings(entry, subscription, expectedSource);
       }).then((discoveryApplied) => {
         if (!discoveryApplied) {
           throw new Error(entry.modelBinding.error || "A newer model selection replaced this discovery request.");
@@ -14582,11 +17475,16 @@ data: ${JSON.stringify(snapshot(entry))}
     }
     if (req.method === "POST" && req.url === "/models/apply") {
       readJsonBody(req).then(async (body) => {
-        await applyModelBinding(entry, {
-          source: body.source,
-          resourceId: String(body.resourceId || ""),
-          modelId: String(body.modelId || "")
-        });
+        const source = normalizeModelProvider(body.source);
+        if (source === "copilot") {
+          await applyCopilotModelSelection(entry, String(body.modelId || ""));
+        } else {
+          await applyModelBinding(entry, {
+            source,
+            resourceId: String(body.resourceId || ""),
+            modelId: String(body.modelId || "")
+          });
+        }
         responseJson(res, { ok: true, activeLabel: entry.modelBinding.activeLabel });
       }).catch((error) => {
         entry.modelBinding.error = shortError(error);
@@ -14712,6 +17610,7 @@ data: ${JSON.stringify(snapshot(entry))}
     }
     if (req.method === "POST" && req.url === "/open-vscode") {
       (async () => {
+        await materializePendingTrigger(entry);
         const dir = await refreshTemplateFromDisk(entry).then(() => requireTemplateDir(entry));
         const c = cmdStart(entry, { kind: "shell", title: "code (open)", cmd: `code ${dir}`, purpose: "Open the working copy in VS Code" });
         try {
@@ -14727,9 +17626,10 @@ data: ${JSON.stringify(snapshot(entry))}
     }
     if (req.method === "POST" && req.url === "/edit-instructions-vscode") {
       (async () => {
+        await materializePendingTrigger(entry);
         await refreshTemplateFromDisk(entry);
         const dir = requireTemplateDir(entry);
-        const filePath = path11.join(dir, entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.timerAgentRelPath);
+        const filePath = path12.join(dir, entry.selectedHostedSkill?.relativePath || HERO_TEMPLATE.timerAgentRelPath);
         const c = cmdStart(entry, {
           kind: "shell",
           title: "code (agent instructions)",
@@ -14775,14 +17675,19 @@ data: ${JSON.stringify(snapshot(entry))}
         responseJson(res, { ok: false, message: "Select Local Function App first." });
         return;
       }
+      const deploymentRedactValues = [];
       (async () => {
+        const deploymentIntent = snapshotDeploymentProviderIntent(entry.modelBinding);
+        const sourceDir = requireTemplateDir(entry);
         const request = await readJsonBody(req);
         if (!entry.sourceWorkspace.materialized) {
           throw new Error("Create the generated app before deploying it to Azure.");
         }
-        const confirmationRequired = deploymentModelConfirmation(entry, request.modelConfirmation);
+        const confirmationRequired = deploymentProviderConfirmation(
+          deploymentIntent,
+          request.modelConfirmation
+        );
         if (confirmationRequired) return confirmationRequired;
-        const sourceDir = requireTemplateDir(entry);
         try {
           beginAzdOperation(entry, "deploy");
         } catch (error) {
@@ -14805,10 +17710,13 @@ data: ${JSON.stringify(snapshot(entry))}
         entry.deployStatus = deploymentSummary(entry.deployment);
         broadcast(entry, "state", snapshot(entry));
         await ensureAzureSubscriptions(entry);
-        const deploymentSubscription = entry.modelBinding.subscription;
-        if (!deploymentSubscription || entry.modelBinding.subscriptionUnavailable) {
+        const deploymentSubscription = deploymentIntent.subscription;
+        const subscriptionAvailable = entry.azure.subscriptions.some(
+          (subscription) => subscription.id === deploymentSubscription
+        );
+        if (!deploymentSubscription || !subscriptionAvailable) {
           throw new Error(
-            (entry.modelBinding.subscriptionUnavailable ? "The saved model subscription is unavailable. Choose an available subscription." : entry.azure.subscriptionsError) || "Select an Azure subscription before deploying. Azure Functions Hosted Skills cannot prompt inside the canvas."
+            entry.azure.subscriptionsError || "Select an Azure subscription before deploying. Azure Functions Hosted Skills cannot prompt inside the canvas."
           );
         }
         const dir = deploymentWorkspaceDir(entry);
@@ -14817,18 +17725,21 @@ data: ${JSON.stringify(snapshot(entry))}
           "Preparing the deployment snapshot",
           () => prepareDeploymentProjectCopy(sourceDir, dir)
         );
-        const deploymentContract = await enforceIdentityOnlyDeploymentTemplate(dir);
+        const deploymentContract = await enforceIdentityOnlyDeploymentTemplate(dir, deploymentIntent);
         entry.deployment.effectiveModel = {
           ...deploymentContract.model,
+          provider: deploymentContract.provider,
+          resourceId: deploymentContract.resourceId,
           location: deploymentContract.location,
           format: FOUNDRY_MODEL_FORMAT,
           sku: FOUNDRY_MODEL_SKU,
-          automaticFallback: deploymentContract.automaticFallback
+          automaticFallback: deploymentContract.automaticFallback,
+          provisionsModelResources: deploymentContract.provisionsModelResources
         };
         appendDeploymentOutput(entry, {
           sequence: 0,
           stream: "stdout",
-          text: `Deployment model: ${deploymentContract.label} in ${deploymentContract.location}. Automatic model fallback is disabled; region, quota, or availability failures stop the deployment.`,
+          text: `Deployment provider: ${deploymentIntentSummary(deploymentIntent)} Function resources deploy in ${deploymentContract.location}. Automatic model fallback is disabled; region, quota, or availability failures stop the deployment.`,
           at: Date.now()
         });
         if (entry.trigger === "connector") {
@@ -14841,19 +17752,31 @@ data: ${JSON.stringify(snapshot(entry))}
             "Queue deployment is not automated by Azure Functions Hosted Skills because the generated Azure infrastructure does not create its source queue. Provision the exact generated queue and required data-plane access before deploying this Queue-triggered app."
           );
         }
-        await rm6(path11.join(dir, HERO_TEMPLATE.queueAgentRelPath), { force: true });
-        await rm6(path11.join(dir, HERO_TEMPLATE.connectorAgentRelPath), { force: true });
-        await removeConnectorDeploymentConfig(path11.join(dir, "src"));
+        await rm8(path12.join(dir, HERO_TEMPLATE.queueAgentRelPath), { force: true });
+        await rm8(path12.join(dir, HERO_TEMPLATE.connectorAgentRelPath), { force: true });
+        await removeConnectorDeploymentConfig(path12.join(dir, "src"));
         const deploymentEntry = {
           ...entry,
           templateDir: dir,
-          agentDir: path11.join(dir, "src"),
+          agentDir: path12.join(dir, "src"),
           sourceWorkspace: { ...entry.sourceWorkspace, mode: "isolated" }
         };
         await ensureGatewayProviderFiles(
           deploymentEntry,
-          entry.modelBinding.activeSource === "gateway" ? "gateway" : "connector"
+          deploymentIntent.provider === "gateway" ? "gateway" : "connector"
         );
+        const providerEnvironment = { ...deploymentContract.environment };
+        if (deploymentIntent.provider === "gateway") {
+          const key = await fetchDeploymentGatewayKey(deploymentIntent);
+          const runtimeUrls = gatewayRuntimeUrls(deploymentIntent.resource.endpoint, AIGW_WORKSPACE);
+          Object.assign(providerEnvironment, {
+            AZURE_AI_GATEWAY_OPENAI_BASE_URL: runtimeUrls.openAiBaseUrl,
+            AZURE_AI_GATEWAY_MCP_URL: runtimeUrls.githubMcpUrl,
+            AZURE_AI_GATEWAY_API_KEY: key,
+            AZURE_AI_GATEWAY_MODEL: deploymentIntent.model.id
+          });
+          deploymentRedactValues.push(key);
+        }
         const packageIndex = await resolvePythonPackageIndex(entry);
         const packageIndexEnv = await uvIndexEnv({ resolution: packageIndex });
         entry.deployment.status = "running";
@@ -14862,10 +17785,11 @@ data: ${JSON.stringify(snapshot(entry))}
           kind: "shell",
           title: "azd up",
           cmd: `cd ${dir} && azd up --environment ${AZD_DEPLOYMENT_ENVIRONMENT} --subscription ${deploymentSubscription} --location ${AZD_DEPLOYMENT_LOCATION} --no-prompt`,
-          purpose: `Provision and deploy the isolated Azure Functions workspace in ${AZD_DEPLOYMENT_LOCATION} using the canvas-selected subscription and Python packages from ${packageIndex.host}`
+          purpose: `Provision and deploy the isolated Azure Functions workspace in ${AZD_DEPLOYMENT_LOCATION} using the click-time ${deploymentIntent.provider} provider snapshot, canvas-selected subscription, and Python packages from ${packageIndex.host}`
         });
         const result = await deployToAzure(dir, {
-          env: packageIndexEnv,
+          env: { ...packageIndexEnv, ...providerEnvironment },
+          redactValues: deploymentRedactValues,
           environmentName: AZD_DEPLOYMENT_ENVIRONMENT,
           subscription: deploymentSubscription,
           location: AZD_DEPLOYMENT_LOCATION,
@@ -14890,7 +17814,7 @@ data: ${JSON.stringify(snapshot(entry))}
         if (result.ok) entry.deployment.cancel = result.cancel;
         return { ...result, cancel: void 0, effectiveModel: entry.deployment.effectiveModel };
       })().then((result) => responseJson(res, result)).catch((error) => {
-        const message = redactDeploymentOutput(shortError(error));
+        const message = redactDeploymentOutput(shortError(error), deploymentRedactValues);
         entry.deployment.cancel = null;
         entry.deployment.endedAt = Date.now();
         entry.deployment.status = "failed";
@@ -14933,11 +17857,11 @@ data: ${JSON.stringify(snapshot(entry))}
   entry.url = `http://127.0.0.1:${port}/`;
   return entry;
 }
-var canvas = createCanvas({
+var canvasOptions = {
   id: CANVAS_ID,
   displayName: DISPLAY_NAME,
   description: "Build and run Hosted Skills in a local Function App, or select an existing Azure Function App to invoke remotely.",
-  actions: [
+  actions: instrumentHostedSkillsActions([
     {
       name: "installation_status",
       description: "Explain canonical and legacy distribution ownership and detect filesystem-visible duplicate installations without changing them.",
@@ -14956,29 +17880,10 @@ var canvas = createCanvas({
         const entry = ensureEntry(instanceId);
         const trigger = TRIGGER_TYPES.find((item) => item.id === input.trigger);
         if (!trigger || trigger.nyi) return { ok: false, message: `Trigger ${input.trigger} is not implemented.` };
-        const changed = entry.trigger !== trigger.id;
-        const previousTrigger = entry.trigger;
-        entry.trigger = trigger.id;
-        if (changed && entry.sourceWorkspace.materialized) {
-          await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-          if (entry.sourceWorkspace.sourceMode === "managed" && !entry.selectedHostedSkill) {
-            assertWorkspaceMutationAllowed(entry, "Changing triggers");
-            await syncGeneratedTriggerFiles(entry);
-            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-          }
-          if (entry.sourceWorkspace.sourceMode === "attached" && !entry.selectedHostedSkill) {
-            entry.trigger = previousTrigger;
-            await refreshWorkspaceFromDisk(entry, { restartIfRunning: false, followSelectedFileTrigger: false });
-            return { ok: false, message: `The selected existing app has no ${trigger.id} Hosted Skill in its .agent.md files.` };
-          }
-        }
-        broadcast(entry, "state", snapshot(entry));
-        if (changed && entry.target === "local") {
-          try {
-            await restartLocalEnvironment(entry);
-          } catch (error) {
-            return { ok: false, trigger: entry.trigger, message: shortError(error) };
-          }
+        try {
+          if (entry.trigger !== trigger.id) selectLocalTrigger(entry, trigger.id);
+        } catch (error) {
+          return { ok: false, message: shortError(error) };
         }
         return { ok: true, trigger: entry.trigger };
       }
@@ -14996,7 +17901,7 @@ var canvas = createCanvas({
           await ensureAzureSubscriptions(entry);
         } else {
           const localTriggerAvailable = entry.hostedSkills.some((skill) => skill.trigger === entry.trigger);
-          if (!localTriggerAvailable) {
+          if (!localTriggerAvailable && entry.pendingTrigger !== entry.trigger) {
             entry.trigger = entry.hostedSkills.find((skill) => !["connector", "blob", "cosmos"].includes(skill.trigger))?.trigger || "timer";
             await refreshWorkspaceFromDisk(entry, {
               restartIfRunning: false,
@@ -15059,15 +17964,23 @@ var canvas = createCanvas({
     },
     {
       name: "run_doctor",
-      description: "Run a fast, read-only readiness check over every local dependency this canvas needs (uv, Python 3.13+, Azure Functions Core Tools, Node.js, Azurite, Azure CLI, Azure CLI sign-in) and report exactly what is ready, missing, stale, or fixable. Never installs anything, never starts a login flow, and never creates or modifies Azure resources.",
-      inputSchema: { type: "object", properties: {} },
-      async handler({ instanceId }) {
+      description: "Run a fast, read-only readiness check over local dependencies and report exactly what is ready, missing, stale, optional, or fixable. Azure CLI and sign-in are required only for Azure-backed providers, Azure Function Apps, Create Models, and Deploy to Azure. Never installs anything, never starts a login flow, and never creates or modifies Azure resources.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workflow: {
+            type: "string",
+            enum: ["current", "create-models", "deploy"]
+          }
+        }
+      },
+      async handler({ input, instanceId }) {
         const entry = ensureEntry(instanceId);
         if (entry.doctorRunning) return { ok: false, message: "Doctor is already running." };
         entry.doctorRunning = true;
         broadcast(entry, "state", snapshot(entry));
         try {
-          const doctor = await runDoctor(entry);
+          const doctor = await runDoctor(entry, { workflow: input?.workflow });
           return { ok: true, ready: doctor.ready, checks: doctor.checks };
         } catch (error) {
           return { ok: false, message: shortError(error) || String(error?.message || error) };
@@ -15079,17 +17992,34 @@ var canvas = createCanvas({
     },
     {
       name: "refresh_model_bindings",
-      description: "Discover existing Microsoft Foundry projects/deployments and AI Gateway governed models.",
+      description: "Refresh available GitHub Copilot models or discover existing Microsoft Foundry and Azure AI Gateway models.",
       inputSchema: {
         type: "object",
         properties: {
           subscription: { type: "string" },
-          source: { type: "string", enum: ["foundry", "gateway"] }
+          source: { type: "string", enum: ["copilot", "foundry", "gateway"] }
         }
       },
       async handler({ input, instanceId }) {
         const entry = ensureEntry(instanceId);
         try {
+          const source = normalizeModelProvider(input?.source || entry.modelBinding.source);
+          entry.modelBinding.providerPreferencePresent = true;
+          markModelSelection(entry.modelBinding, {
+            source,
+            resourceId: source === "copilot" ? "" : entry.modelBinding.resourceId,
+            modelId: source === "copilot" ? entry.modelBinding.persistedCopilotModelId : entry.modelBinding.modelId
+          });
+          await persistModelProviderState(entry);
+          if (source === "copilot") {
+            const applied = await discoverCopilotModels(entry, { force: true });
+            if (!applied) throw new Error(entry.modelBinding.error || "A newer model selection replaced this request.");
+            return {
+              ok: true,
+              copilotModels: entry.modelBinding.copilotModels.length,
+              compatibilityFailures: entry.modelBinding.copilotCompatibilityFailures
+            };
+          }
           await initializeModelBindings(entry);
           await ensureAzureSubscriptions(entry, { force: true, loadApps: false });
           const explicitSubscription = input?.subscription || "";
@@ -15104,7 +18034,7 @@ var canvas = createCanvas({
           if (!subscription) {
             throw new Error(entry.azure.subscriptionsError || "No Azure subscription is available for model discovery.");
           }
-          const discoveryApplied = await discoverModelBindings(entry, subscription);
+          const discoveryApplied = await discoverModelBindings(entry, subscription, source);
           if (!discoveryApplied) {
             throw new Error(entry.modelBinding.error || "A newer model selection replaced this discovery request.");
           }
@@ -15121,21 +18051,33 @@ var canvas = createCanvas({
     },
     {
       name: "bind_existing_model",
-      description: "Bind the local Hosted Skills in Azure Functions to an existing Microsoft Foundry deployment or governed AI Gateway model, then restart the local host.",
+      description: "Select a GitHub Copilot model or bind the local Hosted Skills app to an existing Microsoft Foundry or governed Azure AI Gateway model.",
       inputSchema: {
         type: "object",
         properties: {
-          source: { type: "string", enum: ["foundry", "gateway"] },
+          source: { type: "string", enum: ["copilot", "foundry", "gateway"] },
           resourceId: { type: "string" },
           modelId: { type: "string" }
         },
-        required: ["source", "resourceId", "modelId"]
+        required: ["source", "modelId"]
       },
       async handler({ input, instanceId }) {
         const entry = ensureEntry(instanceId);
         try {
+          const source = normalizeModelProvider(input.source);
+          entry.modelBinding.providerPreferencePresent = true;
+          markModelSelection(entry.modelBinding, {
+            source,
+            resourceId: String(input.resourceId || ""),
+            modelId: String(input.modelId || "")
+          });
+          await persistModelProviderState(entry);
           await initializeModelBindings(entry);
-          await applyModelBinding(entry, input);
+          if (source === "copilot") {
+            await applyCopilotModelSelection(entry, input.modelId);
+          } else {
+            await applyModelBinding(entry, { ...input, source });
+          }
           return { ok: true, activeLabel: entry.modelBinding.activeLabel };
         } catch (error) {
           return { ok: false, message: shortError(error) };
@@ -15340,8 +18282,10 @@ var canvas = createCanvas({
         return { ok, message };
       }
     }
-  ],
+  ], (instanceId) => ensureEntry(instanceId).usageMetrics),
   async open({ instanceId, sessionId, session: sessionContext }) {
+    const closing = instances.get(instanceId)?.closePromise;
+    if (closing) await closing;
     const entry = ensureEntry(instanceId);
     await initializeEntryRuntimeState(entry);
     try {
@@ -15367,8 +18311,10 @@ var canvas = createCanvas({
     await loadHttpRequestDrafts(entry);
     await loadEntryTriggerPayloadDrafts(entry);
     if (!entry.server) await startServer(entry);
-    ensureAzureSubscriptions(entry, { force: true, loadApps: false }).catch(() => {
-    });
+    if (entry.target === "azure") {
+      ensureAzureSubscriptions(entry, { force: true, loadApps: false }).catch(() => {
+      });
+    }
     if (!entry.sourceWorkspace.materialized && entry.sourceWorkspace.autoCreate) {
       const initialize = entry.target === "local" ? startGeneratedWorkspace(entry) : ensureSourceMaterialized(entry).then(() => ensureTemplate(entry));
       initialize.catch(() => {
@@ -15386,45 +18332,70 @@ var canvas = createCanvas({
       });
     }
     const installs = await installationStatus({ projectRoot: entry.sourceWorkspace.workingDirectory });
+    entry.usageMetrics.trackCanvasOpened("panel");
     return { url: entry.url, title: DISPLAY_NAME, status: entry.sourceWorkspace.error || (installs.duplicate ? installs.message : "ready") };
   },
   async onClose({ instanceId }) {
     const entry = instances.get(instanceId);
     if (!entry) return;
-    for (const res of entry.clients) {
-      try {
-        res.end();
-      } catch {
+    if (entry.closePromise) return entry.closePromise;
+    entry.closePromise = (async () => {
+      for (const res of entry.clients) {
+        try {
+          res.end();
+        } catch {
+        }
       }
-    }
-    entry.clients = /* @__PURE__ */ new Set();
-    if (entry.server) {
-      const server = entry.server;
-      entry.server = null;
-      entry.url = "";
-      await new Promise((resolve) => server.close(() => resolve()));
-    }
-    stopLiveTelemetry(entry);
-    stopLoadTest(entry);
-    await stopLocalAndRelease(entry);
-    entry.deployment?.cancel?.();
-    if (entry.invocationWriteTimer) {
-      clearTimeout(entry.invocationWriteTimer);
-      entry.invocationWriteTimer = null;
-    }
-    try {
-      if (entry.runtimeState) await entry.runtimeState.save("invocations.json", entry.invocations);
-    } finally {
-      await entry.releaseRuntimeOwner?.();
-      entry.releaseRuntimeOwner = null;
-      resetRuntimeStateLoaders(entry);
-    }
+      entry.clients = /* @__PURE__ */ new Set();
+      await entry.usageMetrics?.close({ flush: false });
+      if (entry.server) {
+        const server = entry.server;
+        entry.server = null;
+        entry.url = "";
+        await new Promise((resolve) => server.close(() => resolve()));
+      }
+      stopLiveTelemetry(entry);
+      stopLoadTest(entry);
+      await stopLocalAndRelease(entry);
+      await closeCopilotBridge(entry);
+      entry.deployment?.cancel?.();
+      if (entry.invocationWriteTimer) {
+        clearTimeout(entry.invocationWriteTimer);
+        entry.invocationWriteTimer = null;
+      }
+      try {
+        if (entry.runtimeState) await entry.runtimeState.save("invocations.json", entry.invocations);
+      } finally {
+        await entry.releaseRuntimeOwner?.();
+        entry.releaseRuntimeOwner = null;
+        resetRuntimeStateLoaders(entry);
+      }
+    })().finally(() => {
+      entry.usageMetrics = null;
+      entry.closePromise = null;
+    });
+    return entry.closePromise;
   }
-});
+};
+var canvas = createCanvas(canvasOptions);
 if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1") {
   session = await joinSession({ canvases: [canvas] });
 }
 var functionStudioTestHooks = Object.freeze({
+  canvas,
+  actions: canvasOptions.actions,
+  async setUsageMetricsFixture(entry, fixture) {
+    if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1") throw new Error("Usage metrics injection requires fixture mode.");
+    await entry.usageMetrics?.close({ flush: false });
+    entry.usageMetrics = createHostedSkillsUsageMetrics({ canvasVersion: STUDIO_VERSION, fixture });
+    return entry.usageMetrics;
+  },
+  setCopilotClientFactory(factory) {
+    if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof factory !== "function") {
+      throw new Error("An injected Copilot SDK client factory is available only in fixture mode.");
+    }
+    copilotClientFactory = factory;
+  },
   setAzureRunner(runner) {
     if (process.env.FUNCTION_STUDIO_TEST_MODE !== "1" || typeof runner !== "function") {
       throw new Error("An injected Azure runner is available only in fixture mode.");
@@ -15480,7 +18451,10 @@ var functionStudioTestHooks = Object.freeze({
   normalizeGithubRepository,
   resolveGithubMcpCredential,
   githubFunctionEnvironment,
+  resolveGithubFunctionEnvironment,
   hasRequiredGithubDigestEvidence,
+  finalizeLocalHttpInvocationNote,
+  processLocalInvocationLog,
   inputSchemaOf,
   parameterContractOf,
   discoverHostedSkills,
@@ -15492,7 +18466,15 @@ var functionStudioTestHooks = Object.freeze({
   githubRequirement,
   initializeDeclaredIntegrations,
   initializeModelBindings,
+  applyCopilotModelSelection,
+  discoverCopilotModels,
+  closeCopilotBridge,
+  runDoctor,
+  ensureDeclaredParameterRuntimeSettings,
   startLocalBootstrap,
+  selectLocalTrigger,
+  materializePendingTrigger,
+  saveInstructions,
   startLocalEnvironment,
   stopLocalByUser,
   stopLocalAndRelease,
