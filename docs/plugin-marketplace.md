@@ -76,8 +76,9 @@ the same text files plus raster images (`.png`, `.jpg`, `.jpeg`, `.gif`,
 marketplace branch without a new version or tag. Executable/active files
 such as `.js`, `.mjs`, `.html` or `.svg`, symlinks, submodules, nested `doc/`
 or `docs/` directories, and files used by tagged runtime modules/assets
-are **not** exempt. License, licence, notice and copying files, `SHA256SUMS`,
-and `inventory.json` remain protected even inside documentation paths.
+are **not** exempt. License, licence, notice, copying, copyright, authors,
+attribution and patents files, `SHA256SUMS`, and `inventory.json` remain
+protected even inside documentation paths.
 Runtime, skills, manifests, `checksums.json` and all other files must still
 match the immutable tag. Reviewers must also check for dynamic runtime access
 not expressed as a direct path or in release metadata. Existing checksum

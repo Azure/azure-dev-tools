@@ -84,7 +84,7 @@ function isMutableDocumentation(file, metadata, runtimeFiles) {
   if (!metadata.startsWith("100644 blob ") || file.startsWith("extensions/") ||
       (/(?:^|\/)docs?\//.test(file) && !/^docs?\//.test(file)) ||
       runtimeFiles.has(file) ||
-      /^(?:LICENSE|LICENCE|NOTICE|COPYING|THIRD_PARTY_NOTICES)(?:[._-].*)?$/i.test(basename) ||
+      /^(?:LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT|AUTHORS|ATTRIBUTION|PATENTS|THIRD[-_]?PARTY[-_]?NOTICES)(?:[._-].*)?$/i.test(basename) ||
       basename === "SHA256SUMS" || basename === "inventory.json") {
     return false;
   }

@@ -27,8 +27,9 @@ content (`.js`, `.mjs`, `.html`, `.svg`), symlinks, submodules, nested docs and
 files referenced directly by runtime code or declared runtime assets remain
 protected. Review dynamic runtime file access separately; do not infer that
 every file under a documentation path is safe to exempt. License, licence,
-notice and copying files, `SHA256SUMS`, and `inventory.json` are never exempt,
-even under documentation paths. The source SHA in the immutable tag records
+notice, copying, copyright, authors, attribution and patents files,
+`SHA256SUMS`, and `inventory.json` are never exempt, even under documentation
+paths. The source SHA in the immutable tag records
 the reviewed source revision; it does not
 permit the same version to be reused for different protected output. Git commit
 and tree IDs still cover all files, including documentation; SHA-256 receipts
