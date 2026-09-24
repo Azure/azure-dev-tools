@@ -71,6 +71,15 @@ Build-input provenance remains a separate release PR review fact; tag names
 alone do not prove build origin. The default verifier **fails closed** while
 the real builder tag is absent; there is no `--candidate` bypass.
 
+On pull requests to `main`, the **Marketplace release qualification** check
+is reported for every PR, but only runs the targeted Node tests and strict
+default verifier when marketplace, product, verifier, fixture, workflow, or
+release-guide files change. It fetches complete history and tags; it does not
+create release refs or approve a release. A repository administrator must make
+this check required on `main` for CI failures to block merges. Relevant PRs
+remain red until the reviewed receipt and approved builder tags qualify
+against public `origin/main`.
+
 After approved merge and authorization to install, check the actual
 GitHub-hosted marketplace with fresh, isolated
 `HOME`, `COPILOT_HOME`, and `COPILOT_CACHE_HOME` directories. Confirm that each
