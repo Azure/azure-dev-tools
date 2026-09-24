@@ -1,0 +1,51 @@
+name: Verify plugin marketplace
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Marketplace release qualification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Check relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            .github/plugin/marketplace.json \
+            .github/workflows/verify-plugin-marketplace.yml \
+            canvases/ \
+            plugins/canvas-authoring/ \
+            scripts/verify-plugin-marketplace.mjs \
+            test/plugin-marketplace.test.mjs \
+            test/fixtures/marketplace.candidate.json \
+            docs/plugin-marketplace.md; then
+            echo "qualified=false" >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              exit "$status"
+            fi
+            echo "qualified=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.qualified == 'true'
+        with:
+          node-version: '22.16.0'
+      - name: Test marketplace verifier
+        if: steps.changes.outputs.qualified == 'true'
+        run: node --test test/plugin-marketplace.test.mjs
+      - name: Verify public marketplace release
+        if: ${{ !cancelled() && steps.changes.outputs.qualified == 'true' }}
+        run: node scripts/verify-plugin-marketplace.mjs
