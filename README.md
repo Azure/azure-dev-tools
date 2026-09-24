@@ -11,7 +11,11 @@ After the marketplace is approved and published, open GitHub Copilot App
 `azure-dev-tools` marketplace: `azure-sre-agent`,
 `azure-functions-hosted-skills`, `azure-resources-query`, or `canvas-authoring`.
 Their CLI install IDs are `<product>@azure-dev-tools`. The first three install
-canvases and companion skills; **canvas-authoring installs one skill only**.
+canvases and companion skills; after installation, ask Copilot to **Open Azure
+SRE Agent**, **Open Azure Functions Hosted Skills**, or **Open Azure Resources
+Query** by name. **canvas-authoring installs one skill only**, not a canvas to
+open.
+
 The App marketplace install is not yet verified. See [installation and release
 gates](docs/plugin-marketplace.md) before attempting an install.
 

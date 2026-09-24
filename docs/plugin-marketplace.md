@@ -7,9 +7,13 @@ Once the marketplace is approved and published, in GitHub Copilot App open
 the GitHub repository `Azure/azure-dev-tools`, then select the
 `azure-dev-tools` marketplace. Install `azure-sre-agent`,
 `azure-functions-hosted-skills`, `azure-resources-query`, and/or
-`canvas-authoring` separately. Restart Copilot; for the first three, open
-the canvas and check the companion skills. For `canvas-authoring`, check its
-single `create-canvas-app` skill instead: it contributes no canvas or extension.
+`canvas-authoring` separately. Restart Copilot; for the first three, ask it
+to **Open Azure SRE Agent**, **Open Azure Functions Hosted Skills**, or **Open
+Azure Resources Query** by name, then check the companion skills. Resources
+Query needs a query and confirmed scope before showing results. For
+`canvas-authoring`, check its single `create-canvas-app` skill instead: it
+contributes no canvas or extension.
+
 [GitHub's App guide](https://docs.github.com/en/copilot/how-tos/github-copilot-app/customize-github-copilot-app#adding-plugins)
 documents the registration workflow, but **this marketplace's App install has
 not yet been verified**.
