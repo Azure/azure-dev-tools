@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "format": "plugin",
   "name": "azure-sre-agent",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "plugin": {
     "manifest": ".github/plugin/plugin.json",
     "extension": {
@@ -39,6 +39,7 @@
     "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.css",
     "extensions/azure-sre-agent/assets/toolkit/ui/subscription-picker.mjs",
     "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs",
+    "extensions/azure-sre-agent/assets/toolkit/ui/theme.mjs",
     "extensions/azure-sre-agent/extension.mjs",
     "extensions/azure-sre-agent/studio-package.json",
     "package.json",
@@ -52,8 +53,8 @@
   },
   "build": {
     "esbuild": "0.25.12",
-    "lockSha256": "e32598bb615fc6ff531aa86c3a5139c6b2ff1d23ef5144409ec8a316f05fc02d",
-    "inputSha256": "dcdf052c1eef9e68067a3810435d7c3d429a4747f8c74c912bd42a2ee0c893a6"
+    "lockSha256": "6f350e3ca1970793a450576ca200e359888a654a48feefd20fa533d5d842e65b",
+    "inputSha256": "d349a533dc36a17f609ff1575b50e674a70419f01035d3dc6690106fc7520d10"
   },
   "dependencies": [
     {
@@ -99,6 +100,10 @@
     },
     {
       "file": "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/theme.mjs",
       "platform": "browser"
     },
     {
@@ -160,6 +165,11 @@
     {
       "file": "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs",
       "route": "canvas-ui/telemetry.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-sre-agent/assets/toolkit/ui/theme.mjs",
+      "route": "canvas-ui/theme.mjs",
       "mime": "text/javascript; charset=utf-8"
     }
   ]

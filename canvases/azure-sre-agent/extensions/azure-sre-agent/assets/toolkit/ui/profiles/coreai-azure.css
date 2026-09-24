@@ -64,8 +64,8 @@
   color: var(--ink);
 }
 
-:root[data-color-mode="dark"] .canvas-profile-coreai-azure,
-.canvas-profile-coreai-azure[data-color-mode="dark"],
+:root:not([data-theme-tone="light"]):not([data-theme-tone="dark"])[data-color-mode="dark"] .canvas-profile-coreai-azure,
+.canvas-profile-coreai-azure:not([data-theme-tone="light"]):not([data-theme-tone="dark"])[data-color-mode="dark"],
 :root[data-theme-tone="dark"] .canvas-profile-coreai-azure,
 .canvas-profile-coreai-azure[data-theme-tone="dark"] {
   color-scheme: dark;

@@ -11,15 +11,17 @@ paste this URL:
 
 `https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent`
 
-After the approved 0.2.2 staging release, the `latest` tag will resolve to
-version 0.2.2. To pin the installation to the exact reviewed bytes instead,
-use the source-qualified versioned URL:
+The `latest` tag resolves to the currently approved version: 0.2.2 before
+this candidate is promoted, and 0.2.3 only after approval, merge, and tagging.
+To pin the 0.2.3 release to the exact reviewed bytes after promotion, use its
+source-qualified versioned URL:
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-v0-2-2-e872d7a1/canvases/azure-sre-agent/extensions/azure-sre-agent`
+`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-v0-2-3-0e5c4772/canvases/azure-sre-agent/extensions/azure-sre-agent`
 
-Versioned tags are immutable. Use `latest` for internal evaluation when you
-want approved staging updates; use the versioned URL when a test or report must
-remain reproducible.
+The 0.2.3 versioned URL becomes available only after the candidate is approved,
+merged, and tagged. Versioned tags are immutable. Use `latest` for approved
+staging updates; use a versioned URL when a test or report must remain
+reproducible.
 
 Install, then fully quit and reopen GitHub Copilot. See the
 [Azure SRE Agent README](https://github.com/Azure/azure-dev-tools/blob/azure-sre-agent-latest/canvases/azure-sre-agent/README.md)
@@ -66,6 +68,10 @@ The canvas opens the resulting investigation under **Threads** and displays it
 in **Active thread**. Use the transcript to inspect the agent's responses,
 evidence, status, and tool activity.
 
+When the canvas restores a connected agent, **Azure Configuration** collapses
+to a summary with its name and resource group or external endpoint. It stays
+expanded if no agent could be restored or a saved Favorite needs attention.
+
 ### Example prompts
 
 ```text
@@ -87,9 +93,23 @@ resource and available Azure context when it starts the investigation.
 
 For external agents, **Threads** shows up to 25 latest conversations; the
 owned-agent thread listing is unchanged. Expand the compact **Threads** section
-to choose a thread; collapse it when you need more space. After selection,
-collapse **Azure Configuration** to a connection summary. These controls do
-not change your Azure access.
+to choose a thread; collapse it to an icon-width rail when you need more space.
+Use Enter or Space to reopen the rail. The selected thread remains highlighted,
+long titles show their full text on hover, and the transcript scrolls
+independently above Command activity and the version. These controls do not
+change your Azure access.
+
+## Save a connection
+
+After connecting to a native Azure SRE resource or external agent, select
+**Save connected agent** in **Azure Configuration**. Open **Favorites** to
+reconnect to or remove a saved connection. Favorites are a user-local
+preference in `~/.copilot/azure-sre-agent/favorites.json`, separate from the
+last selection, and survive panel and extension restarts. At most 20
+connections are stored. They contain only the native ARM identity or
+external base endpoint and safe Portal link, never Azure credentials.
+Reconnecting checks current Azure access; a failed or stale Favorite is not
+silently removed.
 
 Select an existing thread, enter a follow-up in **Active thread**, and select
 **Send**.
@@ -145,6 +165,9 @@ creating, changing, or running scheduled tasks.
   package wrapper directory.
 - If subscriptions or agents are absent, run `az account show`, verify the
   selected subscription and your agent permissions, then refresh the canvas.
+- If a Favorite cannot reconnect, check the current resource, endpoint, and
+  permissions. A malformed Favorites file surfaces an error rather than
+  silently clearing saved entries.
 - Resource Graph may not enumerate a subscription when you have access only to
   one agent. Use **Open an agent by URL or resource ID**, enter its Azure
   resource ID or `sre.azure.com` portal URL, and select **Connect to agent**.

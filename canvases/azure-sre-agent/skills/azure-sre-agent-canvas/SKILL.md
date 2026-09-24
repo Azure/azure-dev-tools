@@ -27,14 +27,14 @@ If `open_canvas` reports that the canvas is not registered or unavailable:
 Preserve existing installations and user state. Use a host-declared `extensionId`
 when multiple providers are available; never guess a provider.
 
-If the retry still fails, tell the user exactly how to reinstall, then stop:
+If the retry still fails, tell the user to reinstall from the public nested
+extension URL, then stop:
 
-```bash
-copilot plugin marketplace add coreai-microsoft/canvases-cloud-foundation
-copilot plugin install azure-sre-agent@canvases-cloud-foundation
-```
+<https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent>
 
-Then tell them to reload extensions, start a fresh chat or child session, and retry the same prompt. Do not silently fall back to an unrelated generic diagnostics workflow.
+Then tell them to reload extensions, start a fresh chat or child session, and
+retry the same prompt. Do not silently fall back to an unrelated generic
+diagnostics workflow.
 
 ## Prerequisites
 
