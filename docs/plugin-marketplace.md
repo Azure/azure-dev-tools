@@ -69,13 +69,20 @@ exercise the pretag verifier; they are not releases and must never be pushed.
 Build-input provenance remains a separate release PR review fact; tag names
 alone do not prove build origin. There is no `--candidate` bypass.
 
-`README*` files (at any package depth) and files under a package-root
-`doc/` or `docs/`, including images, may change on the marketplace branch
-without a new product version or tag. License, licence, notice and copying
-files, `SHA256SUMS`, and `inventory.json` remain protected even inside those
-paths. Runtime, skills, manifests, `checksums.json` and all other files must
-still match the immutable tag. Existing checksum files describe their
-historical tagged snapshots, not updated documentation on `main`. The
+Regular non-executable `README*` text files (bare `README` or `.md`,
+`.markdown`, `.txt`, `.rst`, `.adoc`) at any non-runtime package depth, and
+the same text files plus raster images (`.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.avif`) under a package-root `doc/` or `docs/`, may change on the
+marketplace branch without a new version or tag. Executable/active files
+such as `.js`, `.mjs`, `.html` or `.svg`, symlinks, submodules, nested `doc/`
+or `docs/` directories, and files used by tagged runtime modules/assets
+are **not** exempt. License, licence, notice and copying files, `SHA256SUMS`,
+and `inventory.json` remain protected even inside documentation paths.
+Runtime, skills, manifests, `checksums.json` and all other files must still
+match the immutable tag. Reviewers must also check for dynamic runtime access
+not expressed as a direct path or in release metadata. Existing checksum
+files describe their historical tagged snapshots, not updated documentation
+on `main`. The
 historical builder tag and its original full receipt remain checked
 byte-for-byte; future release receipts should cover only
 protected payload files and declare that scope explicitly. Git commit/tree

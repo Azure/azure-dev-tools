@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/marketplace.candidate.json", import.meta.url)));
 const publicManifest = JSON.parse(readFileSync(new URL("../.github/plugin/marketplace.json", import.meta.url)));
 const candidate = "5bea7baefed06b627a279da2dcc78331289598ef";
+const publicMainAtBranch = "4b265a1f54d60a7f8fee8bbc0c2052f03de73633";
 const tag = "canvas-authoring-v0-1-0-23aa6b1";
 const receipt = "ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da";
 
@@ -153,13 +154,13 @@ test("main-only README and doc(s) changes, including images, do not need new tag
   withClone((directory) => {
     const paths = [
       "canvases/azure-sre-agent/README.md",
-      "canvases/azure-sre-agent/README.install",
+      "canvases/azure-sre-agent/README.install.md",
       "canvases/azure-functions-hosted-skills/README.md",
       "canvases/azure-resources-query/docs/resources-fixture.png",
       "canvases/azure-resources-query/doc/new-guide.md",
       "plugins/canvas-authoring/README.md",
       "plugins/canvas-authoring/skills/create-canvas-app/references/toolkit/README.md",
-      "plugins/canvas-authoring/docs/new-image.svg",
+      "plugins/canvas-authoring/docs/new-image.webp",
     ];
     for (const path of paths) {
       const file = join(directory, path);
@@ -170,6 +171,9 @@ test("main-only README and doc(s) changes, including images, do not need new tag
     git(directory, "commit", "--quiet", "-m", "Update marketplace documentation only");
     git(directory, "rm", "--quiet", "canvases/azure-resources-query/docs/resources-fixture.png");
     git(directory, "commit", "--quiet", "-m", "Remove obsolete documentation image");
+    git(directory, "update-ref", "refs/remotes/origin/main", publicMainAtBranch);
+    assert.equal(git(directory, "merge-base", "HEAD", "refs/remotes/origin/main"),
+      publicMainAtBranch);
     assert.notEqual(git(directory, "rev-parse", "HEAD:plugins/canvas-authoring"),
       git(directory, "rev-parse", `${tag}:plugins/canvas-authoring`));
     assert.equal(verifyMarketplace(publicManifest, { root: directory }).length, 4);
@@ -200,6 +204,16 @@ test("runtime, skills, manifests, legal notices, and receipts remain protected",
     ["plugins/canvas-authoring/skills/create-canvas-app/references/toolkit/LICENSE", 3],
     ["plugins/canvas-authoring/SHA256SUMS", 3],
     ["plugins/canvas-authoring/inventory.json", 3],
+    ["canvases/azure-resources-query/README.js", 2],
+    ["canvases/azure-resources-query/docs/README.mjs", 2],
+    ["canvases/azure-resources-query/docs/index.html", 2],
+    ["canvases/azure-resources-query/docs/active.svg", 2],
+    ["canvases/azure-resources-query/docs/script.js", 2],
+    ["canvases/azure-resources-query/docs/config.json", 2],
+    ["canvases/azure-resources-query/extensions/azure-resources-query/README.md", 2],
+    ["canvases/azure-resources-query/extensions/azure-resources-query/docs/screenshot.png", 2],
+    ["plugins/canvas-authoring/skills/create-canvas-app/docs/nested.png", 3],
+    ["plugins/canvas-authoring/skills/create-canvas-app/docs/README.md", 3],
   ];
   for (const [path, pluginIndex] of paths) {
     withClone((directory) => {
@@ -210,6 +224,72 @@ test("runtime, skills, manifests, legal notices, and receipts remain protected",
       git(directory, "commit", "--quiet", "-m", "Change protected package file");
       assert.throws(() => verifyPlugin(publicManifest.plugins[pluginIndex], directory),
         /current package bytes differ.*outside mutable documentation/, path);
+    });
+  }
+});
+
+test("symlinks and executable documentation cannot bypass the immutable tag", () => {
+  for (const kind of ["symlink", "executable", "submodule"]) {
+    withClone((directory) => {
+      const path = "canvases/azure-resources-query/docs/guide.md";
+      const file = join(directory, path);
+      mkdirSync(dirname(file), { recursive: true });
+      if (kind === "symlink") {
+        symlinkSync("../.github/plugin/plugin.json", file);
+      } else if (kind === "executable") {
+        writeFileSync(file, "Executable documentation\n");
+      }
+      if (kind === "submodule") {
+        git(directory, "update-index", "--add", "--cacheinfo", "160000", candidate, path);
+      } else {
+        git(directory, "add", path);
+      }
+      if (kind === "executable") git(directory, "update-index", "--chmod=+x", path);
+      git(directory, "commit", "--quiet", "-m", "Add unsafe documentation");
+      assert.throws(() => verifyPlugin(publicManifest.plugins[2], directory),
+        /current package bytes differ.*outside mutable documentation/, kind);
+    });
+  }
+});
+
+test("deleting a protected package file still fails", () => {
+  for (const [path, index] of [
+    ["canvases/azure-functions-hosted-skills/THIRD_PARTY_NOTICES.txt", 1],
+    ["canvases/azure-resources-query/extensions/azure-resources-query/extension.mjs", 2],
+    ["plugins/canvas-authoring/skills/create-canvas-app/SKILL.md", 3],
+  ]) {
+    withClone((directory) => {
+      git(directory, "rm", "--quiet", path);
+      git(directory, "commit", "--quiet", "-m", "Remove protected package file");
+      assert.throws(() => verifyPlugin(publicManifest.plugins[index], directory),
+        /current package bytes differ.*outside mutable documentation/, path);
+    });
+  }
+});
+
+test("runtime-declared and directly referenced documentation assets remain pinned", () => {
+  for (const kind of ["declared", "referenced"]) {
+    withClone((directory) => {
+      const path = kind === "declared"
+        ? "canvases/azure-resources-query/release.json"
+        : "canvases/azure-resources-query/extensions/azure-resources-query/extension.mjs";
+      if (kind === "declared") {
+        const release = JSON.parse(readFileSync(join(directory, path), "utf8"));
+        release.assets.push({ file: "docs/resources-fixture.png", route: "docs/resources-fixture.png" });
+        writeFileSync(join(directory, path), JSON.stringify(release));
+      } else {
+        writeFileSync(join(directory, path),
+          `${readFileSync(join(directory, path), "utf8")}\nconst image = "../../docs/resources-fixture.png";\n`);
+      }
+      git(directory, "add", path);
+      git(directory, "commit", "--quiet", "-m", "Synthetic reviewed runtime asset");
+      git(directory, "tag", "-f", "azure-resources-query-v0-1-1-be9551d");
+      const image = "canvases/azure-resources-query/docs/resources-fixture.png";
+      writeFileSync(join(directory, image), "Changed runtime image\n");
+      git(directory, "add", image);
+      git(directory, "commit", "--quiet", "-m", "Change imported runtime image");
+      assert.throws(() => verifyPlugin(publicManifest.plugins[2], directory),
+        /current package bytes differ.*outside mutable documentation/, kind);
     });
   }
 });

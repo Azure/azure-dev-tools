@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, posix, resolve } from "node:path";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const canvasProducts = [
@@ -79,13 +79,21 @@ function productPath(name) {
   return `${name === builder ? "plugins" : "canvases"}/${name}`;
 }
 
-function isMutableDocumentation(file) {
+function isMutableDocumentation(file, metadata, runtimeFiles) {
   const basename = file.slice(file.lastIndexOf("/") + 1);
-  if (/^(?:LICENSE|LICENCE|NOTICE|COPYING|THIRD_PARTY_NOTICES)(?:[._-].*)?$/i.test(basename) ||
+  if (!metadata.startsWith("100644 blob ") || file.startsWith("extensions/") ||
+      (/(?:^|\/)docs?\//.test(file) && !/^docs?\//.test(file)) ||
+      runtimeFiles.has(file) ||
+      /^(?:LICENSE|LICENCE|NOTICE|COPYING|THIRD_PARTY_NOTICES)(?:[._-].*)?$/i.test(basename) ||
       basename === "SHA256SUMS" || basename === "inventory.json") {
     return false;
   }
-  return /^README[^/]*$/.test(basename) || /^docs?\//.test(file);
+  const text = /(?:\.md|\.markdown|\.txt|\.rst|\.adoc)$/i;
+  if (/^README(?:$|[._-])/.test(basename)) {
+    return basename === "README" || text.test(basename);
+  }
+  return /^docs?\//.test(file) &&
+    (text.test(basename) || /\.(?:png|jpe?g|gif|webp|avif)$/i.test(basename));
 }
 
 function packageEntries(root, revision, path) {
@@ -93,9 +101,38 @@ function packageEntries(root, revision, path) {
     .split("\0").filter(Boolean);
 }
 
-function protectedEntries(root, revision, path) {
+function protectedEntries(root, revision, path, runtimeFiles) {
   return packageEntries(root, revision, path)
-    .filter((entry) => !isMutableDocumentation(entry.slice(entry.indexOf("\t") + 1)));
+    .filter((entry) => {
+      const [metadata, file] = entry.split("\t");
+      return !isMutableDocumentation(file, metadata, runtimeFiles);
+    });
+}
+
+function taggedRuntimeFiles(root, tag, path, name) {
+  const files = packageEntries(root, tag, path)
+    .map((entry) => entry.slice(entry.indexOf("\t") + 1));
+  const fileSet = new Set(files);
+  const runtimeFiles = new Set();
+  if (name !== builder) {
+    const release = JSON.parse(git(root, "show", `${tag}:${path}/release.json`));
+    if (!Array.isArray(release.modules) || !Array.isArray(release.assets)) {
+      throw new Error(`${name}: tagged runtime file inventory is missing`);
+    }
+    for (const { file } of [...release.modules, ...release.assets]) runtimeFiles.add(file);
+  }
+  for (const script of files.filter((file) => /\.(?:mjs|cjs|js|jsx|ts|tsx|py|sh)$/i.test(file))) {
+    const source = git(root, "show", `${tag}:${path}/${script}`);
+    for (const [, literal] of source.matchAll(/["'`]([^"'`\n]+)["'`]/g)) {
+      const target = literal.split(/[?#]/, 1)[0];
+      if (!target.startsWith("./") && !target.startsWith("../") && !target.includes("/")) continue;
+      const resolved = target.startsWith("./") || target.startsWith("../")
+        ? posix.normalize(posix.join(posix.dirname(script), target))
+        : target;
+      if (fileSet.has(resolved)) runtimeFiles.add(resolved);
+    }
+  }
+  return runtimeFiles;
 }
 
 export function verifyCombinedReleaseCommits(commits, root = repoRoot) {
@@ -178,8 +215,9 @@ export function verifyPlugin({ source, name, version }, root = repoRoot) {
     releaseTag = releaseTagFor(name, version, root);
     verifyTagSource(name, version, releaseTag);
     revision = "HEAD";
-    if (protectedEntries(root, revision, path).join("\0") !==
-        protectedEntries(root, releaseTag, path).join("\0")) {
+    const runtimeFiles = taggedRuntimeFiles(root, releaseTag, path, name);
+    if (protectedEntries(root, revision, path, runtimeFiles).join("\0") !==
+        protectedEntries(root, releaseTag, path, runtimeFiles).join("\0")) {
       throw new Error(`${name}@${version}: current package bytes differ from ${releaseTag} outside mutable documentation`);
     }
   } else if (source?.source === "github" &&
@@ -222,11 +260,14 @@ export function verifyPlugin({ source, name, version }, root = repoRoot) {
         if (receiptScope !== "full" && receiptScope !== "protected") {
           throw new Error("builder receipt must declare its coverage scope");
         }
-        const taggedFiles = packageEntries(root, releaseTag, path)
+        const payload = packageEntries(root, releaseTag, path)
+          .filter((entry) => {
+            const [metadata, file] = entry.split("\t");
+            return file !== "SHA256SUMS" && file !== "inventory.json" &&
+              (receiptScope === "full" ||
+               !isMutableDocumentation(file, metadata, new Set()));
+          })
           .map((entry) => entry.slice(entry.indexOf("\t") + 1));
-        const payload = taggedFiles.filter((file) => file !== "SHA256SUMS" &&
-          file !== "inventory.json" &&
-          (receiptScope === "full" || !isMutableDocumentation(file)));
         if (inventory.plugin !== path || inventory.version !== version ||
             inventory.sha256 !== digest || entries.length !== payload.length ||
             Object.keys(inventory.files ?? {}).length !== payload.length) {

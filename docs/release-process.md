@@ -17,12 +17,19 @@ Each product uses two tag forms:
 A package version identifies one exact set of protected payload bytes. Once a
 version has been used for a public candidate or release, different runtime,
 skills, manifests, legal notices or other protected bytes require a new version,
-even when the change is described as a rebuild or correction. `README*` files
-at any package depth and files under package-root `doc/` or `docs/` (including
-images) are mutable on the marketplace branch without a version change or tag
-reset. License, licence, notice and copying files, `SHA256SUMS`, and
-`inventory.json` are never exempt, even under documentation paths. The source
-SHA in the immutable tag records the reviewed source revision; it does not
+even when the change is described as a rebuild or correction. Regular
+non-executable `README*` text files at non-runtime package depths and text or
+raster images under package-root `doc/` or `docs/` are mutable on the
+marketplace branch without a version change or tag reset. Allowed text is
+bare `README` or `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`; allowed images
+are `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif`. Executable/active
+content (`.js`, `.mjs`, `.html`, `.svg`), symlinks, submodules, nested docs and
+files referenced directly by runtime code or declared runtime assets remain
+protected. Review dynamic runtime file access separately; do not infer that
+every file under a documentation path is safe to exempt. License, licence,
+notice and copying files, `SHA256SUMS`, and `inventory.json` are never exempt,
+even under documentation paths. The source SHA in the immutable tag records
+the reviewed source revision; it does not
 permit the same version to be reused for different protected output. Git commit
 and tree IDs still cover all files, including documentation; SHA-256 receipts
 are integrity records, not signatures. Existing full receipts and
