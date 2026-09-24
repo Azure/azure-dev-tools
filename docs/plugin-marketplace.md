@@ -39,9 +39,13 @@ metadata. After fetching the public immutable release tags, run
 `node --test test/plugin-marketplace.test.mjs` and
 `node scripts/verify-plugin-marketplace.mjs` before merge. The validator
 requires a unique version tag per product, checks that the current package
-tree exactly matches it, and verifies `plugin.json`, the extension, and all
-expected skills (including both Hosted Skills companions). It intentionally
-fails while target releases are absent.
+tree exactly matches it, checks each tag's source fragment against its
+independently reviewed full source SHA, and verifies `plugin.json`, the
+extension, and all expected skills (including both Hosted Skills companions).
+The three distinct version tags can point to one approved combined-public-PR
+merge commit. Build-input provenance remains a separate release PR review
+fact; a source-qualified tag name alone does not prove the build's origin.
+The validator intentionally fails while target releases are absent.
 
 After merge, check the actual GitHub-hosted marketplace with fresh, isolated
 `HOME`, `COPILOT_HOME`, and `COPILOT_CACHE_HOME` directories. Confirm that each

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { verifyMarketplace, verifyPlugin } from "../scripts/verify-plugin-marketplace.mjs";
+import {
+  verifyMarketplace,
+  verifyPlugin,
+  verifyTagSource,
+} from "../scripts/verify-plugin-marketplace.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/marketplace.candidate.json", import.meta.url)));
 
@@ -67,4 +71,26 @@ test("repo-relative source follows current bytes only when they match the releas
     version: "0.2.2",
     source: "canvases/azure-sre-agent",
   }), /current package bytes differ/);
+});
+
+test("target tags must identify each independently reviewed source commit", () => {
+  assert.doesNotThrow(() => verifyTagSource(
+    "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-0ba4899a",
+  ));
+  assert.doesNotThrow(() => verifyTagSource(
+    "azure-functions-hosted-skills", "0.5.1",
+    "azure-functions-hosted-skills-v0-5-1-2bb83548",
+  ));
+  assert.doesNotThrow(() => verifyTagSource(
+    "azure-resources-query", "0.1.1", "azure-resources-query-v0-1-1-be9551d7",
+  ));
+  assert.throws(() => verifyTagSource(
+    "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-deadbeef",
+  ), /does not identify the reviewed source commit/);
+  assert.throws(() => verifyTagSource(
+    "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-0ba",
+  ), /does not identify the reviewed source commit/);
+  assert.throws(() => verifyMarketplace(modified((m) => {
+    m.name = "azure-dev-tools";
+  })), /versions must match/);
 });

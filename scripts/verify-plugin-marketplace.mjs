@@ -13,6 +13,20 @@ const expectedSkills = {
   "azure-resources-query": ["./skills/azure-resources-query/"],
 };
 const products = Object.keys(expectedSkills);
+const reviewedSources = {
+  "azure-sre-agent": {
+    version: "0.2.4",
+    sha: "0ba4899a96f16bc5478b98d9f3692416146b96cb",
+  },
+  "azure-functions-hosted-skills": {
+    version: "0.5.1",
+    sha: "2bb835480969ebf35f4d414b60c084590efb9ff6",
+  },
+  "azure-resources-query": {
+    version: "0.1.1",
+    sha: "be9551d7c65df8e728edb2bcf896a08d5b193269",
+  },
+};
 
 function git(...args) {
   return execFileSync("git", args, {
@@ -38,8 +52,22 @@ export function verifyMarketplace(manifest) {
       products.some((name) => !names.includes(name))) {
     throw new Error("Marketplace must contain exactly the three Azure canvas plugins");
   }
+  if (manifest.name === "azure-dev-tools" &&
+      manifest.plugins.some(({ name, version }) => version !== reviewedSources[name].version)) {
+    throw new Error("Marketplace versions must match the three reviewed source releases");
+  }
 
   return manifest.plugins.map(verifyPlugin);
+}
+
+export function verifyTagSource(name, version, tag) {
+  if (version !== reviewedSources[name]?.version) return;
+  const base = `${name}-v${version.replaceAll(".", "-")}-`;
+  const suffix = tag.startsWith(base) ? tag.slice(base.length) : "";
+  if (!/^[0-9a-f]{7,40}$/.test(suffix) ||
+      !reviewedSources[name].sha.startsWith(suffix)) {
+    throw new Error(`${name}@${version}: tag does not identify the reviewed source commit`);
+  }
 }
 
 export function verifyPlugin({ source, name, version }) {
@@ -56,6 +84,7 @@ export function verifyPlugin({ source, name, version }) {
       throw new Error(`${name}@${version}: expected exactly one reviewed immutable release tag`);
     }
     releaseTag = tags[0];
+    verifyTagSource(name, version, releaseTag);
     revision = "HEAD";
     if (git("rev-parse", `${revision}:${path}`) !==
         git("rev-parse", `${releaseTag}:${path}`)) {
