@@ -37,6 +37,15 @@ function withClone(callback) {
   }
 }
 
+function withoutBuilderTags(directory) {
+  const tags = git(directory, "tag", "-l", "canvas-authoring-v0-1-0-*")
+    .split("\n").filter(Boolean);
+  if (tags.length) git(directory, "tag", "-d", ...tags);
+  if (git(directory, "tag", "-l", "canvas-authoring-latest")) {
+    git(directory, "tag", "-d", "canvas-authoring-latest");
+  }
+}
+
 function withFixture(callback) {
   return withClone((directory) => {
     const plugin = join(directory, "plugins/canvas-authoring");
@@ -128,7 +137,16 @@ test("repo-relative source rejects absent or drifted release tags", () => {
   assert.throws(() => verifyPlugin({
     name: "azure-resources-query", version: "0.1.0", source: "canvases/azure-resources-query",
   }), /exactly one reviewed immutable release tag/);
-  assert.throws(() => verifyMarketplace(publicManifest), /canvas-authoring@0\.1\.0: expected exactly one reviewed immutable release tag/);
+  withClone((directory) => {
+    withoutBuilderTags(directory);
+    git(directory, "tag", tag, candidate);
+    git(directory, "tag", "canvas-authoring-latest", candidate);
+    git(directory, "update-ref", "refs/remotes/origin/main", "HEAD");
+    assert.equal(verifyMarketplace(publicManifest, { root: directory }).length, 4);
+    withoutBuilderTags(directory);
+    assert.throws(() => verifyMarketplace(publicManifest, { root: directory }),
+      /canvas-authoring@0\.1\.0: expected exactly one reviewed immutable release tag/);
+  });
   assert.throws(() => verifyMarketplace(fixture), /expected public name/);
 });
 
@@ -158,15 +176,10 @@ test("three canvas tags share the exact reviewed release; builder must descend f
     /protected files/);
 });
 
-test("synthetic local-only tags qualify candidate bytes but cannot override protected files", (context) => {
-  try {
-    git(root, "cat-file", "-e", `${candidate}:plugins/canvas-authoring/plugin.json`);
-  } catch {
-    context.skip("Public product candidate commit is not present in this checkout");
-    return;
-  }
+test("synthetic local-only tags qualify merged bytes but cannot override protected files", () => {
   withClone((directory) => {
     git(directory, "checkout", "--quiet", "-b", "synthetic-local-product", candidate);
+    withoutBuilderTags(directory);
     git(directory, "tag", tag);
     git(directory, "tag", "canvas-authoring-latest");
     git(directory, "update-ref", "refs/remotes/origin/main",
@@ -198,6 +211,7 @@ test("synthetic local-only tags qualify candidate bytes but cannot override prot
   });
   withClone((directory) => {
     git(directory, "checkout", "--quiet", "-b", "synthetic-local-product", candidate);
+    withoutBuilderTags(directory);
     writeFileSync(join(directory, "plugins/canvas-authoring/skills/create-canvas-app/SKILL.md"),
       "---\nname: create-canvas-app\n---\nTampered skill bytes\n");
     git(directory, "add", "plugins/canvas-authoring");
