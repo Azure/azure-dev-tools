@@ -5,23 +5,41 @@ existing Azure Function App and invoke a supported deployed function.
 
 ## Install
 
-In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL**.
+**Install the full plugin.** When the public `Azure/azure-dev-tools`
+marketplace lists version 0.5.1, use GitHub Copilot **Customize → Plugins →
+marketplace gear → add `Azure/azure-dev-tools` (ID `azure-dev-tools`) →
+install Azure Functions Hosted Skills**. This includes the canvas and both
+launcher skills. After installation, fully quit and reopen GitHub Copilot,
+start a fresh chat, and confirm `azure-functions-hosted-skills-canvas` and
+`azure-functions-hosted-skills-github-daily-digest` are available.
 
-For the current approved staging build, paste this URL:
+After marketplace publication, the CLI equivalent is:
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
+```sh
+copilot plugin marketplace add Azure/azure-dev-tools
+copilot plugin install azure-functions-hosted-skills@azure-dev-tools
+```
 
-The `latest` tag is intentionally movable and follows the approved staging
-release. This candidate is version 0.5.0. After approval and publication, use
-the following immutable URL to pin its exact reviewed bytes:
+If the marketplace is not listed yet, an optional full-plugin CLI fallback
+uses the exact immutable 0.5.1 versioned/source-qualified tag supplied with
+the release. Set `HOSTED_SKILLS_TAG` to that published
+`azure-functions-hosted-skills-v0-5-1-<source-qualifier>` tag first:
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-v0-5-0-7dfe5ac/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
+```sh
+git clone --depth 1 --branch "$HOSTED_SKILLS_TAG" https://github.com/Azure/azure-dev-tools.git azure-functions-hosted-skills-plugin
+copilot plugin install ./azure-functions-hosted-skills-plugin/canvases/azure-functions-hosted-skills
+```
 
-Versioned tags are immutable. Use `latest` for internal evaluation when you
-want approved staging updates; use the versioned URL when a test or report must
-remain reproducible.
+The marketplace follows public main rather than an immutable source tag.
 
-After installation or upgrade, fully quit and reopen GitHub Copilot. See the
+> **Canvas-only fallback:** If the full plugin is unavailable, use
+> **Customize → Canvases → Install from gist/URL** with the nested
+> `https://github.com/Azure/azure-dev-tools/tree/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/extensions/azure-functions-hosted-skills`
+> URL. The `-latest` tag is movable. This canvas-only installation does not
+> install the routing and daily-digest launcher skills; new apps still receive
+> the required `.funcignore` exclusions and unsafe deployment is refused.
+
+See the
 [Azure Functions Hosted Skills README](https://github.com/Azure/azure-dev-tools/blob/azure-functions-hosted-skills-latest/canvases/azure-functions-hosted-skills/README.md)
 for this quickstart and safety guidance.
 
@@ -120,8 +138,8 @@ Select an existing Azure Function App and help me test a supported function.
 
 - If the canvas is missing after installation, fully quit and reopen GitHub
   Copilot, start a fresh project chat, and retry the exact open prompt.
-- Install from the nested `extensions/azure-functions-hosted-skills` URL above,
-  not the package wrapper directory.
+- For the App install, use the nested `extensions/azure-functions-hosted-skills`
+  URL, not the plugin directory.
 - Run **Doctor** and follow its specific fixes for PATH, Python, Core Tools,
   Node.js, Azurite, Azure CLI sign-in, package-index access, or duplicate
   installations.
@@ -143,21 +161,23 @@ Select an existing Azure Function App and help me test a supported function.
   scale, or deploy Azure resources, but it can affect the target workload.
 - Generated app files are created in the selected subfolder. Removal stops if
   managed files were changed, to avoid deleting user work.
+- A new generated app receives the bundled `src/.funcignore` exclusions even
+  if a URL installer omits the hidden template file. Deployment refuses a
+  missing or incomplete `.funcignore` in the deployment snapshot; restore
+  required exclusions in an existing or attached app yourself. The canvas
+  does not overwrite its ignore-file edits.
 
 ## Product-usage telemetry
 
-This candidate enables product-usage telemetry automatically. It sends
-code-defined action, outcome, and panel-control metadata, together with the
-numeric GitHub user ID resolved through your existing GitHub CLI sign-in, to
-the public canvas usage service. This build does not offer an opt-in or
-opt-out control for product-usage telemetry.
-
-Prompts, inputs, outputs, resource IDs, repository names, URLs, paths, commands,
-raw errors, tokens, and secrets are excluded from event data. Delivery uses
-HTTPS with bounded, asynchronous, in-memory queues; the usage request does not
-carry an Azure or GitHub bearer token. Telemetry failures do not alter an
-action result. Product-usage telemetry is separate from the optional live
-Application Insights view for a selected Azure Function App.
+Product-usage telemetry is disabled by default. When explicitly configured,
+the canvas enqueues only code-defined action, outcome, and panel-control
+metadata. Delivery is asynchronous, bounded, memory-only, Entra-authenticated,
+and provided by `@microsoft/canvas-toolkit/telemetry`. This canvas supplies the
+approved endpoint, audience, token provider, and explicit opt-in policy; the
+toolkit does not choose or provision telemetry resources.
+Telemetry failures never alter an action result. Prompts,
+inputs, outputs, resource IDs, repository names, URLs, paths, commands, raw
+errors, tokens, and secrets are excluded.
 
 ## Learn more
 

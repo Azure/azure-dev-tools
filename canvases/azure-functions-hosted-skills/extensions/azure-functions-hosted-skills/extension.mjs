@@ -1281,7 +1281,7 @@ function contract(canvasId, host, versions, actions, controls) {
 var FUNCTION_STUDIO_USAGE_CONTRACT = contract(
   "azure-functions-hosted-skills",
   "copilot_app",
-  ["0.5.0"],
+  ["0.5.0", "0.5.1"],
   {
     installation_status: usage("installation.status", "installation"),
     set_trigger: usage("trigger.select", "authoring"),
@@ -4105,6 +4105,9 @@ function checkExtensionRegistration({
   if (resolvedDestination === resolvedRoot) return { registered: true, detail: destination };
   return { registered: true, detail: `${destination} -> ${resolvedDestination} (this session is running from ${resolvedRoot})` };
 }
+
+// canvases/azure-functions-hosted-skills/src/extension.mjs
+import { assertSafeDeploymentFuncignore, materializeBundledFuncignore } from "./funcignore-policy.mjs";
 
 // canvases/azure-functions-hosted-skills/src/installation-status.mjs
 import { lstat as lstat2, readdir as readdir2, readFile as readFile2, realpath } from "node:fs/promises";
@@ -13790,6 +13793,7 @@ async function cloneTemplateDirectory(entry, dir) {
   try {
     await mkdir6(path12.dirname(dir), { recursive: true });
     await cp3(BUNDLED_TEMPLATE_DIRECTORY, dir, { recursive: true, errorOnExist: true, force: false });
+    await materializeBundledFuncignore(BUNDLED_TEMPLATE_DIRECTORY, dir);
     const timerSource = await readFile10(timerPath, "utf8");
     await writeFile4(timerPath, applyDefaultTimerSchedule(timerSource));
   } catch (error) {
@@ -17725,6 +17729,7 @@ data: ${JSON.stringify(snapshot(entry))}
           "Preparing the deployment snapshot",
           () => prepareDeploymentProjectCopy(sourceDir, dir)
         );
+        await assertSafeDeploymentFuncignore(dir);
         const deploymentContract = await enforceIdentityOnlyDeploymentTemplate(dir, deploymentIntent);
         entry.deployment.effectiveModel = {
           ...deploymentContract.model,

@@ -1,179 +1,118 @@
 # Azure SRE Agent
 
-Diagnose failing Azure applications with an existing Azure SRE Agent. Select an
-App Service, Function App, Container App, or another supported resource, start
-an investigation, and continue working from the active thread.
+Diagnose failing Azure applications with an existing Azure SRE Agent.
 
 ## Install
 
-In GitHub Copilot, go to **Customize → Canvases → Install from gist/URL** and
-paste this URL:
+### Install the full plugin
 
-`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent`
+When the **Azure Dev Tools** marketplace lists **Azure SRE Agent** in GitHub
+Copilot, go to **Customize → Plugins → marketplace gear**, add
+`Azure/azure-dev-tools` (marketplace ID `azure-dev-tools`), and install
+**Azure SRE Agent**. The full plugin includes both the canvas and its
+`azure-sre-agent-canvas` routing skill.
 
-The `latest` tag resolves to the currently approved version: 0.2.2 before
-this candidate is promoted, and 0.2.3 only after approval, merge, and tagging.
-To pin the 0.2.3 release to the exact reviewed bytes after promotion, use its
-source-qualified versioned URL:
-
-`https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-v0-2-3-0e5c4772/canvases/azure-sre-agent/extensions/azure-sre-agent`
-
-The 0.2.3 versioned URL becomes available only after the candidate is approved,
-merged, and tagged. Versioned tags are immutable. Use `latest` for approved
-staging updates; use a versioned URL when a test or report must remain
-reproducible.
-
-Install, then fully quit and reopen GitHub Copilot. See the
-[Azure SRE Agent README](https://github.com/Azure/azure-dev-tools/blob/azure-sre-agent-latest/canvases/azure-sre-agent/README.md)
-for this quickstart and safety guidance.
-
-Then ask:
+Fully quit and reopen GitHub Copilot, start a fresh chat, and try this exact
+prompt:
 
 ```text
 Open SRE Agent Canvas
 ```
 
+Confirm the canvas opens and the routing skill appears in your host; a
+marketplace listing alone does not prove App registration or prompt routing.
+The marketplace follows the current public catalog, not an exact version pin.
+If the plugin is not listed, use a published versioned tag for the full plugin
+below, or the canvas-only fallback at the end.[^canvas-only]
+See the [Azure SRE Agent README](https://github.com/Azure/azure-dev-tools/blob/azure-sre-agent-latest/canvases/azure-sre-agent/README.md)
+for this quickstart and safety guidance.
+
+### Optional: pin the full plugin to an exact release
+
+For a reproducible 0.2.4 full-plugin install, use its published, versioned
+and source-qualified tag. In a terminal with Git and Copilot CLI, run:
+
+```bash
+SRE_TAG=$(git ls-remote --refs --tags https://github.com/Azure/azure-dev-tools.git 'refs/tags/azure-sre-agent-v0-2-4-*' | awk '{sub(/^refs\/tags\//, "", $2); print $2}')
+if [ "$(printf '%s\n' "$SRE_TAG" | grep -c '^azure-sre-agent-v0-2-4-')" -eq 1 ]; then
+  git clone --depth 1 --branch "$SRE_TAG" https://github.com/Azure/azure-dev-tools.git azure-sre-agent-plugin &&
+    copilot plugin install ./azure-sre-agent-plugin/canvases/azure-sre-agent
+else
+  echo "Expected exactly one published SRE 0.2.4 tag" >&2
+fi
+```
+
+If the versioned tag has not been published or more than one matches, stop
+and check the published release tags. The `azure-sre-agent-latest` tag can
+move and does not pin a version. This checkout includes the canvas and routing
+skill without relying on the current marketplace listing. Fully quit and
+reopen GitHub Copilot, start a fresh chat, and retry the prompt above. If
+your host does not expose CLI-installed plugins, check its plugin status.
+The CLI currently warns that local-path plugin installation may be
+deprecated in a future version.
+
+### Canvas-only fallback
+
+Use this only if neither full-plugin path is available.[^canvas-only]
+
+[^canvas-only]: **Canvas-only fallback:** If the full plugin is unavailable,
+    go to **Customize → Canvases → Install from gist/URL**, paste the
+    [Azure SRE Agent canvas-only URL](https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent),
+    and install. This URL uses the movable `latest` tag and installs the canvas
+    only, **not** the `azure-sre-agent-canvas` routing skill. Fully quit and
+    reopen GitHub Copilot. If the prompt above does not route, open **Azure SRE
+    Agent** from your installed canvases. Do not install a second provider to
+    work around a missing canvas.
+
 ## Prerequisites
 
-- A GitHub Copilot environment that supports installing and opening canvas
-  extensions.
+- A Copilot host that supports the installation path you choose and Node 22
+  or later.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-  installed.
-- An authenticated Azure CLI session:
-
-  ```bash
-  az login
-  ```
-
-- Access to an Azure subscription containing an existing Azure SRE Agent.
-- Permission to view and use that SRE Agent.
-
-Azure SRE Agent does not create the Azure SRE Agent resource. Discovery is
-scoped to the selected subscription and to resources visible to your signed-in
-Azure CLI identity.
+  installed and signed in with `az login`.
+- Access to an Azure subscription containing an existing Azure SRE Agent, with
+  permission to view and use it. This plugin does not create the agent resource.
 
 ## Quickstart
 
 1. Open **Azure SRE Agent**.
-2. Expand **Azure Configuration**, choose the Azure subscription, and select an
+2. Expand **Azure Configuration**, choose the subscription, and select your
    SRE Agent.
 3. Open **Apps**.
-4. Under **Quick diagnose a failing app**:
-   - Choose the **App subscription**.
-   - Select an app resource, or enter its resource name or ID.
-   - Optionally add symptoms, error messages, or recent changes.
-5. Select **Diagnose with SRE Agent**.
+4. Under **Quick diagnose a failing app**, choose the **App subscription** and
+   select an app resource or enter its resource name or ID. Add symptoms if
+   available.
+5. Select **Diagnose with SRE Agent**. Inspect the resulting investigation
+   under **Threads** in **Active thread**.
 
-The canvas opens the resulting investigation under **Threads** and displays it
-in **Active thread**. Use the transcript to inspect the agent's responses,
-evidence, status, and tool activity.
+## Use and safety
 
-When the canvas restores a connected agent, **Azure Configuration** collapses
-to a summary with its name and resource group or external endpoint. It stays
-expanded if no agent could be restored or a saved Favorite needs attention.
-
-### Example prompts
+You can also ask:
 
 ```text
 Investigate this failure
-```
-
-```text
 Investigate issues in <yourappname>
+Investigate why Function App orders-api returns 503 after deployment
 ```
 
-```text
-Investigate why the Function App checkout-api started returning 503 responses after today's deployment.
-```
+Choose your subscription and SRE Agent in **Azure Configuration**, then open
+**Apps** to diagnose a failing resource. Select a thread in **Threads** to
+inspect its evidence and status in **Active thread**. Choose
+**Focus this thread** before operational follow-ups in chat, then **Unfocus**
+when finished.
 
-Keep the symptom and resource name specific. The canvas adds the selected
-resource and available Azure context when it starts the investigation.
-
-## Find and continue an investigation
-
-For external agents, **Threads** shows up to 25 latest conversations; the
-owned-agent thread listing is unchanged. Expand the compact **Threads** section
-to choose a thread; collapse it to an icon-width rail when you need more space.
-Use Enter or Space to reopen the rail. The selected thread remains highlighted,
-long titles show their full text on hover, and the transcript scrolls
-independently above Command activity and the version. These controls do not
-change your Azure access.
-
-## Save a connection
-
-After connecting to a native Azure SRE resource or external agent, select
-**Save connected agent** in **Azure Configuration**. Open **Favorites** to
-reconnect to or remove a saved connection. Favorites are a user-local
-preference in `~/.copilot/azure-sre-agent/favorites.json`, separate from the
-last selection, and survive panel and extension restarts. At most 20
-connections are stored. They contain only the native ARM identity or
-external base endpoint and safe Portal link, never Azure credentials.
-Reconnecting checks current Azure access; a failed or stale Favorite is not
-silently removed.
-
-Select an existing thread, enter a follow-up in **Active thread**, and select
-**Send**.
-
-To use the same investigation from the main Copilot conversation:
-
-1. Select **Focus this thread**.
-2. Confirm the **Focused: _thread title_** badge appears.
-3. Ask operational follow-up questions in the main conversation.
-4. Return to **Active thread** to inspect the latest evidence and status.
-5. Select **Unfocus** when you are finished.
-
-Focus mode makes the focused thread the default destination for operational
-follow-ups. It does not redirect every chat message: questions that can be
-answered from already-loaded canvas data may still be answered locally.
-
-## External agents and scheduled tasks
-
-Registered external agents may expose a portal link and conversation threads
-through validated `*.azuresre.ai` endpoints. Conversation requests use the
-signed-in Azure CLI user's identity; a portal link is not a grant of access or
-proof that every external-agent operation is supported. ARM-only actions are
-not available for external agents.
-
-Scheduled-task access is partial and depends on the selected agent and your
-permissions. Do not assume that discovering an agent or viewing a task permits
-creating, changing, or running scheduled tasks.
-
-## Safety
-
-- The extension uses your Azure CLI identity and never signs in for you.
-- Native read and write actions are registered in the GitHub canvas. Mutations
-  require an explicit panel action or host confirmation.
-- Starting or continuing an investigation writes messages to an SRE Agent
-  thread; review the action before selecting it or confirming it with the host.
-- Access to agents, threads, and scheduled tasks depends on the signed-in
-  user's permissions; subscription discovery or a registered external-agent
-  portal link does not expand them.
-- One-time execution authorization and durable Azure role assignment are
-  separate operations. Neither should be inferred or combined automatically.
-- Delegated Azure Data Explorer connector setup is preview functionality and
-  separately requires `ALLOW_PRIVATE_CONNECTORS=true`; connector mutations
-  require additional gating.
-- The current delegated connector path must not be treated as private for
-  production or multi-user use until the runtime can enforce verified,
-  per-invocation user and thread ownership.
+The canvas uses your Azure CLI identity. Its read and write actions are
+registered; mutating operations require an explicit action or host
+confirmation. One-time execution authorization is separate from durable role
+assignment. Delegated private-connector mutations require
+`ALLOW_PRIVATE_CONNECTORS=true` and must not be used for production or
+multi-user private connector isolation without verified per-invocation
+ownership.
 
 ## Troubleshooting
 
-- If the canvas is missing after installation, fully quit and reopen GitHub
-  Copilot, start a fresh project chat, and retry the exact open prompt.
-- Install from the nested `extensions/azure-sre-agent` URL above, not the
-  package wrapper directory.
-- If subscriptions or agents are absent, run `az account show`, verify the
-  selected subscription and your agent permissions, then refresh the canvas.
-- If a Favorite cannot reconnect, check the current resource, endpoint, and
-  permissions. A malformed Favorites file surfaces an error rather than
-  silently clearing saved entries.
-- Resource Graph may not enumerate a subscription when you have access only to
-  one agent. Use **Open an agent by URL or resource ID**, enter its Azure
-  resource ID or `sre.azure.com` portal URL, and select **Connect to agent**.
-- An external-agent portal link does not guarantee thread access: confirm
-  that the endpoint is an accepted `*.azuresre.ai` host and that your Azure
-  CLI user has permission to access its conversation threads.
-- Do not install a second provider to work around stale registration. Disable
-  retired or duplicate registrations, reinstall the canonical extension, and
-  restart GitHub Copilot.
+If the canvas is missing, fully quit and reopen GitHub Copilot, start a fresh
+chat, and retry the exact prompt. Check plugin and extension status rather
+than installing a second provider; reinstall via the same path you chose
+(canvas extension or full plugin). If agents do not appear, check
+`az account show`, your selected subscription, and your agent permissions.

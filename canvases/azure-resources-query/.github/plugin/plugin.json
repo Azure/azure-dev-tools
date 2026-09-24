@@ -1,6 +1,6 @@
 {
   "name": "azure-resources-query",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read-only Azure Resource Graph queries with explicit scope and saved views.",
   "extensions": "./extensions",
   "skills": [
