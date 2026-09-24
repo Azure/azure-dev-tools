@@ -57,6 +57,11 @@ An export may update the README only when the release PR explicitly presents
 the customer-facing change for review. Missing sections, a wrapper-directory
 install URL, a branch URL, or packaging-only prose blocks the release.
 
+Address readers directly as "you", not in the third person; give concrete
+install, update, and rollback steps with customer-facing install/version URLs.
+Keep release-owner approvals, tag movement, staging, provenance, and checksum
+mechanics in PR/release records, never in the shipped README.
+
 ## Public release PR communication
 
 Write the title for a customer, not a release ledger: start with the specific
