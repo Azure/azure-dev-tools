@@ -50,7 +50,13 @@ their original reviewed commit.
 Release order:
 
 1. Start with content cleared for public distribution in this repository.
-2. Run the package's required tests and release checks.
+2. For a new version, separately review the full source SHA, protected
+   export receipt/inventory digests, and packaged runtime logo bytes; merge
+   their pins-only PR into public `main` before the package candidate PR.
+   The candidate cannot approve or change its own pins. Run its required
+   tests and the base-pinned candidate check before merge; the default strict
+   tag check runs again after tagging. New products require individually
+   reviewed catalog identity and skill-path pins first.
 3. Produce an inventory of protected package files and record their SHA-256
    digests in `SHA256SUMS`, declaring the receipt scope. Historical full-package
    receipts remain fully enforced at their immutable tags; never rewrite them

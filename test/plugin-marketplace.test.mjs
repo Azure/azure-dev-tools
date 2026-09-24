@@ -10,6 +10,7 @@ import {
   verifyBuilderReleaseCommit,
   verifyCombinedReleaseCommits,
   verifyMarketplace,
+  verifyMarketplaceCandidate,
   verifyPlugin,
   verifyTagSource,
 } from "../scripts/verify-plugin-marketplace.mjs";
@@ -70,6 +71,178 @@ function changed(manifest, update) {
   return clone;
 }
 
+function withApprovedCandidate(callback) {
+  return withClone((directory) => {
+    const name = "azure-sre-agent";
+    const path = `canvases/${name}`;
+    const heroPath = `extensions/${name}/assets/preview.png`;
+    const sourceSha = "a".repeat(40);
+    const version = "0.2.5";
+    const updateJson = (file, update) => {
+      const fullPath = join(directory, path, file);
+      const json = JSON.parse(readFileSync(fullPath, "utf8"));
+      update(json);
+      writeFileSync(fullPath, `${JSON.stringify(json, null, 2)}\n`);
+    };
+    updateJson(".github/plugin/plugin.json", (json) => { json.version = version; });
+    updateJson("package.json", (json) => { json.version = version; });
+    updateJson(`extensions/${name}/studio-package.json`, (json) => { json.version = version; });
+    updateJson("release.json", (json) => {
+      json.version = version;
+      json.files.push(heroPath);
+    });
+    const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+    const hero = join(directory, path, heroPath);
+    writeFileSync(hero, "synthetic approved image bytes\n");
+    const heroSha256 = digest(readFileSync(hero));
+    const readme = join(directory, path, "README.md");
+    writeFileSync(readme, readFileSync(readme, "utf8").replace(
+      "Diagnose failing Azure applications with an existing Azure SRE Agent.",
+      `Diagnose failing Azure applications with an existing Azure SRE Agent.\n\n![SRE icon](${heroPath})`,
+    ));
+    const checksumFile = join(directory, path, "checksums.json");
+    const release = JSON.parse(readFileSync(join(directory, path, "release.json"), "utf8"));
+    const checksums = {};
+    for (const file of [...release.files, "release.json"]) {
+      checksums[file] = digest(readFileSync(join(directory, path, file)));
+    }
+    writeFileSync(checksumFile, `${JSON.stringify(checksums, null, 2)}\n`);
+    const payload = [...release.files, "release.json", "checksums.json"]
+      .filter((file) => file !== "README.md");
+    const files = Object.fromEntries(payload.map((file) =>
+      [file, digest(readFileSync(join(directory, path, file)))]));
+    const sums = payload.map((file) => `${files[file]}  ${file}`).join("\n") + "\n";
+    writeFileSync(join(directory, path, "SHA256SUMS"), sums);
+    const receiptSha256 = digest(Buffer.from(sums));
+    const inventory = {
+      plugin: path, version, sourceSha, scope: "protected",
+      sha256: receiptSha256, files,
+    };
+    const inventoryBytes = `${JSON.stringify(inventory, null, 2)}\n`;
+    writeFileSync(join(directory, path, "inventory.json"), inventoryBytes);
+    git(directory, "add", path);
+    git(directory, "commit", "--quiet", "-m", "Synthetic candidate package");
+    const artifactCommit = git(directory, "rev-parse", "HEAD");
+    const startingCommit = git(directory, "rev-parse", "HEAD^");
+    git(directory, "checkout", "--quiet", "-b", "approved-pins", startingCommit);
+    const pin = {
+      name, version, sourceSha, receiptSha256,
+      inventorySha256: digest(Buffer.from(inventoryBytes)),
+      heroPath, heroSha256, skills: ["./skills/azure-sre-agent-canvas/"],
+    };
+    const pinPath = join(directory, ".github/plugin/marketplace-candidate-pins.json");
+    writeFileSync(pinPath, `${JSON.stringify({ schemaVersion: 1, products: [pin] }, null, 2)}\n`);
+    git(directory, "add", pinPath);
+    git(directory, "commit", "--quiet", "-m", "Separately approve source and artifact pins");
+    const base = git(directory, "rev-parse", "HEAD");
+    git(directory, "cherry-pick", "--quiet", artifactCommit);
+    const manifest = structuredClone(publicManifest);
+    manifest.plugins[0].version = version;
+    writeFileSync(join(directory, ".github/plugin/marketplace.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`);
+    git(directory, "add", ".github/plugin/marketplace.json");
+    git(directory, "commit", "--quiet", "-m", "Point marketplace at approved new package");
+    return callback(directory, base, manifest, pin);
+  });
+}
+
+function withApprovedNewCanvas(callback) {
+  return withClone((directory) => {
+    const name = "azure-new-canvas";
+    const version = "0.1.0";
+    const sourceSha = "c".repeat(40);
+    const path = `canvases/${name}`;
+    const heroPath = `extensions/${name}/assets/preview.png`;
+    const skill = `./skills/${name}/`;
+    const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+    const write = (file, value) => {
+      const full = join(directory, path, file);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, value);
+    };
+    const read = (file) => readFileSync(join(directory, path, file));
+    const json = (file, value) => write(file, `${JSON.stringify(value, null, 2)}\n`);
+    json(".github/plugin/plugin.json", { name, version, extensions: "./extensions", skills: [skill] });
+    json("package.json", { name, version });
+    write(`extensions/${name}/extension.mjs`, "export const canvas = true;\n");
+    write(heroPath, "approved raster icon\n");
+    write(`skills/${name}/SKILL.md`, `---\nname: ${name}\n---\n`);
+    write("README.md", `# Azure New Canvas
+
+Browse Azure resources safely.
+
+![New canvas logo](${heroPath})
+
+## Install
+
+https://github.com/Azure/azure-dev-tools/tree/${name}-latest/canvases/${name}/extensions/${name}
+https://github.com/Azure/azure-dev-tools/blob/${name}-latest/canvases/${name}/README.md
+
+Open Azure New Canvas canvas
+
+## Prerequisites
+
+Use a supported host.
+
+## Quickstart
+
+1. Open the canvas.
+
+## Troubleshooting
+
+Restart the host.
+
+## Safety
+
+Review Azure scope before running queries.
+`);
+    const files = [
+      ".github/plugin/plugin.json", "package.json", "README.md",
+      `extensions/${name}/extension.mjs`, heroPath, `skills/${name}/SKILL.md`,
+    ];
+    json("release.json", { name, version, modules: [], assets: [], files });
+    const checksums = Object.fromEntries([...files, "release.json"].map((file) =>
+      [file, digest(read(file))]));
+    json("checksums.json", checksums);
+    const protectedFiles = [...files.filter((file) => file !== "README.md"),
+      "release.json", "checksums.json"];
+    const hashes = Object.fromEntries(protectedFiles.map((file) => [file, digest(read(file))]));
+    const sums = protectedFiles.map((file) => `${hashes[file]}  ${file}`).join("\n") + "\n";
+    write("SHA256SUMS", sums);
+    const receiptSha256 = digest(Buffer.from(sums));
+    const inventory = {
+      plugin: path, version, sourceSha, scope: "protected",
+      sha256: receiptSha256, files: hashes,
+    };
+    const inventoryBytes = `${JSON.stringify(inventory, null, 2)}\n`;
+    write("inventory.json", inventoryBytes);
+    git(directory, "add", path);
+    git(directory, "commit", "--quiet", "-m", "Synthetic new canvas package");
+    const artifactCommit = git(directory, "rev-parse", "HEAD");
+    git(directory, "checkout", "--quiet", "-b", "approved-new-canvas",
+      git(directory, "rev-parse", "HEAD^"));
+    const pin = {
+      name, version, sourceSha, receiptSha256,
+      inventorySha256: digest(Buffer.from(inventoryBytes)),
+      heroPath, heroSha256: digest(Buffer.from("approved raster icon\n")),
+      skills: [skill],
+    };
+    writeFileSync(join(directory, ".github/plugin/marketplace-candidate-pins.json"),
+      `${JSON.stringify({ schemaVersion: 1, products: [pin] }, null, 2)}\n`);
+    git(directory, "add", ".github/plugin/marketplace-candidate-pins.json");
+    git(directory, "commit", "--quiet", "-m", "Independently approve new product source");
+    const base = git(directory, "rev-parse", "HEAD");
+    git(directory, "cherry-pick", "--quiet", artifactCommit);
+    const manifest = structuredClone(publicManifest);
+    manifest.plugins.push({ name, version, source: path });
+    writeFileSync(join(directory, ".github/plugin/marketplace.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`);
+    git(directory, "add", ".github/plugin/marketplace.json");
+    git(directory, "commit", "--quiet", "-m", "List approved new canvas candidate");
+    return callback(directory, base, manifest);
+  });
+}
+
 test("merged 28-file builder package has the reviewed public receipt", () => {
   const path = "plugins/canvas-authoring";
   const files = git(root, "ls-tree", "-r", "--name-only", candidate, "--", path)
@@ -96,10 +269,10 @@ test("fixture accepts three extension-bearing plugins plus one skill-only builde
 test("rejects missing, duplicate, or unknown products", () => {
   withFixture((directory, manifest) => {
     assert.throws(() => verifyMarketplace(changed(manifest, (m) => m.plugins.pop()), { root: directory, fixture: true }),
-      /exactly three canvas plugins and the skill-only builder/);
+      /retain three reviewed canvases and the skill-only builder/);
     assert.throws(() => verifyMarketplace(changed(manifest, (m) => {
       m.plugins[3] = structuredClone(m.plugins[0]);
-    }), { root: directory, fixture: true }), /exactly three canvas plugins and the skill-only builder/);
+    }), { root: directory, fixture: true }), /retain three reviewed canvases and the skill-only builder/);
   });
 });
 
@@ -350,6 +523,124 @@ test("synthetic local-only tags qualify merged bytes but cannot override protect
     assert.throws(() => verifyMarketplace(publicManifest, { root: directory }),
       /current package bytes differ/);
   });
+});
+
+test("new-version candidate qualifies only with approved base source, artifact, catalog and README", () => {
+    withApprovedCandidate((directory, base, manifest, pin) => {
+      const results = verifyMarketplaceCandidate(manifest, { root: directory, base });
+      assert.equal(results.length, 4);
+      assert.match(results[0], new RegExp(`candidate ${pin.sourceSha} ${pin.receiptSha256}$`));
+      assert.match(results[3], /canvas-authoring@0\.1\.0 canvas-authoring-v0-1-0-23aa6b1/);
+      assert.throws(() => verifyMarketplace(manifest, { root: directory }),
+        /expected exactly one reviewed immutable release tag/);
+      assert.throws(() => verifyMarketplaceCandidate(manifest, { root: directory, base: "0".repeat(40) }),
+        /full PR base SHA/);
+      assert.doesNotThrow(() => verifyTagSource(pin.name, pin.version,
+        `${pin.name}-v0-2-5-aaaaaaa`, pin));
+      assert.throws(() => verifyTagSource(pin.name, pin.version,
+        `${pin.name}-v0-2-5-deadbee`, pin), /does not identify/);
+    });
+});
+
+test("new canvas needs a base-approved source, skills, logo and protected receipt", () => {
+  withApprovedNewCanvas((directory, base, manifest) => {
+    assert.equal(verifyMarketplaceCandidate(manifest, { root: directory, base }).length, 5);
+    assert.throws(() => verifyMarketplace(manifest, { root: directory }),
+      /expected exactly one reviewed immutable release tag/);
+    const unpinned = changed(manifest, (m) => {
+      m.plugins[4].name = "azure-unapproved";
+      m.plugins[4].source = "canvases/azure-unapproved";
+    });
+    assert.throws(() => verifyMarketplaceCandidate(unpinned, { root: directory, base }),
+      /additions need base pins/);
+  });
+});
+
+test("approved pins do not block unrelated documentation-only PRs", () => {
+  withApprovedCandidate((directory, base) => {
+    git(directory, "checkout", "--quiet", "-b", "pinned-docs-only", base);
+    const readme = join(directory, "canvases/azure-sre-agent/README.md");
+    writeFileSync(readme, `${readFileSync(readme, "utf8")}\nDocumentation clarification.\n`);
+    git(directory, "add", readme);
+    git(directory, "commit", "--quiet", "-m", "Clarify current-version customer documentation");
+    assert.equal(verifyMarketplaceCandidate(publicManifest, { root: directory, base }).length, 4);
+  });
+});
+
+test("candidate rejects protected tampering even when checksums, receipt and inventory are rewritten", () => {
+    withApprovedCandidate((directory, base, manifest) => {
+      const path = "canvases/azure-sre-agent";
+      const hero = join(directory, path, "extensions/azure-sre-agent/assets/preview.png");
+      writeFileSync(hero, "tampered icon\n");
+      git(directory, "add", path);
+      git(directory, "commit", "--quiet", "-m", "Change protected preview image");
+      assert.throws(() => verifyMarketplaceCandidate(manifest, { root: directory, base }),
+        /candidate checksums do not match/);
+      const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+      const checksumPath = join(directory, path, "checksums.json");
+      const checksums = JSON.parse(readFileSync(checksumPath, "utf8"));
+      checksums["extensions/azure-sre-agent/assets/preview.png"] = digest(readFileSync(hero));
+      writeFileSync(checksumPath, `${JSON.stringify(checksums)}\n`);
+      const sumsPath = join(directory, path, "SHA256SUMS");
+      let sums = readFileSync(sumsPath, "utf8").replace(
+        /^[0-9a-f]{64}(  extensions\/azure-sre-agent\/assets\/preview\.png)$/m,
+        `${digest(readFileSync(hero))}$1`,
+      ).replace(
+        /^[0-9a-f]{64}(  checksums\.json)$/m,
+        `${digest(readFileSync(checksumPath))}$1`,
+      );
+      writeFileSync(sumsPath, sums);
+      const inventoryPath = join(directory, path, "inventory.json");
+      const inventory = JSON.parse(readFileSync(inventoryPath, "utf8"));
+      inventory.sha256 = digest(Buffer.from(sums));
+      inventory.files["extensions/azure-sre-agent/assets/preview.png"] = digest(readFileSync(hero));
+      inventory.files["checksums.json"] = digest(readFileSync(checksumPath));
+      writeFileSync(inventoryPath, `${JSON.stringify(inventory)}\n`);
+      git(directory, "add", path);
+      git(directory, "commit", "--quiet", "-m", "Rewrite candidate receipts for tampered image");
+      assert.throws(() => verifyMarketplaceCandidate(manifest, { root: directory, base }),
+        /receipt, inventory, or approved source SHA differs from the base pin/);
+    });
+});
+
+test("candidate rejects bogus source pin, stale version, missing artifact and self-approved pins", () => {
+    withApprovedCandidate((directory, base, manifest) => {
+      const inventoryPath = join(directory, "canvases/azure-sre-agent/inventory.json");
+      const inventory = JSON.parse(readFileSync(inventoryPath, "utf8"));
+      inventory.sourceSha = "b".repeat(40);
+      writeFileSync(inventoryPath, `${JSON.stringify(inventory)}\n`);
+      git(directory, "add", inventoryPath);
+      git(directory, "commit", "--quiet", "-m", "Claim another source SHA");
+      assert.throws(() => verifyMarketplaceCandidate(manifest, { root: directory, base }),
+        /receipt, inventory, or approved source SHA differs/);
+    });
+    withApprovedCandidate((directory, base, manifest) => {
+      const stale = changed(manifest, (m) => { m.plugins[0].version = "0.2.4"; });
+      assert.throws(() => verifyMarketplaceCandidate(stale, { root: directory, base }),
+        /current package bytes differ/);
+      const unexpected = changed(manifest, (m) => {
+        m.plugins.push({ name: "azure-cost-health", version: "0.4.4", source: "canvases/azure-cost-health" });
+      });
+      assert.throws(() => verifyMarketplaceCandidate(unexpected, { root: directory, base }),
+        /retain the four reviewed public products/);
+      git(directory, "rm", "--quiet", "canvases/azure-sre-agent/inventory.json");
+      git(directory, "commit", "--quiet", "-m", "Remove candidate receipt inventory");
+      assert.throws(() => verifyMarketplaceCandidate(manifest, { root: directory, base }),
+        /missing a release artifact/);
+    });
+    withApprovedCandidate((directory, base, manifest) => {
+      const pinPath = join(directory, ".github/plugin/marketplace-candidate-pins.json");
+      const pins = JSON.parse(readFileSync(pinPath, "utf8"));
+      pins.products[0].sourceSha = "b".repeat(40);
+      writeFileSync(pinPath, `${JSON.stringify(pins)}\n`);
+      git(directory, "add", pinPath);
+      git(directory, "commit", "--quiet", "-m", "Self-approve different source");
+      assert.throws(() => verifyMarketplaceCandidate(manifest, { root: directory, base }),
+        /cannot change its own approved base pins/);
+    });
+});
+
+test("synthetic release refs cannot override historical builder commit or receipt", () => {
   withClone((directory) => {
     git(directory, "checkout", "--quiet", "-b", "synthetic-local-product", candidate);
     writeFileSync(join(directory, "README.md"), "Synthetic protected file change\n");
