@@ -35,9 +35,9 @@ copilot plugin install canvas-authoring@azure-dev-tools
 ```
 
 Neither installation path has been verified for this candidate. The bundled
-toolkit quickstart still contains the upstream distribution identifier; use
-this page for the public install path instead. Installing the plugin adds a
-skill, not a running canvas app.
+[toolkit quickstart](skills/create-canvas-app/references/toolkit/quickstart.md)
+uses the same public staging guidance. Installing the plugin adds a skill,
+not a running canvas app.
 
 ## Create an app
 

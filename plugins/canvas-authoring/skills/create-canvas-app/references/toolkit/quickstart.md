@@ -16,11 +16,20 @@ activation; the companion adds toolkit setup.
 - For live reads, Azure CLI 2.61+ on the provider's PATH and permission to
   read resource groups in your chosen subscription.
 
-Install the companion from its public distribution:
+This is a staging candidate, not a marketplace listing. After the public
+product is approved, merged and tagged, check out the reviewed immutable
+`canvas-authoring-v<version>-<source-sha>` tag of
+`https://github.com/Azure/azure-dev-tools`. From that checkout's root, install
+the complete plugin directory:
 
 ```sh
-copilot plugin install microsoft/azure-dev-tools:plugins/canvas-authoring
+copilot plugin install ./plugins/canvas-authoring
 ```
+
+Do not substitute another repository or an unmerged branch. The public
+marketplace path requires a separately approved onboarding change; see the
+[plugin install guidance](../../../../README.md#install) for its status.
+Neither install path has been verified for this candidate.
 
 If the companion is unavailable, use the host skill and the
 [manual integration map](#without-the-companion) below. If the host skill
