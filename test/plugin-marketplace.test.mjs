@@ -75,9 +75,12 @@ test("repo-relative source follows current bytes only when they match the releas
 });
 
 test("target tags must identify each independently reviewed source commit", () => {
+  assert.doesNotThrow(() => verifyTagSource(
+    "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-b6acf8d7",
+  ));
   assert.throws(() => verifyTagSource(
     "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-0ba4899a",
-  ), /reviewed source SHA is pending/);
+  ), /does not identify the reviewed source commit/);
   assert.doesNotThrow(() => verifyTagSource(
     "azure-functions-hosted-skills", "0.5.1",
     "azure-functions-hosted-skills-v0-5-1-2bb83548",

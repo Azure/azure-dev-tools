@@ -16,7 +16,7 @@ const products = Object.keys(expectedSkills);
 const reviewedSources = {
   "azure-sre-agent": {
     version: "0.2.4",
-    sha: null,
+    sha: "b6acf8d7089ff45e28ff8b4d66a0571826b74a49",
   },
   "azure-functions-hosted-skills": {
     version: "0.5.1",
