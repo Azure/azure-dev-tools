@@ -25,6 +25,12 @@
       "description": "Explore Azure resources with read-only queries, a canvas, and a skill.",
       "version": "0.1.1",
       "source": "canvases/azure-resources-query"
+    },
+    {
+      "name": "canvas-authoring",
+      "description": "Build canvas apps with a skill-only companion to the host's native create-canvas skill.",
+      "version": "0.1.0",
+      "source": "plugins/canvas-authoring"
     }
   ]
 }
