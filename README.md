@@ -41,9 +41,8 @@ skill to scaffold an app. Canonical npm publishes
 `@microsoft/canvas-toolkit@0.1.0-preview.2` with a `/build` runtime and types
 export. The Azure and counter starters passed isolated generated-app builds
 and tests with the public registry; native-host and marketplace installation
-remain unverified. The public product has merged, but its immutable release
-tag is still pending, so marketplace or App installation is not yet
-customer-ready.
+remain unverified. The public product and its immutable release tag are
+available, but marketplace or App installation is not yet verified.
 
 ## Get involved
 

@@ -76,8 +76,7 @@ test("merged 28-file builder package has the reviewed public receipt", () => {
   const sums = execFileSync("git", ["show", `${candidate}:${path}/SHA256SUMS`], { cwd: root });
   const inventory = JSON.parse(git(root, "show", `${candidate}:${path}/inventory.json`));
   assert.equal(files.length, 28);
-  assert.equal(git(root, "rev-parse", `${candidate}:${path}`),
-    git(root, "rev-parse", `HEAD:${path}`));
+  assert.match(verifyPlugin(publicManifest.plugins[3]), /canvas-authoring@0\.1\.0/);
   assert.equal(createHash("sha256").update(sums).digest("hex"), receipt);
   assert.equal(inventory.sha256, receipt);
   assert.equal(Object.keys(inventory.files).length, 26);
@@ -148,6 +147,71 @@ test("repo-relative source rejects absent or drifted release tags", () => {
       /canvas-authoring@0\.1\.0: expected exactly one reviewed immutable release tag/);
   });
   assert.throws(() => verifyMarketplace(fixture), /expected public name/);
+});
+
+test("main-only README and doc(s) changes, including images, do not need new tags or receipts", () => {
+  withClone((directory) => {
+    const paths = [
+      "canvases/azure-sre-agent/README.md",
+      "canvases/azure-sre-agent/README.install",
+      "canvases/azure-functions-hosted-skills/README.md",
+      "canvases/azure-resources-query/docs/resources-fixture.png",
+      "canvases/azure-resources-query/doc/new-guide.md",
+      "plugins/canvas-authoring/README.md",
+      "plugins/canvas-authoring/skills/create-canvas-app/references/toolkit/README.md",
+      "plugins/canvas-authoring/docs/new-image.svg",
+    ];
+    for (const path of paths) {
+      const file = join(directory, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, `Updated documentation: ${path}\n`);
+    }
+    git(directory, "add", ...paths);
+    git(directory, "commit", "--quiet", "-m", "Update marketplace documentation only");
+    git(directory, "rm", "--quiet", "canvases/azure-resources-query/docs/resources-fixture.png");
+    git(directory, "commit", "--quiet", "-m", "Remove obsolete documentation image");
+    assert.notEqual(git(directory, "rev-parse", "HEAD:plugins/canvas-authoring"),
+      git(directory, "rev-parse", `${tag}:plugins/canvas-authoring`));
+    assert.equal(verifyMarketplace(publicManifest, { root: directory }).length, 4);
+    assert.equal(git(directory, "rev-parse", `${tag}^{commit}`), candidate);
+  });
+});
+
+test("the historical full receipt still rejects tampered tagged documentation", () => {
+  withClone((directory) => {
+    withoutBuilderTags(directory);
+    const path = "plugins/canvas-authoring/README.md";
+    writeFileSync(join(directory, path), "Changed historical documentation\n");
+    git(directory, "add", path);
+    git(directory, "commit", "--quiet", "-m", "Tamper with historical tagged documentation");
+    git(directory, "tag", tag);
+    assert.throws(() => verifyPlugin(publicManifest.plugins[3], directory),
+      /builder tagged package bytes differ from SHA256SUMS: README\.md/);
+  });
+});
+
+test("runtime, skills, manifests, legal notices, and receipts remain protected", () => {
+  const paths = [
+    ["canvases/azure-resources-query/extensions/azure-resources-query/extension.mjs", 2],
+    ["canvases/azure-resources-query/skills/azure-resources-query/SKILL.md", 2],
+    ["canvases/azure-resources-query/.github/plugin/plugin.json", 2],
+    ["canvases/azure-resources-query/docs/THIRD_PARTY_NOTICES.txt", 2],
+    ["canvases/azure-functions-hosted-skills/THIRD_PARTY_NOTICES.txt", 1],
+    ["plugins/canvas-authoring/skills/create-canvas-app/references/toolkit/LICENSE", 3],
+    ["plugins/canvas-authoring/SHA256SUMS", 3],
+    ["plugins/canvas-authoring/inventory.json", 3],
+  ];
+  for (const [path, pluginIndex] of paths) {
+    withClone((directory) => {
+      const file = join(directory, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, `Changed protected file: ${path}\n`);
+      git(directory, "add", path);
+      git(directory, "commit", "--quiet", "-m", "Change protected package file");
+      assert.throws(() => verifyPlugin(publicManifest.plugins[pluginIndex], directory),
+        /current package bytes differ.*outside mutable documentation/, path);
+    });
+  }
 });
 
 test("target tags identify independently reviewed source commits", () => {

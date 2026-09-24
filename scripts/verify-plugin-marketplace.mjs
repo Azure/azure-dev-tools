@@ -38,6 +38,7 @@ const reviewedSources = {
     version: "0.1.0",
     sha: "23aa6b19a50aca470c759f04f5c657481f6e2d6a",
     receipt: "ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da",
+    receiptScope: "full",
   },
 };
 const canvasReleaseCommit = "482188d87a3a3baf36ae3726412bc93adb310011";
@@ -76,6 +77,25 @@ function releaseTagFor(name, version, root) {
 
 function productPath(name) {
   return `${name === builder ? "plugins" : "canvases"}/${name}`;
+}
+
+function isMutableDocumentation(file) {
+  const basename = file.slice(file.lastIndexOf("/") + 1);
+  if (/^(?:LICENSE|LICENCE|NOTICE|COPYING|THIRD_PARTY_NOTICES)(?:[._-].*)?$/i.test(basename) ||
+      basename === "SHA256SUMS" || basename === "inventory.json") {
+    return false;
+  }
+  return /^README[^/]*$/.test(basename) || /^docs?\//.test(file);
+}
+
+function packageEntries(root, revision, path) {
+  return git(root, "ls-tree", "-r", "-z", `${revision}:${path}`)
+    .split("\0").filter(Boolean);
+}
+
+function protectedEntries(root, revision, path) {
+  return packageEntries(root, revision, path)
+    .filter((entry) => !isMutableDocumentation(entry.slice(entry.indexOf("\t") + 1)));
 }
 
 export function verifyCombinedReleaseCommits(commits, root = repoRoot) {
@@ -158,9 +178,9 @@ export function verifyPlugin({ source, name, version }, root = repoRoot) {
     releaseTag = releaseTagFor(name, version, root);
     verifyTagSource(name, version, releaseTag);
     revision = "HEAD";
-    if (git(root, "rev-parse", `${revision}:${path}`) !==
-        git(root, "rev-parse", `${releaseTag}:${path}`)) {
-      throw new Error(`${name}@${version}: current package bytes differ from ${releaseTag}`);
+    if (protectedEntries(root, revision, path).join("\0") !==
+        protectedEntries(root, releaseTag, path).join("\0")) {
+      throw new Error(`${name}@${version}: current package bytes differ from ${releaseTag} outside mutable documentation`);
     }
   } else if (source?.source === "github" &&
              source.repo === "Azure/azure-dev-tools" && source.path === path &&
@@ -198,7 +218,15 @@ export function verifyPlugin({ source, name, version }, root = repoRoot) {
         }
         const inventory = JSON.parse(git(root, "show", `${releaseTag}:${path}/inventory.json`));
         const entries = sums.toString("utf8").trimEnd().split("\n");
-        const payload = files.filter((file) => file !== "SHA256SUMS" && file !== "inventory.json");
+        const receiptScope = reviewedSources[name].receiptScope;
+        if (receiptScope !== "full" && receiptScope !== "protected") {
+          throw new Error("builder receipt must declare its coverage scope");
+        }
+        const taggedFiles = packageEntries(root, releaseTag, path)
+          .map((entry) => entry.slice(entry.indexOf("\t") + 1));
+        const payload = taggedFiles.filter((file) => file !== "SHA256SUMS" &&
+          file !== "inventory.json" &&
+          (receiptScope === "full" || !isMutableDocumentation(file)));
         if (inventory.plugin !== path || inventory.version !== version ||
             inventory.sha256 !== digest || entries.length !== payload.length ||
             Object.keys(inventory.files ?? {}).length !== payload.length) {

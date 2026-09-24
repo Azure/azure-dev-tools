@@ -14,11 +14,20 @@ Each product uses two tag forms:
   convention writes semantic-version separators as hyphens, for example
   `PRODUCT-v1-2-3-abcdef0`. Never move, delete, or recreate an immutable tag.
 
-A package version identifies one exact set of bytes. Once a version has been
-used for a public candidate or release, different bytes require a new version,
-even when the change is described as a rebuild or correction. The source SHA in
-the immutable tag records the reviewed source revision; it does not permit the
-same version to be reused for different output.
+A package version identifies one exact set of protected payload bytes. Once a
+version has been used for a public candidate or release, different runtime,
+skills, manifests, legal notices or other protected bytes require a new version,
+even when the change is described as a rebuild or correction. `README*` files
+at any package depth and files under package-root `doc/` or `docs/` (including
+images) are mutable on the marketplace branch without a version change or tag
+reset. License, licence, notice and copying files, `SHA256SUMS`, and
+`inventory.json` are never exempt, even under documentation paths. The source
+SHA in the immutable tag records the reviewed source revision; it does not
+permit the same version to be reused for different protected output. Git commit
+and tree IDs still cover all files, including documentation; SHA-256 receipts
+are integrity records, not signatures. Existing full receipts and
+`checksums.json` describe the immutable tagged snapshot, not later
+documentation-only edits on `main`.
 
 When one approved public PR contains multiple independently reviewed products,
 their distinct source-qualified immutable version tags may all point to that
@@ -34,8 +43,10 @@ Release order:
 
 1. Start with content cleared for public distribution in this repository.
 2. Run the package's required tests and release checks.
-3. Produce an inventory of the package files and record their SHA-256 digests
-   in `SHA256SUMS`.
+3. Produce an inventory of protected package files and record their SHA-256
+   digests in `SHA256SUMS`, declaring the receipt scope. Historical full-package
+   receipts remain fully enforced at their immutable tags; never rewrite them
+   to remove documentation or weaken their original coverage.
 4. Obtain explicit approval for the candidate and its customer-facing
    materials.
 5. Merge the approved candidate PR.
@@ -47,7 +58,8 @@ Release order:
 9. Pin the released package in the Awesome Copilot catalog, when applicable.
 
 Never move `PRODUCT-latest` to an unmerged branch, candidate commit, or
-unapproved rebuild.
+unapproved rebuild. A main-only documentation edit does not change immutable
+or latest tag URLs; link to main when pointing users at updated documentation.
 
 ## Customer README verification
 
@@ -64,8 +76,11 @@ Before approval and again after tagging, verify that the README:
 - retains applicable prerequisites, troubleshooting, and safety guidance.
 
 An export may update the README only when the release PR explicitly presents
-the customer-facing change for review. Missing sections, a wrapper-directory
-install URL, a branch URL, or packaging-only prose blocks the release.
+the customer-facing change for review. Later documentation-only edits still
+need normal review for installation accuracy and safety; the checksum
+exception is not approval to remove required customer guidance. Missing
+sections, a wrapper-directory install URL, a branch URL, or packaging-only
+prose blocks the release.
 
 For a skill-only package under `plugins/`, do not apply the nested canvas URL
 and prompt-to-open requirements. Instead require an accurate immutable-tag
