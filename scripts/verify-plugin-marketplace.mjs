@@ -16,7 +16,7 @@ const products = Object.keys(expectedSkills);
 const reviewedSources = {
   "azure-sre-agent": {
     version: "0.2.4",
-    sha: "0ba4899a96f16bc5478b98d9f3692416146b96cb",
+    sha: null,
   },
   "azure-functions-hosted-skills": {
     version: "0.5.1",
@@ -88,6 +88,9 @@ export function verifyMarketplace(manifest) {
 
 export function verifyTagSource(name, version, tag) {
   if (version !== reviewedSources[name]?.version) return;
+  if (!/^[0-9a-f]{40}$/.test(reviewedSources[name].sha ?? "")) {
+    throw new Error(`${name}@${version}: reviewed source SHA is pending the routing hotfix`);
+  }
   const base = `${name}-v${version.replaceAll(".", "-")}-`;
   const suffix = tag.startsWith(base) ? tag.slice(base.length) : "";
   if (!/^[0-9a-f]{7,40}$/.test(suffix) ||

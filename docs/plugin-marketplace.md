@@ -30,7 +30,9 @@ The manifest **must not be merged** until SRE Agent 0.2.4, Functions Hosted
 Skills 0.5.1, and Resources Query 0.1.1 are reviewed, merged, and tagged
 independently. The test fixture in `test/fixtures/marketplace.candidate.json`
 uses earlier public commits only to validate manifest structure; it is not an
-installation catalog.
+installation catalog. SRE Agent's reviewed source revision is pending a
+customer-routing hotfix; its source-tag verification must remain fail-closed
+until the new source squash commit is approved.
 
 Entries use same-repository `canvases/<product>` paths. This is a **mutable
 staging/latest channel**, not an immutable pin: later marketplace checkouts

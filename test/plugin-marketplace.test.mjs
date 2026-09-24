@@ -75,9 +75,9 @@ test("repo-relative source follows current bytes only when they match the releas
 });
 
 test("target tags must identify each independently reviewed source commit", () => {
-  assert.doesNotThrow(() => verifyTagSource(
+  assert.throws(() => verifyTagSource(
     "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-0ba4899a",
-  ));
+  ), /reviewed source SHA is pending/);
   assert.doesNotThrow(() => verifyTagSource(
     "azure-functions-hosted-skills", "0.5.1",
     "azure-functions-hosted-skills-v0-5-1-2bb83548",
@@ -86,10 +86,10 @@ test("target tags must identify each independently reviewed source commit", () =
     "azure-resources-query", "0.1.1", "azure-resources-query-v0-1-1-be9551d7",
   ));
   assert.throws(() => verifyTagSource(
-    "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-deadbeef",
+    "azure-resources-query", "0.1.1", "azure-resources-query-v0-1-1-deadbeef",
   ), /does not identify the reviewed source commit/);
   assert.throws(() => verifyTagSource(
-    "azure-sre-agent", "0.2.4", "azure-sre-agent-v0-2-4-0ba",
+    "azure-resources-query", "0.1.1", "azure-resources-query-v0-1-1-be9",
   ), /does not identify the reviewed source commit/);
   assert.throws(() => verifyMarketplace(modified((m) => {
     m.name = "azure-dev-tools";
