@@ -57,6 +57,32 @@ An export may update the README only when the release PR explicitly presents
 the customer-facing change for review. Missing sections, a wrapper-directory
 install URL, a branch URL, or packaging-only prose blocks the release.
 
+## Public release PR communication
+
+Write the title for a customer, not a release ledger: start with the specific
+problem and name the fix, for example
+`Fix <specific customer blocker> with <Product> <version>`, rather than
+`Release <Product>`. Put these two parts in the PR body, in this order:
+
+1. **Customer change:** State the concrete problem, how this release fixes it,
+   what a user can now do, and what remains unavailable or not yet enabled.
+   Lead with the outcome, not build provenance or approval boilerplate.
+2. **Release facts and handoff:** Keep a short, labeled list of the source
+   revision (full SHA and a commit link if public), the *separate public
+   package* commit and artifact link, version, and a link to `SHA256SUMS` with
+   the relevant file's SHA-256 digest. Link the nested-folder install URL and
+   customer README at the public candidate commit; label them **candidate**,
+   not **latest**. After promotion, add the verified immutable-version and
+   `PRODUCT-latest` URLs. Record commands/checks actually run and their results;
+   mark unrun checks as **not run** with a reason and owner. Name only specific
+   remaining risks or blockers, plus the next owner and action.
+
+If the candidate changes, refresh its links, digests, and check results. Do not
+claim approvals, latest availability, signing, or installer verification that
+have not happened, or list unrelated risks and repeated generic gate language.
+This PR-writing guidance does not replace the release order, verification, or
+two-bullet announcement requirements.
+
 ## Copy/paste team announcement
 
 Every release PR must include a ready-to-send announcement with exactly two
