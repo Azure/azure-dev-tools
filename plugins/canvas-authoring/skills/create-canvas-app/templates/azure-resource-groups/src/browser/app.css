@@ -1,0 +1,8 @@
+main { max-width: 42rem; margin: 0 auto; padding: 24px; }
+h1 { font-size: var(--text-title-large, 26px); line-height: var(--leading-title-large, 32px); }
+p { color: var(--canvas-muted); }
+.source { color: var(--canvas-fg); font-weight: 600; }
+.note { font-size: 12px; }
+li { padding: 8px 0; overflow-wrap: anywhere; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; }
+#error { color: var(--canvas-danger); }
