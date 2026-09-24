@@ -1,0 +1,30 @@
+{
+  "name": "azure-dev-tools",
+  "owner": {
+    "name": "Azure"
+  },
+  "metadata": {
+    "description": "Public staging marketplace for Azure canvas plugins; installs follow the current marketplace checkout.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "azure-sre-agent",
+      "description": "Investigate Azure app incidents and operate Azure SRE Agents with a canvas and skill.",
+      "version": "0.2.4",
+      "source": "canvases/azure-sre-agent"
+    },
+    {
+      "name": "azure-functions-hosted-skills",
+      "description": "Build and run Azure Functions Hosted Skills with a canvas and companion skills.",
+      "version": "0.5.1",
+      "source": "canvases/azure-functions-hosted-skills"
+    },
+    {
+      "name": "azure-resources-query",
+      "description": "Explore Azure resources with read-only queries, a canvas, and a skill.",
+      "version": "0.1.1",
+      "source": "canvases/azure-resources-query"
+    }
+  ]
+}
