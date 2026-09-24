@@ -51,21 +51,16 @@ test("rejects mismatched package version, path, or commit", () => {
   })), /azure-sre-agent@0.2.3/);
 });
 
-test("repo-relative source follows current bytes only when they match the release tag", () => {
-  assert.match(verifyPlugin({
+test("repo-relative source rejects package bytes that drift from their release tag", () => {
+  assert.throws(() => verifyPlugin({
     name: "azure-sre-agent",
     version: "0.2.3",
     source: "canvases/azure-sre-agent",
-  }), /azure-sre-agent-v0-2-3-0e5c4772/);
+  }), /current package bytes differ/);
   assert.throws(() => verifyPlugin({
     name: "azure-resources-query",
     version: "0.1.0",
     source: "canvases/azure-resources-query",
-  }), /exactly one reviewed immutable release tag/);
-  assert.throws(() => verifyPlugin({
-    name: "azure-sre-agent",
-    version: "0.2.4",
-    source: "canvases/azure-sre-agent",
   }), /exactly one reviewed immutable release tag/);
   assert.throws(() => verifyPlugin({
     name: "azure-sre-agent",
