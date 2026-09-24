@@ -85,6 +85,8 @@ installs currently warn that this form may be deprecated in a future release.
 The separate App **Customize → Canvases → Install from gist/URL** path is a
 canvas-only fallback: it installs an extension, not its plugin skills. It is
 not an install path for the skill-only builder. The host's native
-`create-canvas` skill is required for builder workflows; a compatible
-`@microsoft/canvas-toolkit/build` npm release is still unpublished, so do
-not claim an end-to-end customer-ready GUI/build.
+`create-canvas` skill is required for builder workflows. Canonical npm
+publishes `@microsoft/canvas-toolkit@0.1.0-preview.2` with a `/build` runtime
+and types export; generated-app install/build acceptance against the public
+registry remains unverified. Do not claim an end-to-end customer-ready
+GUI/build.

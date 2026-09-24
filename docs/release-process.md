@@ -71,7 +71,8 @@ For a skill-only package under `plugins/`, do not apply the nested canvas URL
 and prompt-to-open requirements. Instead require an accurate immutable-tag
 plugin directory install path, its host-skill prerequisite, one contributed
 skill, and explicit disclosure that no canvas/extension is installed. Do not
-claim a toolkit npm version is compatible with `/build` until verified.
+conflate a toolkit npm `/build` export with verified generated-app
+install/build acceptance.
 
 ## Public release PR communication
 
