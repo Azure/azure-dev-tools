@@ -11,25 +11,22 @@ activation; the companion adds toolkit setup.
 
 - A canvas-capable GitHub Copilot host with its `create-canvas` skill.
 - Node.js 22+ (24 recommended) and npm.
-- A toolkit version with `@microsoft/canvas-toolkit/build`, or a compatible
-  local `.tgz`. See [package setup](README.md#setup-and-exports).
+- Exact `@microsoft/canvas-toolkit@0.1.0-preview.2` from the public npm registry
+  with `@microsoft/canvas-toolkit/build`, or a compatible local `.tgz`. See
+  [package setup](README.md#setup-and-exports).
 - For live reads, Azure CLI 2.61+ on the provider's PATH and permission to
   read resource groups in your chosen subscription.
 
-This is a staging candidate, not a marketplace listing. After the public
-product is approved, merged and tagged, check out the reviewed immutable
-`canvas-authoring-v<version>-<source-sha>` tag of
-`https://github.com/Azure/azure-dev-tools`. From that checkout's root, install
-the complete plugin directory:
+Once a `canvas-authoring` release tag is published in
+[`Azure/azure-dev-tools`](https://github.com/Azure/azure-dev-tools), check out
+that tag and install the complete plugin directory from the checkout's root:
 
 ```sh
 copilot plugin install ./plugins/canvas-authoring
 ```
 
-Do not substitute another repository or an unmerged branch. The public
-marketplace path requires a separately approved onboarding change; see the
-[plugin install guidance](../../../../README.md#install) for its status.
-Neither install path has been verified for this candidate.
+The plugin is not yet listed in the marketplace; see
+[plugin install guidance](../../../../README.md#install) for updates.
 
 If the companion is unavailable, use the host skill and the
 [manual integration map](#without-the-companion) below. If the host skill
@@ -46,9 +43,11 @@ Build it, verify it in the host, and show me how to add a location filter.
 Do not create or modify Azure resources.
 ```
 
-The agent generates the app and connects its copied native entry. You should
-not need to choose libraries or write bundler configuration. The generated
-README explains the connection and source files.
+Choose `--toolkit-version 0.1.0-preview.2` when running the companion's
+[setup command](../../SKILL.md#2-generate-the-source-app). The agent generates
+the app and connects its copied native entry. You should not need to choose
+libraries or write bundler configuration. The generated README explains the
+connection and source files.
 
 ## 3. Build and open it
 
@@ -60,6 +59,10 @@ npm run build
 npm test
 npm run smoke
 ```
+
+If a configured npm feed has not synchronized this version, run
+`npm install --registry=https://registry.npmjs.org/` for that install only;
+do not change global npm configuration.
 
 Keep the lockfile and use `npm ci` for later installs. The Azure starter's
 `smoke` command uses installed Chrome or `CANVAS_BROWSER` with synthetic data;

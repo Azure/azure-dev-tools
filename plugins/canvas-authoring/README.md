@@ -10,34 +10,31 @@ or start a canvas provider.
 - A canvas-capable GitHub Copilot host with its installed `create-canvas` skill.
   The plugin does not replace or install that host skill.
 - Node.js 22+ (24 recommended) and npm.
-- A compatible toolkit version that exports `@microsoft/canvas-toolkit/build`,
-  or a local `.tgz` containing that API.
+- Exact `@microsoft/canvas-toolkit@0.1.0-preview.2` from the public npm registry
+  (with the `/build` export), or an approved compatible local `.tgz`.
 - For live Azure reads: Azure CLI 2.61+ and permission to read the subscription.
 
 ## Install
 
-This is a **staging candidate**, not a released marketplace plugin. It is not
-listed in the `azure-dev-tools` marketplace yet. After this product is reviewed,
-merged and tagged, install the reviewed package from a checkout of its
-immutable `canvas-authoring-v<version>-<source-sha>` tag:
+Once a `canvas-authoring` release tag is published in
+[`Azure/azure-dev-tools`](https://github.com/Azure/azure-dev-tools), check out
+that tag and install the plugin from the checkout's root:
 
 ```sh
 copilot plugin install ./plugins/canvas-authoring
 ```
 
-Marketplace installation requires a **separate**, approved onboarding change.
-Once `canvas-authoring` appears in the public `Azure/azure-dev-tools`
-marketplace, the CLI commands will be:
+The plugin is not yet listed in the `azure-dev-tools` marketplace. Once it
+appears there, install it with:
 
 ```sh
 copilot plugin marketplace add Azure/azure-dev-tools
 copilot plugin install canvas-authoring@azure-dev-tools
 ```
 
-Neither installation path has been verified for this candidate. The bundled
-[toolkit quickstart](skills/create-canvas-app/references/toolkit/quickstart.md)
-uses the same public staging guidance. Installing the plugin adds a skill,
-not a running canvas app.
+See the [toolkit quickstart](skills/create-canvas-app/references/toolkit/quickstart.md)
+for the Azure starter. Installing the plugin adds a skill, not a running
+canvas app.
 
 ## Create an app
 
@@ -53,19 +50,15 @@ The agent creates the native scaffold, generates the source app, and connects
 the copied host entry. You choose the project location and toolkit package.
 For a non-Azure example, ask for the counter starter.
 
-Setup accepts one exact npm version or one local tarball. It does not install
-dependencies or contact Azure, and it refuses existing output directories
-rather than overwriting files. For command-line setup, see the
-[skill instructions](skills/create-canvas-app/SKILL.md).
+Setup accepts one exact npm version or one local tarball. For the published
+package, pass `--toolkit-version 0.1.0-preview.2` to the
+[setup command](skills/create-canvas-app/SKILL.md#2-generate-the-source-app).
+It does not install dependencies or contact Azure, and it refuses existing
+output directories rather than overwriting files.
 
 ## Build and run
 
-No compatible `/build` toolkit version is currently verified on npm:
-`0.1.0-preview.1`, the published version at staging time, does not export
-`/build`. Wait for an exact compatible published version or use an approved
-local toolkit tarball; do not use the preview version for this starter.
-
-Once you have a compatible toolkit source, in the generated app:
+In the generated app using `@microsoft/canvas-toolkit@0.1.0-preview.2`:
 
 ```sh
 npm install
@@ -73,6 +66,10 @@ npm run build
 npm test
 npm run smoke
 ```
+
+If your configured npm feed has not synchronized this version, use
+`npm install --registry=https://registry.npmjs.org/` for that install only;
+do not change global npm configuration.
 
 `smoke` is available in the Azure starter. It uses installed Chrome, or the
 executable specified by `CANVAS_BROWSER`, with labelled synthetic data.

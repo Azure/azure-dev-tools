@@ -1,9 +1,9 @@
 {
   "plugin": "plugins/canvas-authoring",
   "version": "0.1.0",
-  "sha256": "8475a79a8f28534b09115598ebfc507dbde54c080dc3baabf1b87a38f45c39ed",
+  "sha256": "ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da",
   "files": {
-    "README.md": "ad146b25f5fdcf7a2cb280591cff1fec22335d59491ad79cc097af8844c24b39",
+    "README.md": "599e9b2e912cbcddb292b6f448c37fb3584b70dbe707b04085a69648b3b89afa",
     "plugin.json": "e1b6922d92c9760de4afe6606d0abe2a78e579325348a09c3a97b0be009c8af4",
     "skills/create-canvas-app/SKILL.md": "18f308efc70199eaf41fb6f52b85e5b5ceb21c790d91effa0c88f94dfb82d872",
     "skills/create-canvas-app/references/toolkit.md": "b5824155c9558d115a16a503de581cc001194f8414057292ab5cc04e14792ea0",
@@ -16,7 +16,7 @@
     "skills/create-canvas-app/references/toolkit/examples/run-read-only.mjs": "5809596d28119f393975235a44b5784d95a82354eb56d84c2adcbba0f2ab34ce",
     "skills/create-canvas-app/references/toolkit/examples/sdk-client.mjs": "e9adf9797984f6b23f2f7b0807898a551f2ca5ab122f5f644033e705e2efa1cc",
     "skills/create-canvas-app/references/toolkit/provenance.json": "f66a79d5e46e8a472505c45365ceb0782861cd9371649d7ac0c12049244d7174",
-    "skills/create-canvas-app/references/toolkit/quickstart.md": "a5e82e74e0149489adfff9f75d44f58a2153e2110a6f191a203c579487ccf2b0",
+    "skills/create-canvas-app/references/toolkit/quickstart.md": "d3065afc604b25762100051476d28b06b53a4b28acdda5b41869fc12eb2d6b0e",
     "skills/create-canvas-app/scripts/setup-toolkit.mjs": "721004c52d2ce05d5da548d98dbc581da2198840b4e481deed3b0ddad21aad8d",
     "skills/create-canvas-app/templates/azure-resource-groups/README.md": "2e517e47f4f537dfa4362abe8dac4fe754dfd076459231526298997c3e592b2e",
     "skills/create-canvas-app/templates/azure-resource-groups/package.json": "67451cd55721f065083817d8a6cf0e1068b54a828e000cf00627fe25fe44ca6f",
