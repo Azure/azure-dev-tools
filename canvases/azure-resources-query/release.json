@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "format": "plugin",
   "name": "azure-resources-query",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "plugin": {
     "manifest": ".github/plugin/plugin.json",
     "extension": {
@@ -109,9 +109,12 @@
     "extensions/azure-resources-query/assets/toolkit/ui/commands-log.mjs",
     "extensions/azure-resources-query/assets/toolkit/ui/icons.mjs",
     "extensions/azure-resources-query/assets/toolkit/ui/locations.mjs",
+    "extensions/azure-resources-query/assets/toolkit/ui/profiles/coreai-azure.css",
     "extensions/azure-resources-query/assets/toolkit/ui/styles.css",
     "extensions/azure-resources-query/assets/toolkit/ui/subscription-picker.css",
     "extensions/azure-resources-query/assets/toolkit/ui/subscription-picker.mjs",
+    "extensions/azure-resources-query/assets/toolkit/ui/telemetry.mjs",
+    "extensions/azure-resources-query/assets/toolkit/ui/theme.mjs",
     "extensions/azure-resources-query/extension.mjs",
     "extensions/azure-resources-query/ui/client.js",
     "extensions/azure-resources-query/ui/index.html",
@@ -128,8 +131,8 @@
   },
   "build": {
     "esbuild": "0.25.12",
-    "lockSha256": "78f777e2912e4f0c5de5320d01f34e97df4c06c7b31d9bfa6936f729a97f7a64",
-    "inputSha256": "4ca122f8d533f5268cac7e75221a61dc538b530b1bbc58ffe8718c591371bc0e"
+    "lockSha256": "42ef2c44ce0a027c1573fb23678234124f7c1f7c24fcca372dcb755845de5167",
+    "inputSha256": "4c75fb9d750b5e1a9f6efba3800ce98759efc14888ed328d69624e7990e5e34d"
   },
   "dependencies": [
     {
@@ -185,7 +188,7 @@
     {
       "name": "@microsoft/canvas-toolkit",
       "version": "0.1.0",
-      "license": null
+      "license": "MIT"
     },
     {
       "name": "@typespec/ts-http-runtime",
@@ -325,6 +328,14 @@
     },
     {
       "file": "extensions/azure-resources-query/assets/toolkit/ui/subscription-picker.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-resources-query/assets/toolkit/ui/telemetry.mjs",
+      "platform": "browser"
+    },
+    {
+      "file": "extensions/azure-resources-query/assets/toolkit/ui/theme.mjs",
       "platform": "browser"
     },
     {
@@ -722,6 +733,11 @@
       "mime": "text/javascript; charset=utf-8"
     },
     {
+      "file": "extensions/azure-resources-query/assets/toolkit/ui/profiles/coreai-azure.css",
+      "route": "canvas-ui/profiles/coreai-azure.css",
+      "mime": "text/css; charset=utf-8"
+    },
+    {
       "file": "extensions/azure-resources-query/assets/toolkit/ui/styles.css",
       "route": "canvas-ui/styles.css",
       "mime": "text/css; charset=utf-8"
@@ -734,6 +750,16 @@
     {
       "file": "extensions/azure-resources-query/assets/toolkit/ui/subscription-picker.mjs",
       "route": "canvas-ui/subscription-picker.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-resources-query/assets/toolkit/ui/telemetry.mjs",
+      "route": "canvas-ui/telemetry.mjs",
+      "mime": "text/javascript; charset=utf-8"
+    },
+    {
+      "file": "extensions/azure-resources-query/assets/toolkit/ui/theme.mjs",
+      "route": "canvas-ui/theme.mjs",
       "mime": "text/javascript; charset=utf-8"
     },
     {
