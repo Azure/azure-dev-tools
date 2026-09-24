@@ -34,14 +34,16 @@ and a canvas-only URL fallback; that fallback does not install companion skills.
 
 ## Build canvas apps
 
-The separate [`canvas-authoring` candidate](https://github.com/Azure/azure-dev-tools/tree/f0aeab8cbf7d64d0070045ee6c07dc083db01cd4/plugins/canvas-authoring) is a
+The separate [`canvas-authoring` package](https://github.com/Azure/azure-dev-tools/tree/5bea7baefed06b627a279da2dcc78331289598ef/plugins/canvas-authoring) is a
 **skill-only companion**, not a fourth canvas in the catalog above. Its
 `create-canvas-app` skill requires the host's installed native `create-canvas`
 skill to scaffold an app. Canonical npm publishes
 `@microsoft/canvas-toolkit@0.1.0-preview.2` with a `/build` runtime and types
-export; acceptance by a generated app has not yet been verified. The plugin
-is a public staging candidate pending its product merge and immutable release
-tag, so marketplace or App installation is not yet customer-ready.
+export. The Azure and counter starters passed isolated generated-app builds
+and tests with the public registry; native-host and marketplace installation
+remain unverified. The public product has merged, but its immutable release
+tag is still pending, so marketplace or App installation is not yet
+customer-ready.
 
 ## Get involved
 

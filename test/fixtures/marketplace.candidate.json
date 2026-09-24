@@ -40,7 +40,7 @@
       "source": {
         "source": "github",
         "repo": "Azure/azure-dev-tools",
-        "sha": "f0aeab8cbf7d64d0070045ee6c07dc083db01cd4",
+        "sha": "5bea7baefed06b627a279da2dcc78331289598ef",
         "path": "plugins/canvas-authoring"
       }
     }

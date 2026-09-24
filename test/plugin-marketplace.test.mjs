@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,8 +17,9 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/marketplace.candidate.json", import.meta.url)));
 const publicManifest = JSON.parse(readFileSync(new URL("../.github/plugin/marketplace.json", import.meta.url)));
-const candidate = "f0aeab8cbf7d64d0070045ee6c07dc083db01cd4";
+const candidate = "5bea7baefed06b627a279da2dcc78331289598ef";
 const tag = "canvas-authoring-v0-1-0-23aa6b1";
+const receipt = "ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -57,6 +59,21 @@ function changed(manifest, update) {
   update(clone);
   return clone;
 }
+
+test("merged 28-file builder package has the reviewed public receipt", () => {
+  const path = "plugins/canvas-authoring";
+  const files = git(root, "ls-tree", "-r", "--name-only", candidate, "--", path)
+    .split("\n").filter(Boolean);
+  const sums = execFileSync("git", ["show", `${candidate}:${path}/SHA256SUMS`], { cwd: root });
+  const inventory = JSON.parse(git(root, "show", `${candidate}:${path}/inventory.json`));
+  assert.equal(files.length, 28);
+  assert.equal(git(root, "rev-parse", `${candidate}:${path}`),
+    git(root, "rev-parse", `HEAD:${path}`));
+  assert.equal(createHash("sha256").update(sums).digest("hex"), receipt);
+  assert.equal(inventory.sha256, receipt);
+  assert.equal(Object.keys(inventory.files).length, 26);
+  assert.equal(fixture.plugins[3].source.sha, candidate);
+});
 
 test("fixture accepts three extension-bearing plugins plus one skill-only builder", () => {
   withFixture((directory, manifest) => {
@@ -152,6 +169,8 @@ test("synthetic local-only tags qualify candidate bytes but cannot override prot
     git(directory, "checkout", "--quiet", "-b", "synthetic-local-product", candidate);
     git(directory, "tag", tag);
     git(directory, "tag", "canvas-authoring-latest");
+    git(directory, "update-ref", "refs/remotes/origin/main",
+      "3c85649077b4350e4b1c81df3328233d1b45877c");
     assert.throws(() => verifyMarketplace(publicManifest, { root: directory }),
       /product commit merged into public origin\/main/);
     git(directory, "update-ref", "refs/remotes/origin/main", candidate);
@@ -186,7 +205,9 @@ test("synthetic local-only tags qualify candidate bytes but cannot override prot
     git(directory, "tag", tag);
     git(directory, "tag", "canvas-authoring-latest");
     git(directory, "update-ref", "refs/remotes/origin/main", "HEAD");
-    assert.throws(() => verifyMarketplace(publicManifest, { root: directory }),
+    assert.throws(() => verifyPlugin(publicManifest.plugins[3], directory),
       /tagged package bytes differ from SHA256SUMS/);
+    assert.throws(() => verifyBuilderReleaseCommit(git(directory, "rev-parse", "HEAD"), directory),
+      /reviewed public product merge commit/);
   });
 });
