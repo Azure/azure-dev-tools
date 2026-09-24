@@ -4,11 +4,15 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const products = [
-  "azure-sre-agent",
-  "azure-functions-hosted-skills",
-  "azure-resources-query",
-];
+const expectedSkills = {
+  "azure-sre-agent": ["./skills/azure-sre-agent-canvas/"],
+  "azure-functions-hosted-skills": [
+    "./skills/azure-functions-hosted-skills-canvas/",
+    "./skills/azure-functions-hosted-skills-github-daily-digest/",
+  ],
+  "azure-resources-query": ["./skills/azure-resources-query/"],
+};
+const products = Object.keys(expectedSkills);
 
 function git(...args) {
   return execFileSync("git", args, {
@@ -70,7 +74,9 @@ export function verifyPlugin({ source, name, version }) {
     requireFile(revision, `${path}/extensions/${name}/extension.mjs`);
     if (packageManifest.name !== name || packageManifest.version !== version ||
         packageManifest.extensions !== "./extensions" ||
-        !Array.isArray(packageManifest.skills) || packageManifest.skills.length === 0) {
+        !Array.isArray(packageManifest.skills) ||
+        packageManifest.skills.length !== expectedSkills[name].length ||
+        expectedSkills[name].some((skill) => !packageManifest.skills.includes(skill))) {
       throw new Error("plugin metadata, extension, or skills differ from marketplace entry");
     }
     for (const skill of packageManifest.skills) {
