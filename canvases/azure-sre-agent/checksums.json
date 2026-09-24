@@ -1,5 +1,5 @@
 {
-  ".github/plugin/plugin.json": "0582f4e06f5b7debd32f489b352252b47eb31136286fef568983825504b987e4",
+  ".github/plugin/plugin.json": "e747322e0c2daa6741c4f541c5cc81b73b812efb4e0cd8ad1774f250d96af10c",
   "extensions/azure-sre-agent/assets/azure-sre-agent-color.svg": "2b59369cf304fea0810488558af67e9e58ba00b02da034c1bef213ee06968405",
   "extensions/azure-sre-agent/assets/toolkit/icons/Subscription.svg": "df78239a16fa8b0d2934b317100e337cac2e49f1ea8d83e55ad1abdf8fa6f136",
   "extensions/azure-sre-agent/assets/toolkit/ui.mjs": "437ee24f11ecabf86411530168c6b4f10608ebe19c9f168cae9711ef163b4498",
@@ -15,10 +15,10 @@
   "extensions/azure-sre-agent/assets/toolkit/ui/telemetry.mjs": "0fef218c4cf6a172a11a5c945e0323eda6859fbada813d48f43c18b7e4c318a8",
   "extensions/azure-sre-agent/assets/toolkit/ui/theme.mjs": "2fd9f29c349f23d7518568d6c087f679c241b42e48780508785965d4c213d03b",
   "extensions/azure-sre-agent/extension.mjs": "21fcd06339ee430648f89e5b698d6ea57617c90527a94f67192dd74dc581c63f",
-  "extensions/azure-sre-agent/studio-package.json": "5b838edcb696826276e86af7c4101aac1d112bc7ac9764c3ed755ad2ba3df8f6",
-  "package.json": "d5cc109ddbb4f1723c371fd91a851eb8c9c8171edee5850c38e3aabc7d8c7bd3",
-  "README.md": "f24f0c55a5ec64d53d72a66e52696fbefb71c33752db27a995ae39a46ce54152",
-  "release.json": "f60d2035def88d8edee2e51e236f146b9a0ae8e53aaf8776795114c0d0c607f1",
-  "skills/azure-sre-agent-canvas/SKILL.md": "c5383237d9b360186963ec17b296dced0926b1f91cd907234579a9d744985503",
+  "extensions/azure-sre-agent/studio-package.json": "59c3021ffe8fc3700b091cb6d3a9fb8bf88cc4ec161d71cf2723610c9085d42f",
+  "package.json": "2246e929d52cd9393f9579102f2815490b3279009d200faa70e08c7e2c79b60d",
+  "README.md": "601f23adac3047c9753eb8e5a5c53417bb776458881a99450efeb2c947238989",
+  "release.json": "0859e063e4dcf85a07de529d7803a251cab4bff6ba0193b27bf17274c5224f86",
+  "skills/azure-sre-agent-canvas/SKILL.md": "a9ef645d24bbb55e440c57826645c696aef74996e1fda4a781c85c74ccde108d",
   "THIRD_PARTY_NOTICES.txt": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 }
