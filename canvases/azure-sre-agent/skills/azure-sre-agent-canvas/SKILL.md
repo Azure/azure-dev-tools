@@ -27,14 +27,24 @@ If `open_canvas` reports that the canvas is not registered or unavailable:
 Preserve existing installations and user state. Use a host-declared `extensionId`
 when multiple providers are available; never guess a provider.
 
-If the retry still fails, tell the user to reinstall from the public nested
-extension URL, then stop:
+If the retry still fails, give the user these installation paths in order, then stop:
 
-<https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent>
+1. If **Azure SRE Agent** is listed in the public **Azure Dev Tools** marketplace,
+   use **Customize → Plugins → marketplace gear** to add
+   `Azure/azure-dev-tools` (marketplace ID `azure-dev-tools`) and install
+   **Azure SRE Agent**. The full plugin includes this routing skill and the canvas.
+2. If it is not listed, follow **Optional: pin the full plugin to an exact
+   release** in the [public Azure SRE Agent installation instructions](https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent#optional-pin-the-full-plugin-to-an-exact-release).
+   Use this path only when those instructions and a matching versioned tag are
+   published; do not substitute the movable `latest` tag for a versioned release.
+3. If the full plugin is unavailable, the [canvas-only installation URL](https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent)
+   is a last fallback, when published. It does **not** install this routing
+   skill; open **Azure SRE Agent** from installed canvases if the prompt does
+   not route. If none of these public paths is available, report that and stop.
 
-Then tell them to reload extensions, start a fresh chat or child session, and
-retry the same prompt. Do not silently fall back to an unrelated generic
-diagnostics workflow.
+After installation, tell them to reload extensions, fully quit and reopen
+GitHub Copilot, start a fresh chat or child session, and retry the same prompt.
+Do not silently fall back to an unrelated generic diagnostics workflow.
 
 ## Prerequisites
 

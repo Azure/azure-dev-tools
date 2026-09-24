@@ -10,6 +10,7 @@ function createSubscriptionPicker({
   document = globalThis.document,
   id,
   trigger,
+  triggerVariant = "toolbar",
   mount = document?.body,
   selectionMode = "multiple",
   singleGroup = false,
@@ -21,6 +22,7 @@ function createSubscriptionPicker({
   if (!document?.createElement || !mount?.append) throw new TypeError("A document and dialog mount are required.");
   if (typeof id !== "string" || !id || /\s/.test(id)) throw new TypeError("A unique, nonempty id without whitespace is required.");
   if (!["multiple", "single"].includes(selectionMode)) throw new TypeError("selectionMode must be multiple or single.");
+  if (!["toolbar", "field"].includes(triggerVariant)) throw new TypeError("triggerVariant must be toolbar or field.");
   if (typeof onApply !== "function") throw new TypeError("onApply is required.");
   if (onRefresh !== void 0 && typeof onRefresh !== "function") throw new TypeError("onRefresh must be a function.");
   if (trigger && (trigger.tagName !== "BUTTON" || trigger.ownerDocument !== document)) {
@@ -35,9 +37,10 @@ function createSubscriptionPicker({
   ids.add(id);
   const ownsTrigger = !trigger;
   trigger ??= document.createElement("button");
+  if (ownsTrigger) trigger.setAttribute("data-metric-id", "subscription-picker-open");
   const originalChildren = [...trigger.childNodes];
   const originalAttributes = new Map(
-    ["type", "aria-haspopup", "aria-controls", "aria-expanded", "aria-label", "title", "disabled"].map((name) => [name, trigger.getAttribute(name)])
+    ["type", "aria-haspopup", "aria-controls", "aria-expanded", "aria-label", "title", "disabled", "data-trigger-variant"].map((name) => [name, trigger.getAttribute(name)])
   );
   const hadTriggerClass = trigger.classList.contains(`${prefix}-trigger`);
   const listeners = [];
@@ -75,6 +78,7 @@ function createSubscriptionPicker({
   }
   function button(suffix, text, style = "secondary") {
     const node = identified("button", suffix, text);
+    node.setAttribute("data-metric-id", `subscription-picker-${suffix}`);
     node.classList.add(`${prefix}-button`, `${prefix}-${style}`);
     node.type = "button";
     return node;
@@ -145,6 +149,7 @@ function createSubscriptionPicker({
   const selection = identified("div", "selection");
   const searchBox = element("div", "search-box");
   const search = identified("input", "search");
+  search.setAttribute("data-metric-id", "subscription-picker-search");
   search.type = "search";
   search.placeholder = "Search by name or ID...";
   search.autocomplete = "off";
@@ -180,6 +185,7 @@ function createSubscriptionPicker({
   dialog.append(header, defaultCard, selection, error, defaultActions, actions);
   mount.append(dialog);
   trigger.classList.add(`${prefix}-trigger`);
+  trigger.setAttribute("data-trigger-variant", triggerVariant);
   trigger.type = "button";
   trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-controls", dialog.id);
@@ -188,7 +194,8 @@ function createSubscriptionPicker({
   const summary = element("span", "summary");
   pill.append(icon("pill-icon", 14), summary);
   const change = element("span", "change");
-  change.append(element("span", "change-label", "Change"), createIcon("chevron-down", document));
+  if (triggerVariant === "toolbar") change.append(element("span", "change-label", "Change"));
+  change.append(createIcon("chevron-down", document));
   trigger.replaceChildren(pill, change);
   function defaultSubscription() {
     const candidates = subscriptions.filter((item) => item.isDefault && !item.disabled);
@@ -267,6 +274,7 @@ function createSubscriptionPicker({
   function subscriptionRow(item) {
     const row = element("label", "option");
     const input = element("input", "input");
+    input.setAttribute("data-metric-id", "subscription-picker-item");
     const rowId = stableId(itemIds, item.key, "item");
     input.id = rowId;
     input.type = selectionMode === "single" ? "radio" : "checkbox";
