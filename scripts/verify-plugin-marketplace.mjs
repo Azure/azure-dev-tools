@@ -104,7 +104,9 @@ function packageEntries(root, revision, path) {
 function protectedEntries(root, revision, path, runtimeFiles) {
   return packageEntries(root, revision, path)
     .filter((entry) => {
-      const [metadata, file] = entry.split("\t");
+      const separator = entry.indexOf("\t");
+      const metadata = entry.slice(0, separator);
+      const file = entry.slice(separator + 1);
       return !isMutableDocumentation(file, metadata, runtimeFiles);
     });
 }
@@ -262,7 +264,9 @@ export function verifyPlugin({ source, name, version }, root = repoRoot) {
         }
         const payload = packageEntries(root, releaseTag, path)
           .filter((entry) => {
-            const [metadata, file] = entry.split("\t");
+            const separator = entry.indexOf("\t");
+            const metadata = entry.slice(0, separator);
+            const file = entry.slice(separator + 1);
             return file !== "SHA256SUMS" && file !== "inventory.json" &&
               (receiptScope === "full" ||
                !isMutableDocumentation(file, metadata, new Set()));
