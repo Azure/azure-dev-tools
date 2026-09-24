@@ -94,6 +94,9 @@ export function verifyBuilderReleaseCommit(commit, root = repoRoot) {
   if (!changed.length || changed.some((path) => !path.startsWith("plugins/canvas-authoring/"))) {
     throw new Error("Builder product commit changed protected files outside plugins/canvas-authoring/");
   }
+  if (!isAncestor(root, commit, "refs/remotes/origin/main")) {
+    throw new Error("Builder tag must point to a product commit merged into public origin/main");
+  }
 }
 
 export function verifyMarketplace(manifest, { root = repoRoot, fixture = false } = {}) {

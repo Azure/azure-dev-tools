@@ -152,6 +152,9 @@ test("synthetic local-only tags qualify candidate bytes but cannot override prot
     git(directory, "checkout", "--quiet", "-b", "synthetic-local-product", candidate);
     git(directory, "tag", tag);
     git(directory, "tag", "canvas-authoring-latest");
+    assert.throws(() => verifyMarketplace(publicManifest, { root: directory }),
+      /product commit merged into public origin\/main/);
+    git(directory, "update-ref", "refs/remotes/origin/main", candidate);
     const results = verifyMarketplace(publicManifest, { root: directory });
     assert.equal(results.length, 4);
     assert.match(results[3], new RegExp(`${tag}$`));
@@ -182,6 +185,7 @@ test("synthetic local-only tags qualify candidate bytes but cannot override prot
     git(directory, "commit", "--quiet", "-m", "Synthetic stale integrity receipt");
     git(directory, "tag", tag);
     git(directory, "tag", "canvas-authoring-latest");
+    git(directory, "update-ref", "refs/remotes/origin/main", "HEAD");
     assert.throws(() => verifyMarketplace(publicManifest, { root: directory }),
       /tagged package bytes differ from SHA256SUMS/);
   });

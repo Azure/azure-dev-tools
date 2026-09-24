@@ -53,10 +53,12 @@ requires a unique version tag per product and current package trees to match
 tagged bytes, checks each tag's source fragment against its independently reviewed
 full source SHA, and checks manifest shape and skill count. The first three
 tags must point to the exact reviewed release commit. The builder tag must
-point to a later descendant of public staging main, introduce only files under
+point to a later product commit merged into public `origin/main`, introduce
+only files under
 `plugins/canvas-authoring/` relative to that main, have the reviewed
 `SHA256SUMS` receipt, per-file digests and inventory, and match
-`canvas-authoring-latest`. The marketplace
+`canvas-authoring-latest`. Fetch current `origin/main` and release tags before
+verification. The marketplace
 branch must include that commit. Synthetic local-only tags in temporary clones
 exercise the pretag verifier; they are not releases and must never be pushed.
 Build-input provenance remains a separate release PR review fact; tag names
