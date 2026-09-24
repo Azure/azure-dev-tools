@@ -35,16 +35,18 @@ copilot skill list
 
 The three canvas products (SRE Agent 0.2.4, Functions Hosted Skills 0.5.1,
 and Resources Query 0.1.1) share reviewed public release commit `482188d`.
-The fourth product, `canvas-authoring` 0.1.0, must first be reviewed and
-merged separately from the public staging product draft. Only then can its
+The fourth product, `canvas-authoring` 0.1.0, merged separately at public
+product commit `5bea7ba`; its final updated head still needs human release
+attestation. Its
 immutable `canvas-authoring-v0-1-0-23aa6b1` tag and
-`canvas-authoring-latest` point to that later product commit. **Neither builder
-tag currently exists; this marketplace draft must not merge.** Its reviewed
+`canvas-authoring-latest` must both point to that product commit. **Neither
+builder tag currently exists; the merged marketplace is not a release or
+install-ready.** Its merged
 public `SHA256SUMS` digest is
-`8475a79a8f28534b09115598ebfc507dbde54c080dc3baabf1b87a38f45c39ed`.
-The [public candidate package](https://github.com/Azure/azure-dev-tools/tree/f0aeab8cbf7d64d0070045ee6c07dc083db01cd4/plugins/canvas-authoring)
-is not an approved install target. The candidate fixture is static test data,
-not an installation catalog.
+`ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da`.
+The [merged public package](https://github.com/Azure/azure-dev-tools/tree/5bea7baefed06b627a279da2dcc78331289598ef/plugins/canvas-authoring)
+is not an approved marketplace install target. The candidate fixture is static
+test data, not an installation catalog.
 
 Entries use same-repository `canvases/<product>` paths for canvas packages and
 `plugins/canvas-authoring` for the skill-only builder. This is a **mutable
@@ -57,9 +59,9 @@ requires a unique version tag per product and current package trees to match
 tagged bytes, checks each tag's source fragment against its independently reviewed
 full source SHA, and checks manifest shape and skill count. The first three
 tags must point to the exact reviewed release commit. The builder tag must
-point to a later product commit merged into public `origin/main`, introduce
-only files under
-`plugins/canvas-authoring/` relative to that main, have the reviewed
+point to the exact `5bea7ba` product commit merged into public `origin/main`,
+introduce only files under `plugins/canvas-authoring/` relative to staging
+main, have the merged
 `SHA256SUMS` receipt, per-file digests and inventory, and match
 `canvas-authoring-latest`. Fetch current `origin/main` and release tags before
 verification. The marketplace
@@ -91,6 +93,7 @@ canvas-only fallback: it installs an extension, not its plugin skills. It is
 not an install path for the skill-only builder. The host's native
 `create-canvas` skill is required for builder workflows. Canonical npm
 publishes `@microsoft/canvas-toolkit@0.1.0-preview.2` with a `/build` runtime
-and types export; generated-app install/build acceptance against the public
-registry remains unverified. Do not claim an end-to-end customer-ready
-GUI/build.
+and types export. The product owner reports isolated Azure and counter
+generated-app build/tests passing against the public registry; native-host
+activation and marketplace/App plugin installation remain unverified. Do not
+claim an end-to-end customer-ready GUI/build.

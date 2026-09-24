@@ -37,11 +37,12 @@ const reviewedSources = {
   "canvas-authoring": {
     version: "0.1.0",
     sha: "23aa6b19a50aca470c759f04f5c657481f6e2d6a",
-    receipt: "8475a79a8f28534b09115598ebfc507dbde54c080dc3baabf1b87a38f45c39ed",
+    receipt: "ae94421b2b6db7f5252b9f5b2099d2a3ff185ff2c82a8d0ebfe9f35695a0e2da",
   },
 };
 const canvasReleaseCommit = "482188d87a3a3baf36ae3726412bc93adb310011";
 const marketplaceBase = "3c85649077b4350e4b1c81df3328233d1b45877c";
+const builderReleaseCommit = "5bea7baefed06b627a279da2dcc78331289598ef";
 
 function git(root, ...args) {
   return execFileSync("git", args, {
@@ -93,6 +94,9 @@ export function verifyBuilderReleaseCommit(commit, root = repoRoot) {
     .split("\n").filter(Boolean);
   if (!changed.length || changed.some((path) => !path.startsWith("plugins/canvas-authoring/"))) {
     throw new Error("Builder product commit changed protected files outside plugins/canvas-authoring/");
+  }
+  if (commit !== builderReleaseCommit) {
+    throw new Error("Builder tag must point to the reviewed public product merge commit");
   }
   if (!isAncestor(root, commit, "refs/remotes/origin/main")) {
     throw new Error("Builder tag must point to a product commit merged into public origin/main");
