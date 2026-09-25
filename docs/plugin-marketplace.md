@@ -75,7 +75,9 @@ For a new canvas product or new version of an existing canvas, approve its
 source and exported protected bytes **before** the public package PR. A
 separate reviewed pins-only PR must first add its full source commit SHA,
 version, contributed skill paths, protected-scope `SHA256SUMS` and
-`inventory.json` digests, and the packaged runtime logo path and digest to
+`inventory.json` digests, the packaged square plugin
+`logoPath: "assets/preview.png"` and `logoSha256`, and the distinct
+README landscape `heroPath: "docs/preview.png"` and `heroSha256` to
 `.github/plugin/marketplace-candidate-pins.json` on public `main`. Verify
 those values against the independently reviewed source export; a source SHA
 written only by the package PR is not independent evidence. Do not include
@@ -84,17 +86,25 @@ base pins. Include a package-root `SHA256SUMS` covering every protected file
 except itself and `inventory.json`, and an `inventory.json` with `plugin`,
 `version`, full `sourceSha`, `scope: "protected"`, `sha256` of the receipt,
 and a `files` digest map. The exported package's `release.json` file list
-and `checksums.json` must cover its actual contents, including the README
-and logo. The customer README must retain the nested latest install URL,
-latest README link, open prompt, numbered quickstart, prerequisites,
-troubleshooting and safety guidance; its hero image must link to the pinned
-logo inside the extension.
+and `checksums.json` must cover its actual contents, including the README,
+logo, and hero. Its `.github/plugin/plugin.json` logo declaration and
+`release.plugin.preview.file` must both point to the square logo; the
+extension directory is `com.github.copilot/extensions/<product>`.
+The customer README must embed the independently pinned landscape hero
+and contain marketplace-first installation guidance and an actionable
+**Try it**, **Quickstart**, or **First run** section with the open prompt.
+Linked packaged guidance must cover applicable prerequisites,
+troubleshooting and safety; reviewers inspect the actual UI labels and
+remaining customer guidance. A pretag README need not invent future
+`-latest` URLs or release evidence; verify actual install/README URLs
+separately after approval and tagging.
 
 On the package PR, CI runs
 `node scripts/verify-plugin-marketplace.mjs --candidate <PR-base-full-SHA>`.
 It first verifies the four historical products at the base, then checks
 unchanged packages against their tags and new or new-version packages against
-the base-approved source/skills/receipt/logo pins and all current package bytes.
+the base-approved source/skills/receipt/square-logo/landscape-hero pins and
+all current package bytes.
 This is not a skip of missing tags: an unpinned, stale-version, incomplete,
 or self-pinned candidate fails. New canvases remain absent from the public
 catalog until their individually reviewed pins and package PR qualify. After

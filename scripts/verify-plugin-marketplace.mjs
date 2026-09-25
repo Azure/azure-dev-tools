@@ -81,7 +81,8 @@ function productPath(name) {
 
 function isMutableDocumentation(file, metadata, runtimeFiles) {
   const basename = file.slice(file.lastIndexOf("/") + 1);
-  if (!metadata.startsWith("100644 blob ") || file.startsWith("extensions/") ||
+  if (!metadata.startsWith("100644 blob ") ||
+      file.startsWith("extensions/") || file.startsWith("com.github.copilot/extensions/") ||
       (/(?:^|\/)docs?\//.test(file) && !/^docs?\//.test(file)) ||
       runtimeFiles.has(file) ||
       /^(?:LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT|AUTHORS|ATTRIBUTION|PATENTS|THIRD[-_]?PARTY[-_]?NOTICES)(?:[._-].*)?$/i.test(basename) ||
@@ -188,8 +189,8 @@ export function verifyMarketplace(manifest, { root = repoRoot, fixture = false, 
       plugin.version !== reviewedSources[name]?.version);
     const result = verifyPlugin(plugin, root, revision, pin);
     if (pin) {
-      if (revision === "HEAD") candidatePackage(plugin, pin, root);
       const tag = releaseTagFor(plugin.name, plugin.version, root);
+      candidatePackage(plugin, pin, root, tag);
       const commit = git(root, "rev-parse", `${tag}^{commit}`);
       const previousPath = `${productPath(plugin.name)}/.github/plugin/plugin.json`;
       const previous = git(root, "ls-tree", "--name-only", `${commit}^`, "--", previousPath)
@@ -328,8 +329,12 @@ export function verifyPlugin({ source, name, version }, root = repoRoot, current
         }
       }
     } else {
-      requireFile(root, revision, `${path}/extensions/${name}/extension.mjs`);
-      if (packageManifest.extensions !== "./extensions" ||
+      const extensionDir = sourcePin
+        ? `com.github.copilot/extensions/${name}` : `extensions/${name}`;
+      requireFile(root, revision, `${path}/${extensionDir}/extension.mjs`);
+      if ((sourcePin
+        ? packageManifest.extensions?.["com.github.copilot"]?.logo !== sourcePin.logoPath
+        : packageManifest.extensions !== "./extensions") ||
           !Array.isArray(packageManifest.skills) ||
           packageManifest.skills.length !== skills.length ||
           skills.some((skill) => !packageManifest.skills.includes(skill))) {
@@ -359,13 +364,14 @@ function pinnedCandidates(root, revision) {
         !/^[0-9a-f]{40}$/.test(pin.sourceSha ?? "") ||
         !/^[0-9a-f]{64}$/.test(pin.receiptSha256 ?? "") ||
         !/^[0-9a-f]{64}$/.test(pin.inventorySha256 ?? "") ||
+        pin.logoPath !== "assets/preview.png" ||
+        !/^[0-9a-f]{64}$/.test(pin.logoSha256 ?? "") ||
         !/^[0-9a-f]{64}$/.test(pin.heroSha256 ?? "") ||
         !Array.isArray(pin.skills) || pin.skills.length === 0 ||
         new Set(pin.skills).size !== pin.skills.length ||
         pin.skills.some((skill) => !/^\.[/]skills[/][a-z0-9-]+[/]$/.test(skill)) ||
-        !new RegExp(`^extensions/${pin.name}/assets/[^/]+\\.(?:png|jpe?g|gif|webp|avif)$`)
-          .test(pin.heroPath ?? ""))) {
-    throw new Error("Candidate pins must identify distinct canvas versions, full source SHAs, and receipt digests");
+        !/^docs\/[a-zA-Z0-9-]+\.(?:png|jpe?g|gif|webp|avif)$/.test(pin.heroPath ?? ""))) {
+    throw new Error("Candidate pins must identify distinct canvas versions, full source SHAs, and separate logo/hero digests");
   }
   return pins.products;
 }
@@ -377,7 +383,7 @@ function newerVersion(next, previous) {
     nextParts.slice(0, index).every((value, earlier) => value === previousParts[earlier]));
 }
 
-function candidatePackage(plugin, pin, root) {
+function candidatePackage(plugin, pin, root, revision = "HEAD") {
   const { name, version } = plugin;
   const path = productPath(name);
   if (plugin.source !== path || version !== pin.version) {
@@ -385,19 +391,19 @@ function candidatePackage(plugin, pin, root) {
   }
   verifyPlugin({ ...plugin, source: {
     source: "github", repo: "Azure/azure-dev-tools", path,
-    sha: git(root, "rev-parse", "HEAD"),
-  } }, root, "HEAD", pin);
-  const entries = packageEntries(root, "HEAD", path);
+    sha: git(root, "rev-parse", `${revision}^{commit}`),
+  } }, root, revision, pin);
+  const entries = packageEntries(root, revision, path);
   const files = entries.map((entry) => entry.slice(entry.indexOf("\t") + 1));
   if (entries.some((entry) => !/^100(?:644|755) blob /.test(entry))) {
     throw new Error(`${name}: candidate package contains a symlink, submodule, or nonregular file`);
   }
   const required = ["README.md", "release.json", "checksums.json", "SHA256SUMS", "inventory.json",
-    "package.json", pin.heroPath];
+    "package.json", pin.logoPath, pin.heroPath];
   if (required.some((file) => !files.includes(file))) {
     throw new Error(`${name}: candidate package is missing a release artifact`);
   }
-  const read = (file) => execFileSync("git", ["show", `HEAD:${path}/${file}`], {
+  const read = (file) => execFileSync("git", ["show", `${revision}:${path}/${file}`], {
     cwd: root, stdio: ["ignore", "pipe", "pipe"],
   });
   const release = JSON.parse(read("release.json"));
@@ -406,6 +412,14 @@ function candidatePackage(plugin, pin, root) {
   const inventoryBytes = read("inventory.json");
   const inventory = JSON.parse(inventoryBytes);
   const receiptDigest = sha256(sums);
+  if (sha256(read(pin.logoPath)) !== pin.logoSha256) {
+    throw new Error(`${name}: candidate plugin logo differs from the approved pin`);
+  }
+  const readme = read("README.md").toString("utf8");
+  if (sha256(read(pin.heroPath)) !== pin.heroSha256 ||
+      !readme.includes(`](${pin.heroPath})`)) {
+    throw new Error(`${name}: candidate README hero image differs from the approved pin`);
+  }
   if (receiptDigest !== pin.receiptSha256 ||
       sha256(inventoryBytes) !== pin.inventorySha256 ||
       inventory.plugin !== path || inventory.version !== version ||
@@ -416,8 +430,12 @@ function candidatePackage(plugin, pin, root) {
   const payload = files.filter((file) =>
     !["release.json", "checksums.json", "SHA256SUMS", "inventory.json"].includes(file));
   const packageJson = JSON.parse(read("package.json"));
+  const extensionDir = `com.github.copilot/extensions/${name}`;
   if (release.name !== name || release.version !== version ||
       packageJson.name !== name || packageJson.version !== version ||
+      release.plugin?.preview?.file !== pin.logoPath ||
+      release.plugin?.extension?.directory !== extensionDir ||
+      release.plugin?.extension?.entry !== `${extensionDir}/extension.mjs` ||
       !Array.isArray(release.files) || new Set(release.files).size !== payload.length ||
       payload.some((file) => !release.files.includes(file))) {
     throw new Error(`${name}: candidate release inventory does not cover the package`);
@@ -427,8 +445,8 @@ function candidatePackage(plugin, pin, root) {
       checked.some((file) => checksums[file] !== sha256(read(file)))) {
     throw new Error(`${name}: candidate checksums do not match package bytes`);
   }
-  const runtimeFiles = taggedRuntimeFiles(root, "HEAD", path, name);
-  const protectedFiles = protectedEntries(root, "HEAD", path, runtimeFiles)
+  const runtimeFiles = taggedRuntimeFiles(root, revision, path, name);
+  const protectedFiles = protectedEntries(root, revision, path, runtimeFiles)
     .map((entry) => entry.slice(entry.indexOf("\t") + 1))
     .filter((file) => file !== "SHA256SUMS" && file !== "inventory.json");
   const lines = sums.toString("utf8").trimEnd().split("\n");
@@ -442,20 +460,16 @@ function candidatePackage(plugin, pin, root) {
   }
   if (received.size !== protectedFiles.length ||
       Object.keys(inventory.files ?? {}).length !== protectedFiles.length ||
-      !protectedFiles.includes(pin.heroPath) ||
-      sha256(read(pin.heroPath)) !== pin.heroSha256 ||
+      !protectedFiles.includes(pin.logoPath) ||
       protectedFiles.some((file) => received.get(file) !== sha256(read(file)) ||
         inventory.files[file] !== received.get(file))) {
     throw new Error(`${name}: candidate protected files do not match the approved receipt`);
   }
-  const readme = read("README.md").toString("utf8");
-  if (!/^# [^\n]+\n\n\S/m.test(readme) ||
-      !readme.includes(`](${pin.heroPath})`) || !/^## Install\b/m.test(readme) ||
-      !readme.includes(`/${name}-latest/canvases/${name}/extensions/${name}`) ||
-      !readme.includes(`/${name}-latest/canvases/${name}/README.md`) ||
-      !/\bOpen (?:the )?.*canvas\b/i.test(readme) || !/^1\. /m.test(readme) ||
-      !/prerequisites/i.test(readme) || !/troubleshooting/i.test(readme) ||
-      !/safety/i.test(readme)) {
+  if (!/^# [^\n]+\n\n\S/m.test(readme) || !/^## Install\b/m.test(readme) ||
+      !/^## (?:Try it|Quickstart|First run)\b/m.test(readme) ||
+      !/\bOpen (?:the )?.*canvas\b/i.test(readme) ||
+      [...readme.matchAll(/\]\((docs\/[^)#?]+\.md)\)/g)].some(([, file]) =>
+        !files.includes(file))) {
     throw new Error(`${name}: packaged customer README is missing required install or quickstart guidance`);
   }
   return `${name}@${version} candidate ${pin.sourceSha} ${receiptDigest}`;
