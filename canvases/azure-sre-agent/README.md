@@ -1,68 +1,24 @@
 # Azure SRE Agent
 
-Diagnose failing Azure applications with an existing Azure SRE Agent.
+Diagnose a failing Azure app with an existing SRE Agent, inspect the resulting
+investigation, and continue from its active thread.
 
 ## Install
 
-### Install the full plugin
+Open GitHub Copilot **Customize → Plugins**, add `Azure/azure-dev-tools`
+(ID `azure-dev-tools`), and install **Azure SRE Agent 0.2.4**. The full plugin
+includes the canvas and its `azure-sre-agent-canvas` routing skill:
 
-When the **Azure Dev Tools** marketplace lists **Azure SRE Agent** in GitHub
-Copilot, go to **Customize → Plugins → marketplace gear**, add
-`Azure/azure-dev-tools` (marketplace ID `azure-dev-tools`), and install
-**Azure SRE Agent**. The full plugin includes both the canvas and its
-`azure-sre-agent-canvas` routing skill.
-
-Fully quit and reopen GitHub Copilot, start a fresh chat, and try this exact
-prompt:
-
-```text
-Open SRE Agent Canvas
+```sh
+copilot plugin marketplace add Azure/azure-dev-tools
+copilot plugin install azure-sre-agent@azure-dev-tools
 ```
 
-Confirm the canvas opens and the routing skill appears in your host; a
-marketplace listing alone does not prove App registration or prompt routing.
-The marketplace follows the current public catalog, not an exact version pin.
-If the plugin is not listed, use a published versioned tag for the full plugin
-below, or the canvas-only fallback at the end.[^canvas-only]
-See the [Azure SRE Agent README](https://github.com/Azure/azure-dev-tools/blob/azure-sre-agent-latest/canvases/azure-sre-agent/README.md)
-for this quickstart and safety guidance.
-
-### Optional: pin the full plugin to an exact release
-
-For a reproducible 0.2.4 full-plugin install, use its published, versioned
-and source-qualified tag. In a terminal with Git and Copilot CLI, run:
-
-```bash
-SRE_TAG=$(git ls-remote --refs --tags https://github.com/Azure/azure-dev-tools.git 'refs/tags/azure-sre-agent-v0-2-4-*' | awk '{sub(/^refs\/tags\//, "", $2); print $2}')
-if [ "$(printf '%s\n' "$SRE_TAG" | grep -c '^azure-sre-agent-v0-2-4-')" -eq 1 ]; then
-  git clone --depth 1 --branch "$SRE_TAG" https://github.com/Azure/azure-dev-tools.git azure-sre-agent-plugin &&
-    copilot plugin install ./azure-sre-agent-plugin/canvases/azure-sre-agent
-else
-  echo "Expected exactly one published SRE 0.2.4 tag" >&2
-fi
-```
-
-If the versioned tag has not been published or more than one matches, stop
-and check the published release tags. The `azure-sre-agent-latest` tag can
-move and does not pin a version. This checkout includes the canvas and routing
-skill without relying on the current marketplace listing. Fully quit and
-reopen GitHub Copilot, start a fresh chat, and retry the prompt above. If
-your host does not expose CLI-installed plugins, check its plugin status.
-The CLI currently warns that local-path plugin installation may be
-deprecated in a future version.
-
-### Canvas-only fallback
-
-Use this only if neither full-plugin path is available.[^canvas-only]
-
-[^canvas-only]: **Canvas-only fallback:** If the full plugin is unavailable,
-    go to **Customize → Canvases → Install from gist/URL**, paste the
-    [Azure SRE Agent canvas-only URL](https://github.com/Azure/azure-dev-tools/tree/azure-sre-agent-latest/canvases/azure-sre-agent/extensions/azure-sre-agent),
-    and install. This URL uses the movable `latest` tag and installs the canvas
-    only, **not** the `azure-sre-agent-canvas` routing skill. Fully quit and
-    reopen GitHub Copilot. If the prompt above does not route, open **Azure SRE
-    Agent** from your installed canvases. Do not install a second provider to
-    work around a missing canvas.
+Fully quit and reopen Copilot, then start a fresh chat. For an exact version
+pin or canvas-only fallback, see
+[installation alternatives](docs/advanced.md). The
+[latest README](https://github.com/Azure/azure-dev-tools/blob/azure-sre-agent-latest/canvases/azure-sre-agent/README.md)
+tracks the published package documentation.
 
 ## Prerequisites
 
@@ -73,9 +29,15 @@ Use this only if neither full-plugin path is available.[^canvas-only]
 - Access to an Azure subscription containing an existing Azure SRE Agent, with
   permission to view and use it. This plugin does not create the agent resource.
 
-## Quickstart
+## Try it
 
-1. Open **Azure SRE Agent**.
+Ask exactly:
+
+```text
+Open SRE Agent Canvas
+```
+
+1. Open **Azure SRE Agent** with the prompt above.
 2. Expand **Azure Configuration**, choose the subscription, and select your
    SRE Agent.
 3. Open **Apps**.
@@ -85,34 +47,30 @@ Use this only if neither full-plugin path is available.[^canvas-only]
 5. Select **Diagnose with SRE Agent**. Inspect the resulting investigation
    under **Threads** in **Active thread**.
 
-## Use and safety
+## What you can do
 
-You can also ask:
+- Find an existing SRE Agent and the apps it monitors.
+- Diagnose a failing app and review investigation threads with their evidence.
+- Focus an active thread to continue the investigation in chat.
 
-```text
-Investigate this failure
-Investigate issues in <yourappname>
-Investigate why Function App orders-api returns 503 after deployment
-```
+## Prompts to try
 
-Choose your subscription and SRE Agent in **Azure Configuration**, then open
-**Apps** to diagnose a failing resource. Select a thread in **Threads** to
-inspect its evidence and status in **Active thread**. Choose
-**Focus this thread** before operational follow-ups in chat, then **Unfocus**
-when finished.
+> Open SRE Agent Canvas and show me my SRE Agents.
 
-The canvas uses your Azure CLI identity. Its read and write actions are
-registered; mutating operations require an explicit action or host
-confirmation. One-time execution authorization is separate from durable role
-assignment. Delegated private-connector mutations require
-`ALLOW_PRIVATE_CONNECTORS=true` and must not be used for production or
-multi-user private connector isolation without verified per-invocation
-ownership.
+> Open SRE Agent Canvas so I can choose a failing app and diagnose it with my
+> SRE Agent.
 
-## Troubleshooting
+> Investigate why Function App orders-api returns 503 after deployment.
+
+## Safety and troubleshooting
+
+The canvas uses your Azure CLI identity. Mutating operations require an
+explicit action or host confirmation. Review the selected subscription, agent,
+app, and action before continuing.
 
 If the canvas is missing, fully quit and reopen GitHub Copilot, start a fresh
 chat, and retry the exact prompt. Check plugin and extension status rather
 than installing a second provider; reinstall via the same path you chose
-(canvas extension or full plugin). If agents do not appear, check
-`az account show`, your selected subscription, and your agent permissions.
+(canvas extension or full plugin). If agents do not appear, run
+`az account show` and check your selected subscription and agent permissions.
+See [operational notes](docs/advanced.md) for complete safety guidance.

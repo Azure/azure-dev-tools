@@ -1,48 +1,34 @@
 # Azure Developer Tools
 
-Azure Developer Tools is a home for tools that help developers work with Azure
-through GitHub Copilot.
+Build, explore, and troubleshoot Azure apps with focused tools for GitHub
+Copilot.
 
-## Install plugins (staging guidance)
+## Explore
 
-After the marketplace is approved and published, open GitHub Copilot App
-**Customize → Plugins**, use the marketplace gear to add the GitHub repository
-`Azure/azure-dev-tools` once, and install each desired product from the
-`azure-dev-tools` marketplace: `azure-sre-agent`,
-`azure-functions-hosted-skills`, `azure-resources-query`, or `canvas-authoring`.
-Their CLI install IDs are `<product>@azure-dev-tools`. The first three install
-canvases and companion skills; after installation, ask Copilot to **Open Azure
-SRE Agent**, **Open Azure Functions Hosted Skills**, or **Open Azure Resources
-Query** by name. **canvas-authoring installs one skill only**, not a canvas to
-open.
+- [Azure Functions Hosted Skills](canvases/azure-functions-hosted-skills/README.md)
+  builds and runs local Hosted Skills or invokes supported functions in Azure.
+- [Azure Resources Query](canvases/azure-resources-query/README.md) finds Azure
+  resources with read-only queries and adds selected results to chat.
+- [Azure SRE Agent](canvases/azure-sre-agent/README.md) diagnoses failing apps
+  with an existing Azure SRE Agent and keeps the investigation in one panel.
+- [Canvas authoring](plugins/canvas-authoring/README.md) adds a skill-only
+  companion for building canvas apps with the Microsoft Canvas Toolkit.
 
-The App marketplace install is not yet verified. See [installation and release
-gates](docs/plugin-marketplace.md) before attempting an install.
+## Install
 
-## Public staging
+Open GitHub Copilot **Customize → Plugins**, use the marketplace gear to add
+`Azure/azure-dev-tools` (ID `azure-dev-tools`), then install the product you
+want. The CLI equivalent is:
 
-| Canvas | Package location | Status |
-| --- | --- | --- |
-| **Azure Functions Hosted Skills** | [`canvases/azure-functions-hosted-skills/`](canvases/azure-functions-hosted-skills/) | Candidate |
-| **Azure Resources Query** | [`canvases/azure-resources-query/`](canvases/azure-resources-query/) ([install](docs/azure-resources-query/)) | Candidate |
-| **Azure SRE Agent** | [`canvases/azure-sre-agent/`](canvases/azure-sre-agent/) | Candidate |
+```sh
+copilot plugin marketplace add Azure/azure-dev-tools
+copilot plugin install <product>@azure-dev-tools
+```
 
-Candidate packages are staged for public review and validation; staging does
-not constitute a production release. The marketplace follows the current
-public branch, not a pinned release. Package READMEs document prerequisites
-and a canvas-only URL fallback; that fallback does not install companion skills.
-
-## Build canvas apps
-
-The separate [`canvas-authoring` package](https://github.com/Azure/azure-dev-tools/tree/5bea7baefed06b627a279da2dcc78331289598ef/plugins/canvas-authoring) is a
-**skill-only companion**, not a fourth canvas in the catalog above. Its
-`create-canvas-app` skill requires the host's installed native `create-canvas`
-skill to scaffold an app. Canonical npm publishes
-`@microsoft/canvas-toolkit@0.1.0-preview.2` with a `/build` runtime and types
-export. The Azure and counter starters passed isolated generated-app builds
-and tests with the public registry; native-host and marketplace installation
-remain unverified. The public product and its immutable release tag are
-available, but marketplace or App installation is not yet verified.
+The first three products install a canvas and companion skill.
+`canvas-authoring` installs one skill only and does not install a canvas.
+Each product guide includes prerequisites, a first run, exact-version
+alternatives, and troubleshooting.
 
 ## Get involved
 
