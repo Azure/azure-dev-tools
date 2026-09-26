@@ -1,9 +1,30 @@
-# Create canvas apps with the Canvas Toolkit
+# Canvas authoring plugin
 
-Build a canvas app with the Microsoft Canvas Toolkit. This skill-only plugin
-adds toolkit setup and a counter or read-only Azure resource-group starter to
-the GitHub Copilot app's native `create-canvas` workflow. It does not install
-or start a canvas provider.
+Create a canvas app with the Microsoft Canvas Toolkit. This **skill-only
+companion** adds toolkit setup and a counter or read-only Azure resource-group
+starter to the host's native `create-canvas` workflow. It does not install or
+start a canvas.
+
+## Install
+
+Open GitHub Copilot **Customize → Plugins**, add `Azure/azure-dev-tools`
+(ID `azure-dev-tools`), and install **canvas-authoring 0.1.0**:
+
+```sh
+copilot plugin marketplace add Azure/azure-dev-tools
+copilot plugin install canvas-authoring@azure-dev-tools
+```
+
+For a reproducible local install, check out the immutable
+`canvas-authoring-v0-1-0-23aa6b1` tag and install its plugin directory:
+
+```sh
+git clone --depth 1 --branch canvas-authoring-v0-1-0-23aa6b1 https://github.com/Azure/azure-dev-tools.git canvas-authoring-plugin
+copilot plugin install ./canvas-authoring-plugin/plugins/canvas-authoring
+```
+
+Installing this package contributes the `create-canvas-app` skill. It does not
+install a canvas extension or replace the host's native `create-canvas` skill.
 
 ## Requirements
 
@@ -14,29 +35,11 @@ or start a canvas provider.
   (with the `/build` export), or an approved compatible local `.tgz`.
 - For live Azure reads: Azure CLI 2.61+ and permission to read the subscription.
 
-## Install
-
-Once a `canvas-authoring` release tag is published in
-[`Azure/azure-dev-tools`](https://github.com/Azure/azure-dev-tools), check out
-that tag and install the plugin from the checkout's root:
-
-```sh
-copilot plugin install ./plugins/canvas-authoring
-```
-
-The plugin is not yet listed in the `azure-dev-tools` marketplace. Once it
-appears there, install it with:
-
-```sh
-copilot plugin marketplace add Azure/azure-dev-tools
-copilot plugin install canvas-authoring@azure-dev-tools
-```
-
 See the [toolkit quickstart](skills/create-canvas-app/references/toolkit/quickstart.md)
 for the Azure starter. Installing the plugin adds a skill, not a running
 canvas app.
 
-## Create an app
+## Try it
 
 Ask your agent:
 
@@ -55,6 +58,21 @@ package, pass `--toolkit-version 0.1.0-preview.2` to the
 [setup command](skills/create-canvas-app/SKILL.md#2-generate-the-source-app).
 It does not install dependencies or contact Azure, and it refuses existing
 output directories rather than overwriting files.
+
+## What you can do
+
+- Generate a native canvas scaffold with a working counter starter.
+- Start a read-only Azure resource-group viewer with explicit subscription
+  choice.
+- Build and smoke-test the generated app before installing its complete output.
+
+## Prompts to try
+
+> Use the native create-canvas skill and the create-canvas-app companion to
+> build a counter canvas.
+
+> Build a read-only Azure canvas that lists resource groups. Use the native
+> create-canvas skill and the create-canvas-app companion's Azure starter.
 
 ## Build and run
 
