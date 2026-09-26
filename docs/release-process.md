@@ -50,7 +50,14 @@ their original reviewed commit.
 Release order:
 
 1. Start with content cleared for public distribution in this repository.
-2. Run the package's required tests and release checks.
+2. For a new version, separately review the full source SHA, protected
+   export receipt/inventory digests, square plugin logo and landscape README
+   hero bytes; merge
+   their pins-only PR into public `main` before the package candidate PR.
+   The candidate cannot approve or change its own pins. Run its required
+   tests and the base-pinned candidate check before merge; the default strict
+   tag check runs again after tagging. New products require individually
+   reviewed catalog identity and skill-path pins first.
 3. Produce an inventory of protected package files and record their SHA-256
    digests in `SHA256SUMS`, declaring the receipt scope. Historical full-package
    receipts remain fully enforced at their immutable tags; never rewrite them
@@ -63,7 +70,10 @@ Release order:
 7. Verify the immutable install URL and README, then move `PRODUCT-latest` to
    that same merge commit.
 8. Verify the latest install URL and README before sending the announcement.
-9. Pin the released package in the Awesome Copilot catalog, when applicable.
+9. Pin the released package in the Awesome Copilot catalog by its full,
+   immutable public package commit SHA and exact plugin directory, when
+   applicable. A human-readable versioned tag is a secondary alias;
+   `PRODUCT-latest` is not a catalog pin.
 
 Never move `PRODUCT-latest` to an unmerged branch, candidate commit, or
 unapproved rebuild. A main-only documentation edit does not change immutable
@@ -76,19 +86,26 @@ customer-facing README with internal packaging, build, or provider prose.
 Before approval and again after tagging, verify that the README:
 
 - starts with the customer value statement;
-- includes an `## Install` section with the
-  `PRODUCT-latest/canvases/PRODUCT/extensions/EXTENSION` nested-folder URL;
-- links to the README through `PRODUCT-latest`;
+- includes an `## Install` section with accurate full-plugin and
+  canvas-only guidance for the host and release stage;
+- embeds its reviewed customer hero image from `docs/preview.png` when one
+  is exported, distinct from the packaged square plugin logo;
 - includes the exact prompt needed to open the canvas;
-- includes a numbered quickstart using actual UI labels; and
-- retains applicable prerequisites, troubleshooting, and safety guidance.
+- includes a short actionable **Try it**, **Quickstart**, or **First run**
+  section using actual UI labels; and
+- retains or links to applicable packaged prerequisites, troubleshooting,
+  and safety guidance.
 
 An export may update the README only when the release PR explicitly presents
 the customer-facing change for review. Later documentation-only edits still
 need normal review for installation accuracy and safety; the checksum
 exception is not approval to remove required customer guidance. Missing
 sections, a wrapper-directory install URL, a branch URL, or packaging-only
-prose blocks the release.
+prose blocks the release. A pretag README need not invent future `-latest`
+links or release evidence. Where a URL is present, verify that its nested
+extension directory matches `release.plugin.extension.directory`
+(`com.github.copilot/extensions/PRODUCT` for current source exports);
+verify the actual immutable/latest URLs after tagging, in the release PR.
 
 For a skill-only package under `plugins/`, do not apply the nested canvas URL
 and prompt-to-open requirements. Instead require an accurate immutable-tag
@@ -133,11 +150,11 @@ version.
   **Rollout owner:** `<person or team>`. **Dark-deployed:** `<status and scope,
   when applicable>`.
 - **Install:** latest
-  `<https://github.com/Azure/azure-dev-tools/tree/<product>-latest/canvases/<product>/extensions/<extension>>`;
+  `<https://github.com/Azure/azure-dev-tools/tree/<product>-latest/canvases/<product>/<release.plugin.extension.directory>>`;
   README
   `<https://github.com/Azure/azure-dev-tools/blob/<product>-latest/canvases/<product>/README.md>`;
   exact version
-  `<https://github.com/Azure/azure-dev-tools/tree/<product>-v<major>-<minor>-<patch>-<source-sha>/canvases/<product>/extensions/<extension>>`.
+  `<https://github.com/Azure/azure-dev-tools/tree/<product>-v<major>-<minor>-<patch>-<source-sha>/canvases/<product>/<release.plugin.extension.directory>>`.
 
 The first bullet must name the product and version, explain the value or rollout
 in one short statement, and use the literal wording **Rollout owner:**. Include
