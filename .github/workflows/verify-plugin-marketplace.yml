@@ -24,6 +24,7 @@ jobs:
         run: |
           if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
             .github/plugin/marketplace.json \
+            .github/plugin/marketplace-candidate-pins.json \
             .github/workflows/verify-plugin-marketplace.yml \
             canvases/ \
             plugins/canvas-authoring/ \
@@ -47,6 +48,8 @@ jobs:
       - name: Test marketplace verifier
         if: steps.changes.outputs.qualified == 'true'
         run: node --test test/plugin-marketplace.test.mjs
-      - name: Verify public marketplace release
+      - name: Verify marketplace candidate against approved base pins
         if: ${{ !cancelled() && steps.changes.outputs.qualified == 'true' }}
-        run: node scripts/verify-plugin-marketplace.mjs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/verify-plugin-marketplace.mjs --candidate "$BASE_SHA"

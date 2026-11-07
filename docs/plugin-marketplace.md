@@ -67,7 +67,51 @@ verification. The marketplace
 branch must include that commit. Synthetic local-only tags in temporary clones
 exercise the pretag verifier; they are not releases and must never be pushed.
 Build-input provenance remains a separate release PR review fact; tag names
-alone do not prove build origin. There is no `--candidate` bypass.
+alone do not prove build origin. The default verifier remains strict after
+release: `node scripts/verify-plugin-marketplace.mjs` requires the immutable
+tags and reviewed release commits above.
+
+For a new canvas product or new version of an existing canvas, approve its
+source and exported protected bytes **before** the public package PR. A
+separate reviewed pins-only PR must first add its full source commit SHA,
+version, contributed skill paths, protected-scope `SHA256SUMS` and
+`inventory.json` digests, the packaged square plugin
+`logoPath: "assets/preview.png"` and `logoSha256`, and the distinct
+README landscape `heroPath: "docs/preview.png"` and `heroSha256` to
+`.github/plugin/marketplace-candidate-pins.json` on public `main`. Verify
+those values against the independently reviewed source export; a source SHA
+written only by the package PR is not independent evidence. Do not include
+product changes in the pins PR. The subsequent package PR may not change its
+base pins. Include a package-root `SHA256SUMS` covering every protected file
+except itself and `inventory.json`, and an `inventory.json` with `plugin`,
+`version`, full `sourceSha`, `scope: "protected"`, `sha256` of the receipt,
+and a `files` digest map. The exported package's `release.json` file list
+and `checksums.json` must cover its actual contents, including the README,
+logo, and hero. Its `.github/plugin/plugin.json` logo declaration and
+`release.plugin.preview.file` must both point to the square logo; the
+extension directory is `com.github.copilot/extensions/<product>`.
+The customer README must embed the independently pinned landscape hero
+and contain marketplace-first installation guidance and an actionable
+**Try it**, **Quickstart**, or **First run** section with the open prompt.
+Linked packaged guidance must cover applicable prerequisites,
+troubleshooting and safety; reviewers inspect the actual UI labels and
+remaining customer guidance. A pretag README need not invent future
+`-latest` URLs or release evidence; verify actual install/README URLs
+separately after approval and tagging.
+
+On the package PR, CI runs
+`node scripts/verify-plugin-marketplace.mjs --candidate <PR-base-full-SHA>`.
+It first verifies the four historical products at the base, then checks
+unchanged packages against their tags and new or new-version packages against
+the base-approved source/skills/receipt/square-logo/landscape-hero pins and
+all current package bytes.
+This is not a skip of missing tags: an unpinned, stale-version, incomplete,
+or self-pinned candidate fails. New canvases remain absent from the public
+catalog until their individually reviewed pins and package PR qualify. After
+approval and merge, create each immutable version tag at the product merge
+commit, verify URLs,
+then update latest and rerun the **default strict verifier** against the
+newly reviewed versions. No tag is created on an unmerged PR.
 
 Regular non-executable `README*` text files (bare `README` or `.md`,
 `.markdown`, `.txt`, `.rst`, `.adoc`) at any non-runtime package depth, and
@@ -92,13 +136,15 @@ tagged documentation: this is an exception to the marketplace's HEAD-vs-tag
 comparison, **not** a claim of Git signing or a retagging mechanism.
 
 On pull requests to `main`, the **Marketplace release qualification** check
-is reported for every PR, but only runs the targeted Node tests and strict
-default verifier when marketplace, product, verifier, fixture, workflow, or
-release-guide files change. It fetches complete history and tags; it does not
-create release refs or approve a release. A repository administrator must make
+is reported for every PR, but only runs the targeted Node tests and the
+base-pinned candidate verifier when marketplace, product, verifier, fixture,
+workflow, pin file, or release-guide files change. It fetches complete history
+and tags; it does not create release refs or approve a release. A repository
+administrator must make
 this check required on `main` for CI failures to block merges. Relevant PRs
-fail when protected package bytes or release refs do not qualify against public
-`origin/main`.
+fail when protected package bytes or release refs do not qualify against the
+public base and approved pins. Continue running the strict default verifier
+after tagging; candidate qualification alone is not a release.
 
 After approved merge and authorization to install, check the actual
 GitHub-hosted marketplace with fresh, isolated
