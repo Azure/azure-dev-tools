@@ -1,3 +1,5 @@
+> **Project moved:** Active development continues at [microsoft/azure-dev-tools](https://github.com/microsoft/azure-dev-tools). This repository is retained for existing links and releases.
+
 # Azure Developer Tools
 
 Build, explore, and troubleshoot Azure apps with focused tools for GitHub
